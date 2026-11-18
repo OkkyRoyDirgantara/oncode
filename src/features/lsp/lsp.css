@@ -1,0 +1,27 @@
+/* Item status language server. */
+.lsp-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex: none;
+  background: var(--fg-faint);
+}
+.lsp-dot[data-state="running"] {
+  background: var(--ok);
+}
+.lsp-dot[data-state="starting"] {
+  background: var(--warn);
+  animation: lsp-pulse 1s ease-in-out infinite;
+}
+.lsp-dot[data-state="failed"] {
+  background: var(--danger);
+}
+.lsp-dot[data-state="missing"] {
+  background: transparent;
+  border: 1.5px solid var(--warn);
+}
+@keyframes lsp-pulse {
+  50% {
+    opacity: 0.35;
+  }
+}

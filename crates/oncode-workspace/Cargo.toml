@@ -1,0 +1,31 @@
+[package]
+name = "oncode-workspace"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Lapisan workspace OnCode: akses berkas, watcher, pencarian teks, indeks quick open"
+
+[dependencies]
+serde.workspace = true
+specta.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+ignore = "0.4"
+globset = "0.4"
+grep-matcher = "0.1"
+grep-regex = "0.1"
+grep-searcher = "0.1"
+nucleo-matcher = "0.3"
+unicode-segmentation = "1"
+notify = "8"
+trash = "5"
+encoding_rs = "0.8"
+chardetng = "1"
+
+[dev-dependencies]
+tempfile.workspace = true
+serde_json.workspace = true
+# Hanya untuk memastikan semua tipe UI bisa diekspor ke TypeScript (tanpa BigInt).
+specta-typescript = "0.0.15"
+specta-serde = "0.0.15"

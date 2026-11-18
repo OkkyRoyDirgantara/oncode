@@ -1,0 +1,14 @@
+[package]
+name = "oncode-helper"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Program pembantu yang dipanggil git: askpass dan editor"
+
+[dependencies]
+serde_json.workspace = true
+
+[dev-dependencies]
+oncode-git = { path = "../oncode-git" }
+tokio.workspace = true
+tempfile.workspace = true

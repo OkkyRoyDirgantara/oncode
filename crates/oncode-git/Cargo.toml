@@ -1,0 +1,20 @@
+[package]
+name = "oncode-git"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Lapisan Git OnCode: runner git CLI, parser, model, layout graph"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+specta.workspace = true
+tempfile.workspace = true
+uuid = { version = "1", features = ["v4"] }
+
+[dev-dependencies]
+proptest = "1"
+insta = "1"

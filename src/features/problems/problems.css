@@ -1,0 +1,87 @@
+/* Panel Problems. */
+.pb-root {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+}
+.pb-toolbar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px;
+  border-bottom: 1px solid var(--border);
+}
+.pb-toolbar .oc-input {
+  flex: 1 1 auto;
+  min-width: 80px;
+  max-width: 360px;
+  height: 24px;
+}
+.pb-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 24px;
+  padding: 0 7px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--fg-muted);
+  font-size: 12px;
+  cursor: pointer;
+}
+.pb-toggle:hover {
+  background: var(--hover);
+}
+.pb-toggle[aria-pressed="true"] {
+  border-color: var(--border-strong);
+  background: var(--active);
+  color: var(--fg);
+}
+.pb-toggle[aria-pressed="false"] {
+  opacity: 0.55;
+}
+.pb-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+}
+.pb-row {
+  font-size: 12px;
+}
+.pb-file {
+  font-weight: 600;
+}
+.pb-file .pb-dir {
+  font-weight: 400;
+  color: var(--fg-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.pb-problem {
+  padding-left: 28px;
+}
+.pb-message {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.pb-meta {
+  flex: none;
+  color: var(--fg-faint);
+}
+.pb-error {
+  color: var(--danger);
+  flex: none;
+}
+.pb-warning {
+  color: var(--warn);
+  flex: none;
+}
+.pb-info {
+  color: var(--accent);
+  flex: none;
+}

@@ -1,0 +1,91 @@
+# Uji di tiga OS: backend (termasuk uji integrasi git), frontend, dan E2E (Linux).
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Paket sistem (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file \
+            libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev \
+            webkitgtk-webdriver xvfb dbus
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 12
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Binary pendamping (oncode-helper)
+        run: pnpm helper
+
+      - name: Uji backend
+        run: cargo test --workspace
+
+      - name: Binding TypeScript mutakhir
+        shell: bash
+        run: git diff --exit-code -- src/ipc/bindings.ts
+
+      - name: Periksa tipe dan uji frontend
+        run: |
+          pnpm typecheck
+          pnpm test
+
+      - name: Build frontend produksi
+        run: pnpm build
+
+      - name: Uji end-to-end (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          cargo install tauri-driver --locked
+          pnpm --dir e2e/fixtures/ts-server install --ignore-workspace
+          cargo build -p oncode
+          pnpm e2e
+
+      - name: Tangkapan layar E2E yang gagal
+        if: failure() && runner.os == 'Linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-screenshots
+          path: e2e/screenshots
+
+  # Uji integrasi git terhadap versi minimum yang didukung.
+  git-minimum:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Bangun Git 2.40
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential libssl-dev libcurl4-gnutls-dev libexpat1-dev gettext zlib1g-dev
+          curl -fsSL https://mirrors.edge.kernel.org/pub/software/scm/git/git-2.40.0.tar.xz | tar -xJ
+          make -C git-2.40.0 -j"$(nproc)" prefix="$HOME/git-2.40" NO_TCLTK=1 install
+          echo "$HOME/git-2.40/bin" >> "$GITHUB_PATH"
+      - run: git --version
+      - run: cargo test -p oncode-git -p oncode-helper

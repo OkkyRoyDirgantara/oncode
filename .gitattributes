@@ -1,0 +1,5 @@
+# Akhir baris LF di semua platform, agar uji dan skrip berperilaku sama di Windows.
+* text=auto eol=lf
+*.png binary
+*.ico binary
+*.icns binary

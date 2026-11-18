@@ -1,0 +1,28 @@
+[package]
+name = "oncode-forge"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Integrasi GitHub dan GitLab untuk OnCode: klien REST, login device flow, penyimpanan token di keychain OS"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+specta.workspace = true
+async-trait = "0.1"
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
+# TLS lewat rustls (tanpa OpenSSL / native-tls). Di reqwest 0.13 `form` dan `query`
+# adalah fitur terpisah; `system-proxy` agar proxy sistem tetap dihormati.
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "http2", "json", "form", "query", "system-proxy"] }
+# Fitur `v1` memilih penyimpanan bawaan tiap OS: Keychain (macOS), Credential Manager
+# (Windows), dan Secret Service lewat zbus yang murni Rust (Linux/*nix, tanpa libdbus).
+keyring = { version = "4", default-features = false, features = ["v1"] }
+
+[dev-dependencies]
+wiremock = "0.6"
+# Hanya untuk memastikan semua tipe UI bisa diekspor ke TypeScript (tanpa BigInt).
+specta-typescript = "0.0.15"
+specta-serde = "0.0.15"

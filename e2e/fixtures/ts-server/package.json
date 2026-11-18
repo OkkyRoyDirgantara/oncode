@@ -1,0 +1,9 @@
+{
+  "name": "oncode-e2e-ts-server",
+  "private": true,
+  "description": "Language server sungguhan untuk uji E2E LSP. Pasang dengan: pnpm --dir e2e/fixtures/ts-server install --ignore-workspace",
+  "dependencies": {
+    "typescript": "^5.9.0",
+    "typescript-language-server": "^5.0.0"
+  }
+}
