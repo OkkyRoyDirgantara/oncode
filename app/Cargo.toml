@@ -6,6 +6,15 @@ license.workspace = true
 rust-version.workspace = true
 description = "OnCode: editor kode native dengan Git client lengkap"
 
+# Nama binary sengaja bukan "oncode". Driver D3D11 Intel memilih file cache shader (di
+# %USERPROFILE%\AppData\LocalLow\Intel\ShaderCache) menurut panjang nama exe, lalu memuat seluruh
+# isinya ke memori proses saat device dibuat. Nama 6 huruf berbagi cache dengan chrome.exe dan
+# msedge.exe: "oncode.exe" memakan ± 186 MB di Task Manager tanpa folder terbuka, "oncode-app.exe"
+# ± 40 MB (diukur di Intel UHD, driver 30.0.101.1371). Hindari nama exe 6 huruf.
+[[bin]]
+name = "oncode-app"
+path = "src/main.rs"
+
 [dependencies]
 oncode-core = { path = "../crates/oncode-core" }
 oncode-forge = { path = "../crates/oncode-forge" }
@@ -42,7 +51,7 @@ identifier = "dev.oncode.editor"
 description = "A simple native code editor with a full Git client"
 category = "DeveloperTool"
 before-packaging-command = "cargo build --release -p oncode -p oncode-helper"
-binaries = [{ path = "oncode", main = true }, { path = "oncode-helper" }]
+binaries = [{ path = "oncode-app", main = true }, { path = "oncode-helper" }]
 icons = ["icons/32x32.png", "icons/64x64.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.icns", "icons/icon.ico"]
 out-dir = "../target/packages"
 

@@ -46,7 +46,9 @@ Pustaka yang hanya ada di sysroot (mis. `libxkbcommon-x11.so.0`) harus bisa dite
 | DMG dari Linux (tidak resmi) | Lihat komentar di `.dev-sysroot/env-mac.sh`: zig + macOS SDK, salinan `gpui-pre-apple` dengan shader saat aplikasi mulai, link dengan `rust-lld`, lalu `.dev-sysroot/mac/make-dmg.sh`. Rilis resmi tetap dibuat di macOS (`release.yml`) |
 | Rilis | Dorong tag `v*`; `.github/workflows/release.yml` membuat deb/AppImage, NSIS, dan DMG (Apple Silicon dan Intel), lalu mengunggahnya sebagai draf rilis |
 
-`oncode-helper` harus ada di samping binary `oncode` (di `target/debug/`); tanpa itu dialog kredensial dan interactive rebase tidak tersedia.
+`oncode-helper` harus ada di samping binary `oncode-app` (di `target/debug/`); tanpa itu dialog kredensial dan interactive rebase tidak tersedia.
+
+Binary utama sengaja tidak bernama `oncode`: di Windows dengan GPU Intel, nama exe 6 huruf membuat driver memuat cache shader milik Chrome/Edge ke memori aplikasi (± 150 MB). Penjelasan di `app/Cargo.toml`.
 
 Uji LSP memakai language server tiruan (`crates/oncode-lsp/src/mock.rs`, program `mock_lsp_server`); uji membangunnya sendiri bila belum ada. Untuk mencobanya di aplikasi, arahkan `lsp.servers.<bahasa>.command` di `settings.json` ke `target/debug/examples/mock_lsp_server` (kata `ERROR`, `WARN`, `INFO`, `HINT` menghasilkan diagnostics; `def nama` membuat definisi).
 
@@ -54,7 +56,7 @@ Uji LSP memakai language server tiruan (`crates/oncode-lsp/src/mock.rs`, program
 
 | Crate | Isi |
 |---|---|
-| `app` (binary `oncode`) | `main`: runtime tokio, `Core`, lalu `init` tiap crate UI |
+| `app` (binary `oncode-app`) | `main`: runtime tokio, `Core`, lalu `init` tiap crate UI |
 | `crates/oncode-core` | State aplikasi tanpa UI dan seluruh API (`oncode_core::api::{app, fs, git, term, lsp, forge}`) |
 | `crates/oncode-git`, `-workspace`, `-terminal`, `-lsp`, `-forge`, `-helper` | Backend; tidak bergantung pada UI |
 | `crates/oncode-ui` | Kerangka UI: `Workbench`, `Shell`, command, keybinding, quick pick, dialog, editor dan buffer, store repositori |

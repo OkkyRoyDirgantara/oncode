@@ -1,4 +1,4 @@
-// Menyematkan ikon aplikasi ke oncode.exe. Target diperiksa saat build script berjalan
+// Menyematkan ikon aplikasi ke oncode-app.exe. Target diperiksa saat build script berjalan
 // (bukan lewat cfg) agar kompilasi silang dari Linux ke Windows ikut mendapat ikon.
 fn main() {
     println!("cargo:rerun-if-changed=icons/oncode.rc");

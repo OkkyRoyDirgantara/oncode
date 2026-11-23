@@ -50,7 +50,7 @@ cargo test --workspace  # backend (terhadap git sungguhan), logika UI, dan uji t
 ## Struktur
 
 ```
-app/            Binary `oncode`: titik masuk
+app/            Binary `oncode-app`: titik masuk
 crates/
   oncode-core/      State aplikasi tanpa UI dan seluruh API
   oncode-ui/        Kerangka UI: jendela, tab, command, keybinding, editor
