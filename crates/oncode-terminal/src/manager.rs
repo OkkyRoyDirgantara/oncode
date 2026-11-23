@@ -18,7 +18,6 @@ use std::time::{Duration, Instant};
 
 use portable_pty::{native_pty_system, Child, ChildKiller, CommandBuilder, ExitStatus, MasterPty, PtySize};
 use serde::Deserialize;
-use specta::Type;
 
 use crate::error::{Result, TermError};
 use crate::shell::default_shell;
@@ -41,7 +40,7 @@ const DEFAULT_ROWS: u16 = 24;
 const DRAIN_AFTER_CLOSE: bool = cfg!(windows);
 
 /// Opsi untuk [`TerminalManager::spawn`].
-#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Type)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SpawnOptions {
     /// Program shell. `None` (atau string kosong) berarti [`default_shell`].

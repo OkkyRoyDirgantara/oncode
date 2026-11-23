@@ -1,10 +1,9 @@
 //! Struktur data yang dikirim ke UI. Semua field memakai camelCase di sisi TypeScript.
 
 use serde::{Deserialize, Serialize};
-use specta::Type;
 
 /// Cara menjalankan satu language server.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ServerSpec {
     /// Nama perintah (dicari di PATH) atau path ke program.
@@ -17,7 +16,7 @@ pub struct ServerSpec {
 }
 
 /// Entri daftar server bawaan untuk satu bahasa.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ServerDefault {
     /// Id bahasa LSP, mis. `rust` atau `typescriptreact`.
@@ -28,7 +27,7 @@ pub struct ServerDefault {
 }
 
 /// Keadaan akhir proses server, dikirim lewat `on_exit`.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ServerExitInfo {
     /// Kode keluar; `None` bila proses dihentikan oleh sinyal.

@@ -1,8 +1,7 @@
 use serde::Serialize;
-use specta::Type;
 
 /// Kode galat yang dipakai UI untuk memilih pesan dan aksi lanjutan.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Type)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum TermErrorCode {
     /// Tidak ada terminal dengan id tersebut (sudah ditutup atau prosesnya sudah keluar).

@@ -8,7 +8,6 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use encoding_rs::{Encoding, UTF_16BE, UTF_16LE, UTF_8};
 use serde::{Deserialize, Serialize};
-use specta::Type;
 
 use crate::error::{Result, WsError, WsErrorCode};
 use crate::gitignore::IgnoreRules;
@@ -16,7 +15,7 @@ use crate::gitignore::IgnoreRules;
 /// Jumlah byte awal yang diperiksa untuk mendeteksi berkas biner.
 const BINARY_SNIFF_BYTES: usize = 8000;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Type)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DirEntry {
     pub name: String,
@@ -29,25 +28,24 @@ pub struct DirEntry {
     pub ignored: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Eol {
     Lf,
     Crlf,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Type)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FileStat {
     /// Ukuran dalam byte; mentok di `u32::MAX`.
     pub size: u32,
     /// Waktu modifikasi, milidetik sejak epoch Unix.
-    #[specta(type = u32)]
     pub mtime_ms: f64,
     pub read_only: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Type)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TextFile {
     /// Isi berkas; akhir baris sudah dinormalkan menjadi `\n`.
@@ -59,7 +57,7 @@ pub struct TextFile {
     pub stat: FileStat,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Type)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum OpenedFile {
     Text(TextFile),

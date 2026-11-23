@@ -1,12 +1,11 @@
 //! Struktur data yang dikirim ke UI. Semua field memakai camelCase di sisi TypeScript.
 
 use serde::{Deserialize, Serialize};
-use specta::Type;
 
 /// Detik sejak epoch Unix. `f64` agar aman diekspor sebagai `number` di TypeScript.
 pub type Timestamp = f64;
 
-#[derive(Debug, Clone, PartialEq, Serialize, Type)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RepoSnapshot {
     /// Path akar worktree.
@@ -22,7 +21,7 @@ pub struct RepoSnapshot {
     pub stash_count: u32,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Type)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum Head {
     Branch { name: String },
@@ -31,7 +30,7 @@ pub enum Head {
     Unborn { name: String },
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Type)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Upstream {
     pub name: String,
@@ -41,7 +40,7 @@ pub struct Upstream {
     pub exists: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Type)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ChangeKind {
     Added,
@@ -52,7 +51,7 @@ pub enum ChangeKind {
     TypeChanged,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Type)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SubmoduleState {
     pub commit_changed: bool,
@@ -60,7 +59,7 @@ pub struct SubmoduleState {
     pub untracked: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Type)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FileChange {
     pub path: String,
@@ -69,7 +68,7 @@ pub struct FileChange {
     pub submodule: Option<SubmoduleState>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Type)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ConflictKind {
     BothModified,
@@ -81,14 +80,14 @@ pub enum ConflictKind {
     DeletedByThem,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Type)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConflictEntry {
     pub path: String,
     pub kind: ConflictKind,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Type)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum Operation {
     Merge { incoming: String },
@@ -98,16 +97,15 @@ pub enum Operation {
     Revert { commit: String },
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Type)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Signature {
     pub name: String,
     pub email: String,
-    #[specta(type = u32)]
     pub time: Timestamp,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Type)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum RefKind {
     Head,
@@ -117,14 +115,14 @@ pub enum RefKind {
     Stash,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Type)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RefLabel {
     pub kind: RefKind,
     pub name: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Type)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Commit {
     pub oid: String,
@@ -135,7 +133,7 @@ pub struct Commit {
     pub refs: Vec<RefLabel>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Type)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum EdgeKind {
     /// Dari jalur di tepi atas baris menuju titik commit.
@@ -146,7 +144,7 @@ pub enum EdgeKind {
     Through,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Type)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Edge {
     pub from: u16,
@@ -155,7 +153,7 @@ pub struct Edge {
     pub kind: EdgeKind,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Type)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GraphRow {
     pub commit: Commit,
@@ -164,7 +162,7 @@ pub struct GraphRow {
     pub edges: Vec<Edge>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Type)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LogPage {
     pub rows: Vec<GraphRow>,
@@ -172,7 +170,7 @@ pub struct LogPage {
     pub done: bool,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Deserialize, Type)]
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct LogQuery {
     /// Kosong = HEAD. Diabaikan bila `all` bernilai true.
@@ -186,7 +184,7 @@ pub struct LogQuery {
     pub path: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Type)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CommitFile {
     pub path: String,
@@ -196,7 +194,7 @@ pub struct CommitFile {
     pub deletions: Option<u32>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Type)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CommitDetail {
     pub commit: Commit,
@@ -204,7 +202,7 @@ pub struct CommitDetail {
     pub files: Vec<CommitFile>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Type)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Branch {
     pub name: String,
@@ -217,11 +215,10 @@ pub struct Branch {
     /// Path worktree lain yang sedang memakai branch ini.
     pub worktree: Option<String>,
     pub subject: String,
-    #[specta(type = u32)]
     pub time: Timestamp,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Type)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RemoteBranch {
     /// Nama lengkap, mis. `origin/main`.
@@ -230,7 +227,7 @@ pub struct RemoteBranch {
     pub oid: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Type)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Tag {
     pub name: String,
@@ -240,7 +237,7 @@ pub struct Tag {
     pub message: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Type)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Remote {
     pub name: String,
@@ -248,7 +245,7 @@ pub struct Remote {
     pub push_url: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Type)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Refs {
     pub branches: Vec<Branch>,
@@ -257,7 +254,7 @@ pub struct Refs {
     pub remotes: Vec<Remote>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Type)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Stash {
     pub index: u32,
@@ -265,11 +262,10 @@ pub struct Stash {
     pub name: String,
     pub oid: String,
     pub message: String,
-    #[specta(type = u32)]
     pub time: Timestamp,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Type)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Worktree {
     pub path: String,
@@ -282,7 +278,7 @@ pub struct Worktree {
     pub bare: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Type)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum SubmoduleStatus {
     Uninitialized,
@@ -292,7 +288,7 @@ pub enum SubmoduleStatus {
     Conflict,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Type)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Submodule {
     pub path: String,
@@ -301,18 +297,17 @@ pub struct Submodule {
     pub describe: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Type)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReflogEntry {
     pub oid: String,
     /// Mis. `HEAD@{3}`.
     pub selector: String,
     pub message: String,
-    #[specta(type = u32)]
     pub time: Timestamp,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Type)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BlameRange {
     pub oid: String,
@@ -321,7 +316,6 @@ pub struct BlameRange {
     pub line_count: u32,
     pub author: String,
     pub author_email: String,
-    #[specta(type = u32)]
     pub time: Timestamp,
     pub summary: String,
     /// `true` untuk baris yang belum di-commit.
@@ -329,7 +323,7 @@ pub struct BlameRange {
 }
 
 /// Satu sisi tampilan diff.
-#[derive(Debug, Clone, PartialEq, Serialize, Type)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DiffSide {
     /// `None` bila sisi ini tidak ada (berkas baru/terhapus) atau biner/terlalu besar.
@@ -343,7 +337,7 @@ pub struct DiffSide {
     pub label: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Type)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DiffContents {
     pub path: String,
@@ -353,7 +347,7 @@ pub struct DiffContents {
 }
 
 /// Sumber diff yang diminta UI.
-#[derive(Debug, Clone, PartialEq, Deserialize, Type)]
+#[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum DiffSource {
     /// Index → worktree.
@@ -370,7 +364,7 @@ pub enum DiffSource {
 
 /// Satu operasi sambung-potong baris: ganti `A[a_from..a_to)` dengan `B[b_from..b_to)`.
 /// Nomor baris mulai dari 0, batas akhir eksklusif.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Type)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SpliceOp {
     pub a_from: u32,
@@ -379,7 +373,7 @@ pub struct SpliceOp {
     pub b_to: u32,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Type)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum SpliceTarget {
     /// A = index, B = worktree; perubahan terpilih masuk ke index.
@@ -390,7 +384,7 @@ pub enum SpliceTarget {
     Discard,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Deserialize, Type)]
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct CommitOptions {
     pub amend: bool,
@@ -400,7 +394,7 @@ pub struct CommitOptions {
     pub allow_empty: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Type)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum MergeMode {
     Default,
@@ -409,7 +403,7 @@ pub enum MergeMode {
     Squash,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Type)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ResetMode {
     Soft,
@@ -417,7 +411,7 @@ pub enum ResetMode {
     Hard,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum PullStrategy {
     FfOnly,
@@ -425,7 +419,7 @@ pub enum PullStrategy {
     Rebase,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Deserialize, Type)]
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct PushOptions {
     pub remote: Option<String>,
@@ -436,7 +430,7 @@ pub struct PushOptions {
     pub tags: bool,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Deserialize, Type)]
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct StashOptions {
     pub message: Option<String>,
@@ -445,7 +439,7 @@ pub struct StashOptions {
     pub paths: Vec<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum RebaseAction {
     Pick,
@@ -469,7 +463,7 @@ impl RebaseAction {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RebaseTodoItem {
     pub action: RebaseAction,
@@ -478,7 +472,7 @@ pub struct RebaseTodoItem {
     pub subject: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Type)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RebasePlan {
     /// Commit dari yang tertua ke yang terbaru.
@@ -487,7 +481,7 @@ pub struct RebasePlan {
     pub published: u32,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Type)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum OperationAction {
     Continue,
@@ -496,7 +490,7 @@ pub enum OperationAction {
 }
 
 /// Satu segmen hasil penggabungan tiga arah untuk editor konflik.
-#[derive(Debug, Clone, PartialEq, Serialize, Type)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum MergeSegment {
     /// Sudah tergabung tanpa konflik.
@@ -504,7 +498,7 @@ pub enum MergeSegment {
     Conflict { current: String, base: String, incoming: String },
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Type)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConflictDetail {
     pub path: String,
@@ -518,14 +512,14 @@ pub struct ConflictDetail {
     pub segments: Vec<MergeSegment>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Type)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ConflictSide {
     Current,
     Incoming,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Type)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Progress {
     /// Mis. "Receiving objects".
@@ -534,7 +528,7 @@ pub struct Progress {
     pub text: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Type)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GitLogEntry {
     pub command: String,
@@ -544,7 +538,7 @@ pub struct GitLogEntry {
     pub output: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Type)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GitInfo {
     pub path: String,
@@ -552,7 +546,7 @@ pub struct GitInfo {
     pub supported: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Type)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Identity {
     pub name: Option<String>,

@@ -1,0 +1,21 @@
+[package]
+name = "oncode-ui-explorer"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Explorer berkas, layar awal, dan mode terbatas untuk OnCode"
+
+[dependencies]
+oncode-core = { path = "../oncode-core" }
+oncode-ui = { path = "../oncode-ui" }
+gpui-kit = "=0.10.0"
+serde.workspace = true
+serde_json.workspace = true
+oncode-workspace = { path = "../oncode-workspace" }
+oncode-git = { path = "../oncode-git" }
+
+[dev-dependencies]
+oncode-ui = { path = "../oncode-ui", features = ["test-support"] }
+gpui-kit = { version = "=0.10.0", features = ["test-support"] }
+tempfile.workspace = true

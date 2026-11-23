@@ -9,7 +9,6 @@ use std::time::{Duration, Instant};
 use notify::event::ModifyKind;
 use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher as _};
 use serde::Serialize;
-use specta::Type;
 
 use crate::error::{Result, WsError};
 use crate::fs::{absolute, is_temp_name};
@@ -25,7 +24,7 @@ const MAX_PATHS: usize = 1000;
 /// Entri tingkat atas direktori Git yang tidak pernah dilaporkan.
 const GIT_NOISE: &[&str] = &["objects", "logs", "hooks", "info", "worktrees", "modules", "lfs"];
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Type)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum WatchEvent {
     /// Berkas atau folder di working tree berubah. `paths` berisi path absolut tanpa duplikat.

@@ -1,0 +1,36 @@
+[package]
+name = "oncode-ui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Kerangka UI native OnCode: jendela, tab, panel, command, keybinding, dan buffer editor"
+
+[dependencies]
+oncode-core = { path = "../oncode-core" }
+oncode-git = { path = "../oncode-git" }
+oncode-workspace = { path = "../oncode-workspace" }
+# Satu-satunya pintu ke GPUI: versi GPUI ditentukan oleh gpui-kit (lihat docs/RANCANGAN.md 3.2).
+gpui-kit = { version = "=0.10.0", features = [
+    "tree-sitter-bash", "tree-sitter-c", "tree-sitter-cpp", "tree-sitter-css", "tree-sitter-diff",
+    "tree-sitter-go", "tree-sitter-html", "tree-sitter-java", "tree-sitter-javascript",
+    "tree-sitter-markdown", "tree-sitter-python", "tree-sitter-ruby", "tree-sitter-rust",
+    "tree-sitter-sql", "tree-sitter-toml", "tree-sitter-tsx", "tree-sitter-typescript",
+    "tree-sitter-yaml",
+] }
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+# Versi yang sama dengan yang dipakai gpui-component untuk kait LSP editor.
+lsp-types = { version = "0.97", features = ["proposed"] }
+
+# Hanya dipakai pembantu uji (`testing.rs`).
+tempfile = { workspace = true, optional = true }
+oncode-forge = { path = "../oncode-forge", optional = true }
+
+[dev-dependencies]
+oncode-ui = { path = ".", features = ["test-support"] }
+
+[features]
+# Pembantu uji tampilan (`oncode_ui::testing`) untuk crate ini dan crate fitur.
+test-support = ["gpui-kit/test-support", "dep:tempfile", "dep:oncode-forge"]

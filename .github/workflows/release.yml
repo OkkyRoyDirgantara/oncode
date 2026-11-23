@@ -1,6 +1,6 @@
-# Membangun installer untuk tiga OS dari tag rilis dan mengunggahnya sebagai draf rilis.
-# Penandatanganan kode memerlukan secret yang disebut di docs/PENGEMBANGAN.md; tanpa itu
-# installer tetap dibuat tetapi tidak ditandatangani.
+# Membangun installer untuk tiga OS dari tag rilis dengan cargo-packager dan mengunggahnya
+# sebagai draf rilis. Penandatanganan macOS memakai secret APPLE_*; tanpa itu installer tetap
+# dibuat tetapi tidak ditandatangani.
 name: Release
 
 on:
@@ -16,11 +16,14 @@ jobs:
       matrix:
         include:
           - os: ubuntu-22.04
-            args: ""
+            formats: deb,appimage
           - os: windows-latest
-            args: ""
+            formats: nsis
+          # Apple Silicon dan Intel dibangun terpisah di runner masing-masing.
           - os: macos-latest
-            args: "--target universal-apple-darwin"
+            formats: dmg
+          - os: macos-13
+            formats: dmg
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -29,45 +32,37 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file \
-            libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+          sudo apt-get install -y build-essential pkg-config libwayland-dev libxkbcommon-dev \
+            libxkbcommon-x11-dev libxcb1-dev libx11-dev libfontconfig-dev libfreetype-dev libssl-dev \
+            libvulkan1 file
 
       - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ runner.os == 'macOS' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
       - uses: Swatinem/rust-cache@v2
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 12
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
 
-      # macOS universal: oncode-helper harus tersedia untuk kedua arsitektur dan sebagai binary universal.
-      - name: Binary pendamping universal (macOS)
-        if: runner.os == 'macOS'
-        run: |
-          node scripts/build-helper.mjs --release --target=aarch64-apple-darwin
-          node scripts/build-helper.mjs --release --target=x86_64-apple-darwin
-          lipo -create -output src-tauri/binaries/oncode-helper-universal-apple-darwin \
-            src-tauri/binaries/oncode-helper-aarch64-apple-darwin \
-            src-tauri/binaries/oncode-helper-x86_64-apple-darwin
+      - name: Pasang cargo-packager
+        run: cargo install cargo-packager --locked
 
-      - uses: tauri-apps/tauri-action@v0
+      # Client id OAuth dibaca saat kompilasi (option_env!), jadi harus ada di lingkungan build.
+      - name: Buat installer
+        working-directory: app
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ONCODE_GITHUB_CLIENT_ID: ${{ vars.ONCODE_GITHUB_CLIENT_ID }}
+          ONCODE_GITLAB_CLIENT_ID: ${{ vars.ONCODE_GITLAB_CLIENT_ID }}
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          ONCODE_GITHUB_CLIENT_ID: ${{ vars.ONCODE_GITHUB_CLIENT_ID }}
-          ONCODE_GITLAB_CLIENT_ID: ${{ vars.ONCODE_GITLAB_CLIENT_ID }}
+        run: cargo packager --release --formats ${{ matrix.formats }}
+
+      - uses: softprops/action-gh-release@v2
         with:
-          tagName: ${{ github.ref_name }}
-          releaseName: "OnCode ${{ github.ref_name }}"
-          releaseDraft: true
-          args: ${{ matrix.args }}
+          tag_name: ${{ github.ref_name }}
+          name: "OnCode ${{ github.ref_name }}"
+          draft: true
+          files: |
+            target/packages/*.deb
+            target/packages/*.AppImage
+            target/packages/*.exe
+            target/packages/*.dmg

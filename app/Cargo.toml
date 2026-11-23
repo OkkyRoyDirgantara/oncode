@@ -1,0 +1,53 @@
+[package]
+name = "oncode"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "OnCode: editor kode native dengan Git client lengkap"
+
+[dependencies]
+oncode-core = { path = "../crates/oncode-core" }
+oncode-forge = { path = "../crates/oncode-forge" }
+oncode-git = { path = "../crates/oncode-git" }
+oncode-ui = { path = "../crates/oncode-ui" }
+oncode-ui-explorer = { path = "../crates/oncode-ui-explorer" }
+oncode-ui-search = { path = "../crates/oncode-ui-search" }
+oncode-ui-diff = { path = "../crates/oncode-ui-diff" }
+oncode-ui-scm = { path = "../crates/oncode-ui-scm" }
+oncode-ui-graph = { path = "../crates/oncode-ui-graph" }
+oncode-ui-terminal = { path = "../crates/oncode-ui-terminal" }
+oncode-ui-lsp = { path = "../crates/oncode-ui-lsp" }
+oncode-ui-forge = { path = "../crates/oncode-ui-forge" }
+oncode-ui-settings = { path = "../crates/oncode-ui-settings" }
+gpui-kit = "=0.10.0"
+tokio.workspace = true
+serde_json.workspace = true
+
+# Ikon aplikasi untuk Windows (dipakai Explorer, taskbar, dan shortcut installer).
+[build-dependencies]
+embed-resource = "3"
+
+[dev-dependencies]
+oncode-ui = { path = "../crates/oncode-ui", features = ["test-support"] }
+gpui-kit = { version = "=0.10.0", features = ["test-support"] }
+
+# Installer dibuat dengan `cargo packager --release` (lihat docs/PENGEMBANGAN.md).
+# `oncode-helper` dipasang di samping binary utama; di sanalah aplikasi mencarinya.
+[package.metadata.packager]
+product-name = "OnCode"
+# Nilai sementara: ganti dengan domain milik Anda sebelum rilis publik, karena mengubahnya
+# setelah rilis memindahkan lokasi data pengguna.
+identifier = "dev.oncode.editor"
+description = "A simple native code editor with a full Git client"
+category = "DeveloperTool"
+before-packaging-command = "cargo build --release -p oncode -p oncode-helper"
+binaries = [{ path = "oncode", main = true }, { path = "oncode-helper" }]
+icons = ["icons/32x32.png", "icons/64x64.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.icns", "icons/icon.ico"]
+out-dir = "../target/packages"
+
+[package.metadata.packager.deb]
+depends = ["git", "libxkbcommon-x11-0", "libvulkan1"]
+
+[package.metadata.packager.nsis]
+installer-icon = "icons/icon.ico"

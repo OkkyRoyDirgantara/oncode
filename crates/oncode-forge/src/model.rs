@@ -1,7 +1,6 @@
 //! Struktur data yang dikirim ke UI. Semua field memakai camelCase di sisi TypeScript.
 
 use serde::{Deserialize, Serialize};
-use specta::Type;
 
 pub use crate::remote::parse_remote_url;
 
@@ -9,7 +8,7 @@ pub use crate::remote::parse_remote_url;
 pub type Timestamp = f64;
 
 /// Jenis penyedia hosting Git.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ForgeKind {
     #[serde(rename = "github")]
     GitHub,
@@ -29,7 +28,7 @@ impl ForgeKind {
 
 /// Satu instance forge. `host` adalah origin web TANPA garis miring di akhir, misalnya
 /// `"https://github.com"`, `"https://gitlab.com"`, atau `"https://git.perusahaan.id"`.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ForgeHost {
     pub kind: ForgeKind,
@@ -107,7 +106,7 @@ impl ForgeHost {
 }
 
 /// Repositori di sebuah forge, hasil parse URL remote.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RepoRef {
     /// Nama host saja, huruf kecil, misalnya `"github.com"`.
@@ -126,7 +125,7 @@ impl RepoRef {
 }
 
 /// Akun yang sedang login di sebuah forge.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Account {
     /// `"{kind}:{hostname}:{username}"`, misalnya `"github:github.com:octocat"`. Dipakai
@@ -154,7 +153,7 @@ impl Account {
 }
 
 /// Repositori di akun pengguna, untuk dialog clone.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RemoteRepo {
     /// `"owner/name"`; di GitLab memuat seluruh jalur subgrup.
@@ -167,12 +166,11 @@ pub struct RemoteRepo {
     pub clone_url_ssh: String,
     /// Kosong bila repositori belum punya commit.
     pub default_branch: String,
-    #[specta(type = u32)]
     pub updated_at: Timestamp,
     pub web_url: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum PrState {
     Open,
@@ -181,7 +179,7 @@ pub enum PrState {
 }
 
 /// Pull request (GitHub) atau merge request (GitLab).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PullRequest {
     /// Nomor PR di GitHub, `iid` MR di GitLab.
@@ -194,14 +192,13 @@ pub struct PullRequest {
     pub source_branch: String,
     pub target_branch: String,
     pub head_sha: String,
-    #[specta(type = u32)]
     pub updated_at: Timestamp,
     pub web_url: String,
     /// `true` bila branch sumber berada di repositori lain (fork).
     pub is_cross_repo: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PullRequestDetail {
     pub pull_request: PullRequest,
@@ -219,7 +216,7 @@ pub struct PullRequestDetail {
     pub deletions: u32,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum CheckState {
     Pending,
@@ -232,7 +229,7 @@ pub enum CheckState {
 }
 
 /// Satu pemeriksaan CI pada sebuah commit.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Check {
     pub name: String,
@@ -241,7 +238,7 @@ pub struct Check {
 }
 
 /// Filter daftar PR/MR di sidebar.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum PrFilter {
     /// Semua yang masih terbuka.
@@ -255,7 +252,7 @@ pub enum PrFilter {
 }
 
 /// Masukan untuk membuat PR/MR.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NewPullRequest {
     pub title: String,
@@ -268,7 +265,7 @@ pub struct NewPullRequest {
 
 /// Satu halaman hasil. `next_page` diisi bila masih ada halaman berikutnya; nilainya
 /// dikirim kembali apa adanya sebagai argumen `page`.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Page<T> {
     pub items: Vec<T>,

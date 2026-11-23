@@ -11,7 +11,6 @@ serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
-specta.workspace = true
 async-trait = "0.1"
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
 # TLS lewat rustls (tanpa OpenSSL / native-tls). Di reqwest 0.13 `form` dan `query`
@@ -23,6 +22,3 @@ keyring = { version = "4", default-features = false, features = ["v1"] }
 
 [dev-dependencies]
 wiremock = "0.6"
-# Hanya untuk memastikan semua tipe UI bisa diekspor ke TypeScript (tanpa BigInt).
-specta-typescript = "0.0.15"
-specta-serde = "0.0.15"

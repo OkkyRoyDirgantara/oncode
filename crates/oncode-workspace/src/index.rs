@@ -7,12 +7,11 @@ use ignore::WalkState;
 use nucleo_matcher::pattern::{AtomKind, CaseMatching, Normalization, Pattern};
 use nucleo_matcher::{Config, Matcher, Utf32Str};
 use serde::Serialize;
-use specta::Type;
 use unicode_segmentation::UnicodeSegmentation;
 
 use crate::gitignore::walk_builder;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Type)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct QuickOpenItem {
     /// Path relatif terhadap akar proyek, dengan garis miring.

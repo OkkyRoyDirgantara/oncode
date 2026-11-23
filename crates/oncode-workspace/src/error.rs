@@ -2,10 +2,9 @@ use std::io;
 use std::path::Path;
 
 use serde::Serialize;
-use specta::Type;
 
 /// Kode galat yang dipakai UI untuk memilih pesan dan aksi lanjutan.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Type)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum WsErrorCode {
     NotFound,
@@ -17,7 +16,7 @@ pub enum WsErrorCode {
     Io,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Type, thiserror::Error)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, thiserror::Error)]
 #[serde(rename_all = "camelCase")]
 #[error("{message}")]
 pub struct WsError {

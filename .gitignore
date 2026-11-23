@@ -1,10 +1,5 @@
 /target
-node_modules
-/dist
 /.dev-sysroot
-/src-tauri/gen
 *.log
 .DS_Store
-/e2e/screenshots
-/src-tauri/binaries
 /dist-installers

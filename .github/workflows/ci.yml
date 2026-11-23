@@ -1,4 +1,4 @@
-# Uji di tiga OS: backend (termasuk uji integrasi git), frontend, dan E2E (Linux).
+# Uji di tiga OS: backend (termasuk uji integrasi git), logika UI, dan uji tampilan tanpa layar.
 name: CI
 
 on:
@@ -24,54 +24,23 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file \
-            libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev \
-            webkitgtk-webdriver xvfb dbus
+          sudo apt-get install -y build-essential pkg-config libwayland-dev libxkbcommon-dev \
+            libxkbcommon-x11-dev libxcb1-dev libx11-dev libfontconfig-dev libfreetype-dev libssl-dev \
+            libvulkan1 mesa-vulkan-drivers
 
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 12
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: pnpm
 
-      - run: pnpm install --frozen-lockfile
-
+      # Uji tampilan memerlukan `oncode-helper` di samping binary uji (dialog kredensial, rebase).
       - name: Binary pendamping (oncode-helper)
-        run: pnpm helper
+        run: cargo build -p oncode-helper
 
-      - name: Uji backend
+      # Uji tampilan berjalan tanpa layar (platform uji GPUI), jadi tidak perlu Xvfb.
+      - name: Uji
         run: cargo test --workspace
 
-      - name: Binding TypeScript mutakhir
-        shell: bash
-        run: git diff --exit-code -- src/ipc/bindings.ts
-
-      - name: Periksa tipe dan uji frontend
-        run: |
-          pnpm typecheck
-          pnpm test
-
-      - name: Build frontend produksi
-        run: pnpm build
-
-      - name: Uji end-to-end (Linux)
-        if: runner.os == 'Linux'
-        run: |
-          cargo install tauri-driver --locked
-          pnpm --dir e2e/fixtures/ts-server install --ignore-workspace
-          cargo build -p oncode
-          pnpm e2e
-
-      - name: Tangkapan layar E2E yang gagal
-        if: failure() && runner.os == 'Linux'
-        uses: actions/upload-artifact@v4
-        with:
-          name: e2e-screenshots
-          path: e2e/screenshots
+      - name: Build aplikasi
+        run: cargo build -p oncode
 
   # Uji integrasi git terhadap versi minimum yang didukung.
   git-minimum:

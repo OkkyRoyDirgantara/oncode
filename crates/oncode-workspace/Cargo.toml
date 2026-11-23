@@ -8,7 +8,6 @@ description = "Lapisan workspace OnCode: akses berkas, watcher, pencarian teks, 
 
 [dependencies]
 serde.workspace = true
-specta.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 ignore = "0.4"
@@ -26,6 +25,3 @@ chardetng = "1"
 [dev-dependencies]
 tempfile.workspace = true
 serde_json.workspace = true
-# Hanya untuk memastikan semua tipe UI bisa diekspor ke TypeScript (tanpa BigInt).
-specta-typescript = "0.0.15"
-specta-serde = "0.0.15"

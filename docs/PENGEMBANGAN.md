@@ -1,114 +1,172 @@
 # Panduan Pengembangan
 
-> **Sedang beralih ke native.** Panduan ini berlaku untuk **versi Tauri (v0.2)**, yaitu kode yang ada di repositori saat ini. Rancangan versi native ada di [RANCANGAN.md](RANCANGAN.md) dan belum diimplementasikan; panduan ini ditulis ulang pada tahap N0 rancangan tersebut. Rancangan versi Tauri diarsipkan di [arsip/RANCANGAN-v0.2-tauri.md](arsip/RANCANGAN-v0.2-tauri.md).
+OnCode adalah aplikasi native: Rust + [GPUI](https://github.com/zed-industries/zed) lewat [`gpui-kit`](https://gpui-kit.com) (komponen `gpui-component`). Rancangannya ada di [RANCANGAN.md](RANCANGAN.md). Versi Tauri (v0.2) tersimpan di tag git `tauri-v0.2`; rancangannya di [arsip/RANCANGAN-v0.2-tauri.md](arsip/RANCANGAN-v0.2-tauri.md).
 
 ## Prasyarat
 
 | Kebutuhan | Catatan |
 |---|---|
 | Rust (stable, ≥ 1.88) | `rustup` |
-| Node.js ≥ 22 dan pnpm ≥ 12 | |
-| Git ≥ 2.40 | Dipakai aplikasi saat berjalan dan oleh uji integrasi |
-| Pustaka sistem Tauri | Lihat di bawah |
+| Git ≥ 2.40 | Dipakai aplikasi saat berjalan dan oleh uji |
+| Compiler C | Untuk grammar tree-sitter |
+| Pustaka sistem GPUI | Lihat di bawah |
 
 **Linux (Debian/Ubuntu):**
 
 ```bash
-sudo apt install libwebkit2gtk-4.1-dev build-essential curl wget file \
-  libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+sudo apt install build-essential pkg-config libwayland-dev libxkbcommon-dev libxkbcommon-x11-dev \
+  libxcb1-dev libx11-dev libfontconfig-dev libfreetype-dev libssl-dev libvulkan1
 ```
 
-**Windows:** Microsoft C++ Build Tools dan WebView2 Runtime. **macOS:** Xcode Command Line Tools.
+Saat berjalan diperlukan driver Vulkan. Tanpa GPU, Mesa lavapipe (`mesa-vulkan-drivers`) bisa dipakai: `VK_DRIVER_FILES=/usr/share/vulkan/icd.d/lvp_icd.json`.
+
+**Windows:** Microsoft C++ Build Tools. **macOS:** Xcode beserta Command Line Tools.
 
 ### Tanpa akses root (`.dev-sysroot`)
 
-Bila paket di atas tidak bisa dipasang (tidak ada `sudo`), paket `-dev` dan compiler C dapat diunduh dengan `apt-get download` lalu diekstrak ke folder `.dev-sysroot/` di dalam proyek, tanpa mengubah sistem. Folder itu tidak ikut di-commit. Setelah tersedia, aktifkan sebelum menjalankan `cargo`:
+Bila paket di atas tidak bisa dipasang, paket `-dev` dan compiler C dapat diunduh dengan `apt-get download` lalu diekstrak ke `.dev-sysroot/` di dalam proyek (tidak ikut di-commit). Aktifkan sebelum menjalankan `cargo`:
 
 ```bash
 source .dev-sysroot/env.sh
 ```
 
-Ini hanya jalan pintas untuk mesin pengembangan; memasang paket sistem dengan `apt` tetap cara yang dianjurkan.
+Pustaka yang hanya ada di sysroot (mis. `libxkbcommon-x11.so.0`) harus bisa ditemukan saat aplikasi dijalankan: `LD_LIBRARY_PATH=.dev-sysroot/runlib`.
 
 ## Perintah sehari-hari
 
 | Tujuan | Perintah |
 |---|---|
-| Mode pengembangan | `pnpm tauri dev` |
-| Uji backend | `cargo test --workspace` |
-| Uji satu crate | `cargo test -p oncode-git` |
-| Periksa tipe frontend | `pnpm typecheck` |
-| Uji frontend | `pnpm test` |
-| Uji end-to-end | `cargo build -p oncode && pnpm e2e` |
-| Perbarui binding TypeScript | `cargo test -p oncode export_bindings` |
-| Build frontend produksi | `pnpm build` |
-| Installer rilis | `pnpm tauri build` |
+| Menjalankan | `cargo build -p oncode-helper && cargo run -p oncode -- [folder]` |
+| Uji satu crate | `cargo test -p oncode-ui-scm` |
+| Semua uji | `cargo test --workspace` |
+| Periksa cepat | `cargo check -p oncode` |
+| Paket `.deb` | `cargo install cargo-packager --locked`, lalu `cargo packager --release -f deb` di folder `app/` (hasil di `target/packages/`) |
+| AppImage | `cargo packager --release -f appimage` di `app/`. Di mesin tanpa `libxkbcommon-x11` terpasang, `linuxdeploy` perlu `LD_LIBRARY_PATH` yang memuat pustaka itu |
+| Installer NSIS dari Linux | Perlu `makensis` (paket `nsis`). `cargo packager --release -f nsis --target x86_64-pc-windows-gnu` di `app/`, dengan `CARGO_TARGET_DIR` menunjuk folder build Windows: `--binaries-dir` diabaikan perkakas. Binary Windows-nya harus dibangun dengan `--config "$ONCODE_WIN_PATCH"` (lihat `.dev-sysroot/env-win.sh`) |
+| DMG dari Linux (tidak resmi) | Lihat komentar di `.dev-sysroot/env-mac.sh`: zig + macOS SDK, salinan `gpui-pre-apple` dengan shader saat aplikasi mulai, link dengan `rust-lld`, lalu `.dev-sysroot/mac/make-dmg.sh`. Rilis resmi tetap dibuat di macOS (`release.yml`) |
+| Rilis | Dorong tag `v*`; `.github/workflows/release.yml` membuat deb/AppImage, NSIS, dan DMG (Apple Silicon dan Intel), lalu mengunggahnya sebagai draf rilis |
 
-`pnpm tauri dev` dan `pnpm tauri build` otomatis membangun `oncode-helper` dan menyalinnya ke `src-tauri/binaries/` (lihat `scripts/build-helper.mjs`).
+`oncode-helper` harus ada di samping binary `oncode` (di `target/debug/`); tanpa itu dialog kredensial dan interactive rebase tidak tersedia.
 
-## Arsitektur singkat
+Uji LSP memakai language server tiruan (`crates/oncode-lsp/src/mock.rs`, program `mock_lsp_server`); uji membangunnya sendiri bila belum ada. Untuk mencobanya di aplikasi, arahkan `lsp.servers.<bahasa>.command` di `settings.json` ke `target/debug/examples/mock_lsp_server` (kata `ERROR`, `WARN`, `INFO`, `HINT` menghasilkan diagnostics; `def nama` membuat definisi).
 
-- **`crates/oncode-git`** menjalankan `git` milik sistem dan mem-parse keluarannya. Tidak bergantung pada Tauri; uji integrasinya (`tests/repo.rs`) berjalan terhadap repositori sementara.
-- **`crates/oncode-helper`** adalah binary kecil yang dipanggil git sebagai `GIT_ASKPASS`, `GIT_EDITOR`, dan `GIT_SEQUENCE_EDITOR`. Ia meneruskan permintaan ke aplikasi lewat socket lokal dengan token sekali pakai.
-- **`crates/oncode-workspace`**, **`-terminal`**, **`-lsp`**, **`-forge`** menangani berkas/pencarian, PTY, proses language server, dan API GitHub/GitLab.
-- **`src-tauri`** membungkus semuanya sebagai command IPC (`src-tauri/src/commands/`), menyimpan state (`state.rs`), dan menyiarkan event (`events.rs`).
-- **`src/ipc/bindings.ts`** dihasilkan oleh `tauri-specta` dari command dan tipe Rust. **Jangan disunting**; perbarui dengan `cargo test -p oncode export_bindings` setiap kali command atau tipe berubah.
-- **`src/app`** adalah kerangka frontend: registry fitur (`registry.ts`), command dan keybinding (`commands.ts`), tab (`workbench.ts`), dialog/menu/toast (`overlay.tsx`).
-- **`src/features/<nama>`** berisi satu fitur. Tiap fitur mendaftarkan diri lewat `register<Nama>Feature()` di `src/features/index.ts`.
+## Peta crate
 
-### Menambah command backend
+| Crate | Isi |
+|---|---|
+| `app` (binary `oncode`) | `main`: runtime tokio, `Core`, lalu `init` tiap crate UI |
+| `crates/oncode-core` | State aplikasi tanpa UI dan seluruh API (`oncode_core::api::{app, fs, git, term, lsp, forge}`) |
+| `crates/oncode-git`, `-workspace`, `-terminal`, `-lsp`, `-forge`, `-helper` | Backend; tidak bergantung pada UI |
+| `crates/oncode-ui` | Kerangka UI: `Workbench`, `Shell`, command, keybinding, quick pick, dialog, editor dan buffer, store repositori |
+| `crates/oncode-ui-<fitur>` | Satu fitur per crate: `explorer`, `search`, `diff`, `scm`, `graph`, `terminal`, `lsp`, `forge`, `settings` |
 
-1. Tulis fungsi `#[tauri::command] #[specta::specta]` di `src-tauri/src/commands/<domain>.rs`. Hindari nama parameter yang merupakan kata kunci TypeScript (`new`, `default`, …).
-2. Daftarkan di `specta_builder()` dalam `src-tauri/src/lib.rs`.
-3. Jalankan `cargo test -p oncode export_bindings`, lalu pakai dari frontend lewat `commands.<nama>` dari `@/ipc`.
+Crate fitur hanya bergantung pada `oncode-ui`, `oncode-core`, dan crate backend yang diperlukannya (pengecualian: `scm` dan `graph` memakai `oncode-ui-diff` untuk membuka tab diff).
 
-Tipe yang dikirim ke UI tidak boleh memakai `i64`/`u64`/`usize` (ditolak ekspor TypeScript); pakai `u32`, atau `f64` dengan `#[specta(type = u32)]` untuk timestamp.
+## Aturan penting
 
-### Menambah fitur frontend
+### 1. Jangan mengarang API GPUI
 
-Buat `src/features/<nama>/index.tsx` yang mengekspor fungsi pendaftaran, lalu panggil dari `src/features/index.ts`. Catatan penting: **selector Zustand harus mengembalikan referensi yang stabil**. `useStore((s) => Object.keys(s.x))` membuat array baru tiap render dan berakhir dengan galat "Maximum update depth exceeded"; ambil nilai tersimpannya lalu turunkan dengan `useMemo`.
+GPUI dan `gpui-component` masih pra-1.0. Sebelum memakai sebuah method, **cari tanda tangannya di sumber** (`~/.cargo/registry/src/*/gpui-component-0.10.0`, `gpui-base-0.10.0`, `gpui-pre-0.3.12`). Dokumentasi per komponen: `https://gpui-kit.com/component/<nama>.md` (mis. `editor.md`, `diff.md`, `tree.md`, `list.md`, `virtual-list.md`, `menu.md`, `dialog.md`). Impor selalu lewat `gpui_kit::...`, bukan `gpui::...`.
 
-## Uji end-to-end
+### 2. Aturan entitas (peminjaman ganda = panik)
 
-`pnpm e2e` (atau `node e2e/run.mjs e2e/scm.e2e.mjs` untuk satu berkas) meluncurkan binary debug lewat `tauri-driver` dan mengujinya dari luar: mengeklik UI lalu memeriksa hasilnya dengan `git` dan sistem berkas.
+Entitas GPUI yang sedang di-`update` tidak boleh dibaca atau di-`update` lagi dari dalam pembaruan itu. Akibatnya:
 
-Prasyarat:
+- **Pembangun yang dipanggil `Workbench`** (`SidebarView::build`, `PanelView::build`, `StatusItem::build`, `TabKind::build`, `TabContent::can_close`, fungsi `register_feature`) berjalan selagi `Workbench` dipinjam. Di dalamnya **jangan** `workbench.read(cx)` / `workbench.update(cx, ..)`. Pakai data dari `Env`, atau tunda dengan `cx.defer_in(window, ..)` / `window.defer(cx, ..)`.
+- **`render` sebuah tampilan fitur** berjalan di luar pinjaman `Workbench`, jadi boleh `workbench.read(cx)`.
+- **Penangan command** (`Command::new(.., |args, window, cx| ..)`) berjalan di luar pinjaman apa pun dan boleh memperbarui entitas mana saja.
+- Dari dalam `workbench.update(..)`, jalankan command lain dengan `oncode_ui::execute(id, args, window, cx)` (ditunda), bukan `execute_now`.
+- Penangan event (`cx.subscribe`, `cx.observe`) berjalan setelah pembaruan selesai, jadi aman.
 
-- Binary debug: `cargo build -p oncode`.
-- `tauri-driver` (`cargo install tauri-driver --locked`) dan, di Linux, `WebKitWebDriver` (paket `webkitgtk-webdriver`).
-- Tanpa layar (`DISPLAY` kosong), pelari memakai `xvfb-run` dan `dbus-run-session`.
-- Untuk uji LSP: `pnpm --dir e2e/fixtures/ts-server install --ignore-workspace`. Tanpa itu uji LSP dilewati.
-- Untuk uji SSH: `sshd` dan `ssh-keygen` (paket `openssh-server`). Tanpa itu uji SSH dilewati. `sshd` dijalankan sebagai pengguna biasa di port acak dengan kunci dan `known_hosts` sementara; `~/.ssh` tidak disentuh.
-- Server GitHub/GitLab tiruan dan server git HTTP untuk uji autentikasi dijalankan oleh ujinya sendiri di `127.0.0.1`; tidak ada permintaan ke internet.
+### 3. Pekerjaan backend tidak di thread utama
 
-`E2E_SHOTS=1 pnpm e2e` menyimpan tangkapan layar akhir tiap kasus ke `e2e/screenshots/`. Kasus yang gagal selalu menyimpan tangkapan layar.
+Crate backend memakai tokio; GPUI punya eksekutornya sendiri. Semua panggilan `oncode_core::api::*` dijalankan lewat `oncode_ui::spawn_core`:
 
-`tauri-driver` tidak mendukung macOS; di sana pengujian mengandalkan uji unit, uji integrasi, dan pemeriksaan manual.
-
-## Membangun installer Windows dari Linux
-
-Kompilasi silang ke Windows didukung Tauri secara eksperimental, lewat target `x86_64-pc-windows-gnu` (MinGW) dan NSIS:
-
-```bash
-rustup target add x86_64-pc-windows-gnu
-sudo apt install gcc-mingw-w64-x86-64-posix g++-mingw-w64-x86-64-posix nsis
-node scripts/build-helper.mjs --release --target=x86_64-pc-windows-gnu
-pnpm tauri build --target x86_64-pc-windows-gnu --bundles nsis
+```rust
+let (core, root) = (env.core.clone(), root.clone());
+let task = spawn_core(cx, async move { api::git::git_stage(&core, root, paths).await });
+cx.spawn_in(window, async move |this, cx| {
+    let result = task.await;
+    let _ = this.update_in(cx, |this, window, cx| {
+        if let Err(error) = result {
+            oncode_ui::overlay::show_error(&error, window, cx);
+        }
+    });
+})
+.detach();
 ```
 
-Hasilnya `target/x86_64-pc-windows-gnu/release/bundle/nsis/OnCode_<versi>_x64-setup.exe`, berisi `oncode.exe`, `oncode-helper.exe`, dan `WebView2Loader.dll` (wajib ada di samping `oncode.exe` pada target GNU). Installer tidak ditandatangani.
+Jangan memanggil I/O yang menunggu (berkas, proses, jaringan) langsung dari `render` atau penangan event.
 
-Tanpa akses root, toolchain MinGW dan NSIS bisa diekstrak ke `.dev-sysroot/win/` seperti paket lain; aktifkan dengan `source .dev-sysroot/env.sh && source .dev-sysroot/env-win.sh`. Bundler Tauri menghapus `NSISDIR` dari lingkungan, jadi `makensis` hasil ekstrak harus dibungkus skrip yang menyetelnya (lihat `.dev-sysroot/win/wrap/makensis`).
+### 4. Bahasa
 
-Build silang hanya membuktikan aplikasi **terkompilasi dan terkemas**; perilakunya tetap harus dicoba di Windows. Untuk rilis resmi, bangun di Windows (target MSVC) lewat workflow `release.yml`.
+Teks UI dan pesan untuk pengguna berbahasa **Inggris**. Komentar kode dan dokumen berbahasa **Indonesia**. Id command sama dengan v0.2 agar `keybindings.json` pengguna tetap berlaku.
 
-## Login GitHub/GitLab lewat browser
+## Menambah fitur
 
-Login device flow memerlukan **Client ID aplikasi OAuth** yang Anda daftarkan sendiri (GitHub: *Settings → Developer settings → OAuth Apps*, aktifkan *Device Flow*; GitLab: *Applications* dengan scope `api read_user`). Client ID bisa diisi di *Settings → Accounts*, atau ditanam saat build lewat variabel lingkungan `ONCODE_GITHUB_CLIENT_ID` dan `ONCODE_GITLAB_CLIENT_ID`. Tanpa Client ID, login dengan Personal Access Token tetap tersedia.
+Setiap crate fitur mengekspor `pub fn init(cx: &mut App)` yang dipanggil dari `app/src/main.rs`.
 
-## Rilis
+```rust
+pub fn init(cx: &mut App) {
+    // Jenis tab (global).
+    oncode_ui::register_tab_kind(cx, "graph", GraphKind);
+    // Per jendela: dipanggil untuk setiap `Workbench` baru (juga saat folder dibuka atau dipercaya).
+    oncode_ui::register_feature(cx, |workbench, window, cx| {
+        let env = workbench.env().clone();          // core, label jendela, root, trusted, repo_root
+        if !env.trusted { return; }                 // mode terbatas: fitur Git/LSP tidak didaftarkan
+        workbench.register_sidebar(SidebarView::new("scm", "Source Control", Lucide::GitBranch, 20, |env, window, cx| {
+            cx.new(|cx| ScmPanel::new(env.clone(), window, cx)).into()
+        }).badge(|cx| /* Option<usize> */ None));
+        workbench.register_panel(PanelView::new("git-output", "Git Output", 30, |env, window, cx| ..));
+        workbench.register_status(StatusItem::new("git.branch", StatusAlign::Left, 10, |env, window, cx| ..), window, cx);
+        workbench.register_command(Command::new("git.commit", "Commit", |_, window, cx| ..).category("Git").key("Mod+Enter").when(|_, cx| ..));
+    });
+}
+```
 
-- Workflow `.github/workflows/release.yml` membangun installer tiga OS dari tag `v*` dan membuat draf rilis.
-- **Penandatanganan kode** belum dikonfigurasi. Tanpa sertifikat Windows dan Apple Developer ID, pengguna akan melihat peringatan keamanan saat memasang. Secret yang dibaca workflow: `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`, `APPLE_ID`, `APPLE_PASSWORD`, `APPLE_TEAM_ID`.
-- **Pembaruan otomatis** belum dipasang: plugin updater Tauri memerlukan pasangan kunci tanda tangan dan alamat manifes rilis yang hanya bisa ditentukan pemilik proyek. Langkahnya: `pnpm tauri signer generate`, tambahkan `tauri-plugin-updater` beserta `plugins.updater` (`pubkey`, `endpoints`) di `tauri.conf.json`.
-- `identifier` aplikasi di `src-tauri/tauri.conf.json` (`dev.oncode.editor`) adalah nilai sementara; ganti dengan domain milik Anda sebelum rilis publik, karena mengubahnya setelah rilis memindahkan lokasi data pengguna.
+- **Sidebar, panel, status bar:** tampilan adalah entitas tersendiri (`AnyView`) yang mengamati state yang dibutuhkannya. Urutan: `order` kecil lebih dulu. Explorer 10, Search 20, Source Control 30, Graph 40, Pull Requests 50; panel: Terminal 10, Problems 20, Git Output 30.
+- **Tab:** `workbench.open_tab(TabData::new(kind, title, json!({..})), OpenOptions::default(), window, cx)`. Isi tab dibangun `TabKind::build` dan mengimplementasikan `TabContent` (pakai `ViewTab(entity)` untuk tampilan sederhana).
+- **State per jendela milik fitur:** `workbench.set_extension(entity)` dan `workbench.extension::<Entity<T>>()`.
+- **Berkas:** `oncode_ui::editor::open_file(workbench, OpenFile::new(path).at(line, column, len), window, cx)`; buffer lewat `oncode_ui::editor::buffers(workbench)`; berkas aktif lewat `active_file(workbench, cx)`.
+- **Repositori:** `oncode_ui::repos(cx)` (snapshot per akar, penanda berkas); berlangganan `ReposEvent`.
+- **Event:** `WorkbenchEvent` (tab, tata letak, pengaturan, `FsChanged`, `FileSaved`) lewat `cx.subscribe_in(&workbench, window, ..)`; event backend lain lewat `oncode_ui::core_bus(cx)` (`CoreEvent`).
+- **Dialog dan toast:** `oncode_ui::overlay::{confirm, choose, prompt_text, toast_*, show_error}`; pilihan dari daftar: `oncode_ui::quick_pick::quick_pick`. Aksi destruktif selalu lewat `confirm(..danger())` yang menyebut apa yang hilang.
+- **Ikon:** `Icon::new(oncode_ui::Lucide::GitBranch)` (seluruh Lucide tersedia).
+
+## Pengujian
+
+Tiga tingkat, semuanya `cargo test`:
+
+1. **Logika murni** (`#[test]`): penerjemahan pilihan, parser, model. Pisahkan logika dari tampilan agar bisa diuji tanpa jendela.
+2. **Backend** (`#[tokio::test]` di crate backend dan `oncode-core`): terhadap git sungguhan di repositori sementara.
+3. **Tampilan** (`#[gpui_kit::test]`): jendela tanpa layar, masukan disimulasikan, backend sungguhan. Lihat `crates/oncode-ui/tests/editor.rs`.
+
+```rust
+use gpui_kit::test::TestWindowExt as _;
+use gpui_kit::TestAppContext;
+use oncode_ui::testing::{git, TestApp};
+
+#[gpui_kit::test]
+async fn stages_a_file(cx: &mut TestAppContext) {
+    let app = TestApp::new(cx);
+    cx.update(|cx| oncode_ui_scm::init(cx));                 // daftarkan fitur yang diuji sebelum membuka jendela
+    let project = app.git_project(&[("a.txt", "satu\n")]);   // repo git sementara, sudah dipercaya
+    std::fs::write(project.join("a.txt"), "dua\n").unwrap();
+    let window = app.open(Some(&project), cx).await;
+    window.wait_until(cx, "status git", |_, cx| ..).await;   // menunggu backend (thread tokio sungguhan)
+    window.update(cx, |window, cx| { window.render_frame(cx); window.click("scm-stage-a.txt", cx); });
+    window.wait_until(cx, "ter-stage", |_, cx| ..).await;
+    assert_eq!(git(&project, &["diff", "--cached", "--name-only"]).trim(), "a.txt");
+}
+```
+
+Catatan uji tampilan:
+
+- Jangan `use gpui_kit::*;` di modul uji (membayangi `#[test]`). Elemen yang diklik perlu `.id("...")`; elemen buatan sendiri yang ingin ditemukan `window.find(..)` perlu `.test_support()` (`gpui_kit::test::TestSupportExt`).
+- `window.input("teks", cx)` mengetik ke elemen yang fokus; `window.press("enter", cx)` menekan tombol bernama; `window.run_command(cx, "id")` menjalankan command.
+- Jangan menunggu dengan `cx.executor().timer(..)` di luar `wait_until`; waktu uji GPUI tidak berjalan sendiri.
+- Periksa hasil akhirnya di luar aplikasi (isi berkas, `git`), bukan hanya state tampilan.
+
+### Melihat tampilan tanpa layar
+
+Build debug menerima `ONCODE_DEV_SCRIPT` (lihat `app/src/dev.rs`): daftar langkah JSON (`wait`, `open`, `command`, `type`, `key`) yang dijalankan setelah jendela terbuka. Dengan `Xvfb` dan lavapipe, hasilnya bisa ditangkap dengan `xwd`. Pakai `XDG_CONFIG_HOME`/`XDG_DATA_HOME` sementara agar pengaturan pengguna tidak tersentuh.

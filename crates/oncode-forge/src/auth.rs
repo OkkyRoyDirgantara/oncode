@@ -10,7 +10,6 @@ use std::fmt;
 use reqwest::header::ACCEPT;
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
-use specta::Type;
 
 use crate::error::{ForgeError, ForgeErrorCode, Result};
 use crate::http::{self, non_empty, now_epoch, Reply};
@@ -24,7 +23,7 @@ const REDACTED: &str = "***";
 /// `device_code` adalah rahasia sementara: siapa pun yang memegangnya bisa mengambil
 /// token setelah pengguna menyetujui login. Simpan di sisi backend; UI hanya memerlukan
 /// `user_code` dan `verification_uri`. `Debug` menyamarkannya.
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DeviceCode {
     pub device_code: String,
@@ -53,9 +52,8 @@ impl fmt::Debug for DeviceCode {
     }
 }
 
-/// Token milik satu akun. Hanya untuk keychain dan memori proses: sengaja tidak
-/// menurunkan `specta::Type` supaya tidak pernah dikirim ke UI, dan `Debug` menyamarkan
-/// isinya.
+/// Token milik satu akun. Hanya untuk keychain dan memori proses, tidak pernah dikirim
+/// ke UI; `Debug` menyamarkan isinya.
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TokenSet {

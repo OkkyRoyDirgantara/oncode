@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | Draf v1.0 — rancangan ulang, belum diimplementasikan |
+| **Status** | v1.0 — diimplementasikan (semua fitur terpasang); penyimpangan, hasil pengukuran, dan yang belum terverifikasi dicatat di [bagian 15](#15-catatan-implementasi) |
 | **Tanggal** | 18 November 2026 |
 | **Menggantikan** | [Rancangan v0.2 (Tauri + React)](arsip/RANCANGAN-v0.2-tauri.md), yang sudah diimplementasikan dan teruji |
 | **Cakupan** | Rancangan produk dan teknis untuk OnCode sebagai aplikasi native |
@@ -25,6 +25,7 @@ OnCode adalah aplikasi desktop untuk menyunting kode yang lebih sederhana daripa
 12. [Roadmap](#12-roadmap)
 13. [Risiko dan Mitigasi](#13-risiko-dan-mitigasi)
 14. [Glosarium](#14-glosarium)
+15. [Catatan Implementasi](#15-catatan-implementasi)
 
 ---
 
@@ -102,7 +103,7 @@ Uji end-to-end v0.2 (34 skenario di `e2e/`) menjadi **daftar periksa kesetaraan*
 |---|---|---|---|
 | Menyunting di dalam tampilan diff | Sisi kanan diff working tree bisa disunting | Diff baca-saja; tombol "Open File" membuka berkas di editor | Komponen diff yang dipakai bersifat baca-saja; membuat diff yang bisa disunting adalah pekerjaan besar dengan manfaat kecil |
 | Deskripsi pull request | HTML hasil Markdown, disanitasi | Dirender sebagai teks kaya native | Tidak ada lagi HTML, sehingga seluruh kelas masalah injeksi skrip hilang |
-| Multi-kursor | Ada | Bergantung pada hasil pembuktian tahap N0 (lihat [13](#13-risiko-dan-mitigasi)) | Belum bisa dipastikan dari dokumentasi komponen editor |
+| Multi-kursor | Ada | Ada (kursor tambahan dan seleksi kolom bawaan komponen editor) | Terjawab di N0; lihat [15.2](#152-hasil-pembuktian-n0) |
 | Rename lintas berkas (LSP) | Hanya berkas yang sedang terbuka | Semua berkas yang terdampak | Penyuntingan kini dilakukan di Rust ([7.5](#75-klien-lsp)) |
 
 ### 2.4 Yang tetap di luar lingkup
@@ -630,3 +631,76 @@ N4, N5, dan N6 tidak saling bergantung.
 | **Snapshot (repositori)** | Gambaran utuh keadaan repositori pada satu saat |
 
 Istilah Git dan istilah lain yang tidak berubah ada di [glosarium v0.2](arsip/RANCANGAN-v0.2-tauri.md#14-glosarium).
+
+---
+
+## 15. Catatan Implementasi
+
+Bagian ini mencatat apa yang berbeda dari rancangan di atas dan apa yang sudah atau belum terbukti, agar dokumen tetap sesuai dengan kode.
+
+### 15.1 Penyimpangan dari rancangan
+
+| Topik | Rancangan | Implementasi | Alasan |
+|---|---|---|---|
+| Dependensi UI | `gpui-component` langsung | `gpui-kit` =0.10.0, crate payung resmi yang mengekspor ulang GPUI, `gpui-base`, `gpui-component`, dan ikon | Satu dependensi yang mengunci seluruh keluarga `gpui-pre-*` yang cocok |
+| Struktur kode UI | Modul `app/src/features/<fitur>` | Satu crate per fitur: `crates/oncode-ui` (kerangka) dan `crates/oncode-ui-<fitur>`; `app/` hanya berisi `main` | Kompilasi bertahap jauh lebih cepat, dan fitur bisa dikerjakan serta diuji terpisah |
+| `oncode-diff` | Crate tersendiri di atas `imara-diff` | Tidak dibuat; perbandingan teks memakai `similar` di dalam `oncode-ui-diff` | `similar` sudah menjadi dependensi `gpui-component`; satu crate lebih sedikit |
+| Buffer berkas | Satu `EditorState` dipakai bersama semua split | Satu `EditorState` per tampilan; `Buffer` meneruskan setiap suntingan ke state lain | State editor memuat kursor dan gulir, jadi berbagi state membuat split berkas yang sama tidak berguna |
+| Keybinding | Dipetakan ke sistem aksi GPUI | Penyadap tombol global (`intercept_keystrokes`) yang mencari command di registry | Perilakunya sama persis dengan v0.2 (`when`, penimpaan dari `keybindings.json`) tanpa menyusun ulang keymap GPUI |
+| `SettingsChanged` | — | `oncode-core` menyiarkan pengaturan pengguna sekali; tiap jendela menghitung pengaturan efektifnya sendiri | Tidak ada lagi webview per jendela yang dikirimi event |
+| Data terminal | — | `oncode-core` mengirim byte mentah dari PTY; emulasi dilakukan di UI | Emulator (`alacritty_terminal`) butuh byte, bukan teks |
+
+### 15.2 Hasil pembuktian N0
+
+| Pembuktian | Hasil |
+|---|---|
+| Editor membuka, menyunting, menyimpan; multi-kursor | **Terbukti.** Uji tampilan `crates/oncode-ui/tests/editor.rs` membuka berkas, mengetik lewat jalur masukan sungguhan, dan menyimpan ke disk. Multi-kursor dan seleksi kolom adalah fitur bawaan komponen editor. |
+| Aplikasi terbangun dan berjalan di Windows | **Sebagian.** Kompilasi silang dari Linux ke `x86_64-pc-windows-gnu` berhasil menghasilkan `oncode.exe` dan `oncode-helper.exe`, baik debug maupun rilis (rilis: `oncode.exe` 53 MB). Shader DirectX untuk rilis hanya dikompilasi bila build berjalan di Windows (fxc.exe). Build silang memakai salinan `gpui-pre-windows` yang menanam sumber shader dan mengompilasinya saat aplikasi mulai (lihat `.dev-sysroot/env-win.sh`); build di Windows sendiri (CI, `release.yml`) tidak memerlukannya. Percobaan pertama memakai debug-assertions dan gagal di Windows: jalur debug GPUI membaca shader dari path mesin build, sehingga jendela tidak terbuka. Installer pertama juga belum punya ikon; kini `app/build.rs` menyematkan `icons/icon.ico`. Kegagalan membuka jendela dan panic dicatat ke `oncode.log` di folder data (`%APPDATA%\dev.oncode.editor`). Versi perbaikan belum dicoba di Windows. |
+| Uji tampilan tanpa layar | **Terbukti.** `#[gpui_kit::test]` berjalan tanpa server tampilan, dengan backend sungguhan di thread tokio. |
+| Runtime `tokio` di samping eksekutor GPUI | **Terbukti.** Polanya `oncode_ui::spawn_core`; dipakai semua fitur. Satu jebakan: uji tidak boleh menunggu pewaktu GPUI (waktu uji tidak berjalan sendiri). |
+| Menjalankan tanpa GPU | Jendela tampil di Xvfb dengan Mesa lavapipe (Vulkan perangkat lunak). |
+
+### 15.3 Keadaan fitur
+
+Semua crate fitur terpasang di aplikasi (`app/src/main.rs`) dan punya uji tampilan tanpa layar terhadap backend sungguhan. Seluruh workspace lolos tanpa kegagalan (`cargo test --workspace`, 18 November 2026, Linux: 825 uji lolos, 0 gagal). Uji gabungan `app/tests/all_features.rs` menjalankan semua fitur bersamaan dalam satu jendela.
+
+| Fitur | Crate | Padanan skenario end-to-end v0.2 yang sudah diuji |
+|---|---|---|
+| Kerangka: jendela, tab/split, command palette, quick open, pintasan, `keybindings.json`, sesi | `oncode-ui` | layar awal; `keybindings.json`; pemulihan tab |
+| Editor berkas, simpan, muat ulang dari luar | `oncode-ui` | buka/sunting/simpan; perubahan dari luar |
+| Explorer, layar awal, mode terbatas | `oncode-ui-explorer` | mode terbatas sampai dipercaya; penanda Git di explorer |
+| Pencarian dan penggantian proyek | `oncode-ui-search` | pencarian menghormati gitignore; penggantian di berkas tertutup (disk) dan terbuka (lewat editor) |
+| Diff (stage/unstage/discard per hunk dan baris), editor konflik, penanda gutter, blame | `oncode-ui-diff` | stage satu hunk; unstage hunk dan discard hunk dengan konfirmasi; stage baris terpilih dan tampilan unified; selesaikan konflik lewat editor; blame |
+| Source Control, commit, branch, remote, stash, Git Output, clone, init | `oncode-ui-scm` | stage lewat tombol baris lalu commit; stage/unstage semua; publish lalu sync dengan pull bercabang; stash/pop; buat branch; dialog username/password HTTP (juga password salah dan batal); SSH: konfirmasi host dan passphrase, juga host ditolak; buang berkas untracked ke tempat sampah |
+| Graph, detail commit, interactive rebase, reflog, stash, worktree, submodule | `oncode-ui-graph` | riwayat dan detail; interactive rebase (urutan) |
+| Terminal | `oncode-ui-terminal` | terminal menjalankan perintah; tombol shell tidak direbut pintasan aplikasi |
+| LSP dan Problems | `oncode-lsp`, `oncode-ui-lsp` | diagnostics dan Problems; go to definition lintas berkas; rename berkas terbuka dan tertutup |
+| GitHub/GitLab | `oncode-ui-forge` | login token GitLab, daftar dan detail MR; login device flow GitHub; push memakai token akun |
+| Pengaturan | `oncode-ui-settings` | pengaturan tersimpan; pengaturan tanpa folder |
+
+### 15.4 Berbeda dari v0.2 atau belum dikerjakan
+
+| Hal | Keterangan |
+|---|---|
+| Blame | Ditampilkan untuk baris kursor di status bar, bukan sebagai anotasi per baris di gutter: komponen editor tidak menyediakan anotasi per baris. |
+| Garis bawah diagnostics | Hanya tergambar pada berkas yang punya highlighter sintaks (aturan komponen editor); panel Problems dan status bar tetap memuat semuanya. |
+| Signature help | Belum ada; komponen editor tidak punya kaitnya. |
+| Terminal | Tanpa IME (masukan teks lewat `key_char`), tanpa laporan tetikus ke program TUI, pencarian lewat dialog. |
+| Interactive rebase | Urutan diubah dengan tombol naik/turun, tanpa seret. |
+| Graph | Kolom tidak menyembunyikan diri saat sempit. |
+| Uji end-to-end v0.2 | Semua skenario sudah punya padanan berupa uji tampilan tanpa layar, termasuk buang berkas untracked ke tempat sampah (`crates/oncode-ui-scm/tests/trash.rs`). Server ujinya (git smart-HTTP dengan Basic auth, `sshd` pribadi, GitHub/GitLab tiruan) ditulis ulang dalam Rust. |
+| Paket `.deb` | Nama paketnya `on-code` (diturunkan perkakas dari nama produk) dan kolom Maintainer kosong. |
+
+### 15.5 Pengukuran
+
+Build rilis, Linux, layar virtual Xvfb dengan Vulkan perangkat lunak (lavapipe), tanpa GPU:
+
+| Ukuran | Target | Hasil |
+|---|---|---|
+| Jendela tampil | < 300 ms | ± 85 ms (± 260 ms pada jalan pertama) |
+| Memori saat diam, proyek kecil | < 150 MB | RSS ± 230 MB, tetapi memori pribadi aplikasi (anonim) hanya ± 58 MB. Sisanya halaman bersama milik renderer perangkat lunak: libLLVM 54 MB, pustaka driver 30 MB, lavapipe/gallium 16 MB, buffer grafis ± 38 MB. Dengan GPU sungguhan renderer itu tidak dimuat; angka akhirnya perlu diukur di sana. |
+| Ukuran binary / paket | installer < 40 MB | binary 67 MB, `.deb` 19 MB, AppImage 19 MB, installer NSIS 11 MB (dari Linux, tanpa tanda tangan) |
+
+### 15.6 Belum pernah dijalankan
+
+Aplikasi di Windows (hanya dikompilasi silang) dan macOS; login dan API terhadap github.com dan gitlab.com sungguhan; keychain sungguhan; language server sungguhan (uji memakai server tiruan); kinerja dengan GPU sungguhan; memasang installer NSIS di Windows; membuka DMG di Mac. DMG Apple Silicon (`OnCode_0.1.0_aarch64.dmg`, 53 MB, tanda tangan ad-hoc, tanpa notarisasi) dibuat dengan kompilasi silang dari Linux memakai macOS SDK pihak ketiga, shader Metal yang dikompilasi saat aplikasi mulai, dan `rust-lld`; belum pernah dibuka di Mac. Belum ada DMG untuk Mac Intel. AppImage sudah dibuat dan dijalankan di Xvfb tanpa pustaka tambahan; jendelanya tampil.

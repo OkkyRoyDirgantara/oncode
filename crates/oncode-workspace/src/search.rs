@@ -11,7 +11,6 @@ use grep_regex::{RegexMatcher, RegexMatcherBuilder};
 use grep_searcher::{BinaryDetection, Searcher, SearcherBuilder, Sink, SinkMatch};
 use ignore::WalkState;
 use serde::{Deserialize, Serialize};
-use specta::Type;
 
 use crate::error::{Result, WsError};
 use crate::fs::{absolute, is_inside, write_atomic};
@@ -21,7 +20,7 @@ use crate::index::to_slash;
 /// Panjang maksimum `LineMatch::preview`, dalam karakter.
 const PREVIEW_MAX_CHARS: usize = 400;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SearchQuery {
     pub pattern: String,
@@ -39,7 +38,7 @@ pub struct SearchQuery {
     pub max_results: u32,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Type)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LineMatch {
     /// Nomor baris, mulai dari 1.
@@ -55,7 +54,7 @@ pub struct LineMatch {
     pub preview_offset: u32,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Type)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FileMatches {
     /// Path relatif terhadap akar proyek, dengan garis miring.
@@ -64,7 +63,7 @@ pub struct FileMatches {
     pub matches: Vec<LineMatch>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Type)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SearchSummary {
     pub files: u32,
@@ -73,7 +72,7 @@ pub struct SearchSummary {
     pub truncated: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Type)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReplaceSummary {
     /// Jumlah berkas yang diubah.

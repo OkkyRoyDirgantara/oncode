@@ -1,8 +1,7 @@
 use serde::Serialize;
-use specta::Type;
 
 /// Kode galat yang dipakai UI untuk memilih pesan dan aksi lanjutan.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Type)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ForgeErrorCode {
     /// Token tidak ada, salah, atau sudah kedaluwarsa (HTTP 401).
@@ -27,7 +26,7 @@ pub enum ForgeErrorCode {
 
 /// Galat dari lapisan forge. `message` aman ditampilkan ke pengguna dan tidak pernah
 /// memuat token.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Type, thiserror::Error)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, thiserror::Error)]
 #[serde(rename_all = "camelCase")]
 #[error("{message}")]
 pub struct ForgeError {

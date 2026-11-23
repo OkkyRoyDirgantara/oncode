@@ -1,0 +1,23 @@
+[package]
+name = "oncode-ui-terminal"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Terminal terintegrasi untuk OnCode"
+
+[dependencies]
+oncode-core = { path = "../oncode-core" }
+oncode-ui = { path = "../oncode-ui" }
+gpui-kit = "=0.10.0"
+serde.workspace = true
+serde_json.workspace = true
+oncode-terminal = { path = "../oncode-terminal" }
+tokio.workspace = true
+# Emulasi terminal (grid, scrollback, seleksi, parser ANSI); tampilannya dibuat sendiri.
+alacritty_terminal = "0.26"
+
+[dev-dependencies]
+oncode-ui = { path = "../oncode-ui", features = ["test-support"] }
+gpui-kit = { version = "=0.10.0", features = ["test-support"] }
+tempfile.workspace = true

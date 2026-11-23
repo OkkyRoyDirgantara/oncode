@@ -1,0 +1,27 @@
+[package]
+name = "oncode-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "State aplikasi OnCode tanpa UI: registry repositori, workspace per jendela, pengaturan, data tersimpan, dan seluruh API perintah"
+
+[dependencies]
+oncode-git = { path = "../oncode-git" }
+oncode-workspace = { path = "../oncode-workspace" }
+oncode-terminal = { path = "../oncode-terminal" }
+oncode-lsp = { path = "../oncode-lsp" }
+oncode-forge = { path = "../oncode-forge" }
+
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+uuid = { version = "1", features = ["v4"] }
+# Lokasi direktori konfigurasi dan data per OS, sama seperti yang dipakai Tauri di v0.2.
+dirs = "6"
+
+[dev-dependencies]
+tempfile.workspace = true
+# Server HTTP tiruan untuk uji login forge.
+wiremock = "0.6"

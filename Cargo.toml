@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/*", "src-tauri"]
+members = ["crates/*", "app"]
 
 [workspace.package]
 version = "0.1.0"
@@ -14,8 +14,15 @@ serde_json = "1"
 thiserror = "2"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "io-util", "sync", "time", "fs", "net"] }
 tokio-util = "0.7"
-specta = { version = "=2.0.0-rc.28", features = ["derive"] }
 tempfile = "3"
+
+# Dependensi (GPUI dan kawan-kawan) dibangun tanpa info debug: binary debug turun dari ± 780 MB
+# dan waktu link jauh lebih singkat. Kode kita sendiri tetap punya nomor baris di backtrace.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
 
 [profile.release]
 codegen-units = 1

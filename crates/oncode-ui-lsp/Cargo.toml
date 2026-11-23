@@ -1,0 +1,25 @@
+[package]
+name = "oncode-ui-lsp"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Klien LSP untuk editor dan panel Problems untuk OnCode"
+
+[dependencies]
+oncode-core = { path = "../oncode-core" }
+oncode-ui = { path = "../oncode-ui" }
+gpui-kit = "=0.10.0"
+serde.workspace = true
+serde_json.workspace = true
+oncode-lsp = { path = "../oncode-lsp" }
+lsp-types = { version = "0.97", features = ["proposed"] }
+oncode-workspace = { path = "../oncode-workspace" }
+tokio.workspace = true
+anyhow = "1"
+
+[dev-dependencies]
+oncode-lsp = { path = "../oncode-lsp", features = ["mock"] }
+oncode-ui = { path = "../oncode-ui", features = ["test-support"] }
+gpui-kit = { version = "=0.10.0", features = ["test-support"] }
+tempfile.workspace = true
