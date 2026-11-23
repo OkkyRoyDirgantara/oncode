@@ -35,6 +35,9 @@ use crate::palette::{cell_style, to_hsla, Palette};
 
 const IS_MAC: bool = cfg!(target_os = "macos");
 
+/// Konteks keymap sesi terminal; dipakai juga oleh binding di `init` (lihat `lib.rs`).
+pub(crate) const KEY_CONTEXT: &str = "Terminal";
+
 /// Ukuran sel dan baris untuk font terminal saat ini.
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct Metrics {
@@ -555,7 +558,7 @@ impl Render for TerminalSession {
             .text_size(self.font_size)
             .line_height(metrics.line_height)
             .track_focus(&self.focus_handle)
-            .key_context("Terminal")
+            .key_context(KEY_CONTEXT)
             .on_key_down(cx.listener(Self::on_key_down))
             .on_mouse_down(MouseButton::Left, cx.listener(Self::on_mouse_down))
             .on_mouse_move(cx.listener(Self::on_mouse_move))

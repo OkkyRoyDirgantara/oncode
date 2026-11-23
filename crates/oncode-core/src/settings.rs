@@ -112,9 +112,13 @@ pub struct LspSettings {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct ForgeSettings {
-    /// Client ID aplikasi OAuth untuk login device flow. Kosong = hanya login dengan token.
+    /// Client ID aplikasi OAuth untuk login device flow di github.com / gitlab.com, sekaligus
+    /// bawaan untuk server lain yang belum punya Client ID sendiri. Kosong = Client ID bawaan build.
     pub github_client_id: Option<String>,
     pub gitlab_client_id: Option<String>,
+    /// Client ID per server (kunci: origin, mis. `https://git.example.com`). Aplikasi OAuth hanya
+    /// dikenal oleh server tempat ia didaftarkan, jadi tiap server self-hosted perlu miliknya sendiri.
+    pub client_ids: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

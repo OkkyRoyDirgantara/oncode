@@ -11,7 +11,7 @@ pub mod view;
 
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::{Icon, Sizable as _};
-use gpui_kit::{App, AppContext as _, Context, Entity, IntoElement, Render, Window};
+use gpui_kit::{App, AppContext as _, Context, Entity, IntoElement, KeyBinding, NoAction, Render, Window};
 use oncode_ui::commands::Command;
 use oncode_ui::{Lucide, PanelView, StatusAlign, StatusItem, Workbench};
 use serde_json::Value;
@@ -23,6 +23,10 @@ pub const PANEL_ID: &str = "terminal";
 
 /// Mendaftarkan fitur ini. Dipanggil sekali dari `app/src/main.rs` setelah `oncode_ui::init`.
 pub fn init(cx: &mut App) {
+    // Root gpui-kit mengikat Tab/Shift+Tab ke perpindahan fokus, dan binding aksi dijalankan
+    // sebelum penangan `keydown`. Di dalam terminal kedua tombol itu milik shell (pelengkapan,
+    // Shift+Tab mundur), jadi binding Root dinonaktifkan untuk konteks terminal.
+    cx.bind_keys([KeyBinding::new("tab", NoAction, Some(view::KEY_CONTEXT)), KeyBinding::new("shift-tab", NoAction, Some(view::KEY_CONTEXT))]);
     oncode_ui::register_feature(cx, setup);
 }
 

@@ -13,12 +13,12 @@ use gpui_kit::{
 use oncode_core::api::forge as forge_api;
 use oncode_core::{AppError, CoreEvent};
 use oncode_forge::{Account, ForgeKind};
-use oncode_ui::overlay::{self, Confirm, TextPrompt};
+use oncode_ui::overlay::{self, Choice, Confirm, TextPrompt};
 use oncode_ui::quick_pick::{quick_pick, PickItem, QuickPickOptions};
 use oncode_ui::{core, core_bus, spawn_core, Lucide};
 
 use crate::login::{scopes_sentence, DevicePoller, LoginOutcome, PollNext};
-use crate::util::{describe_forge_error, forge_name, login_host_for, normalize_host, open_external};
+use crate::util::{describe_forge_error, forge_host, forge_name, login_host_for, normalize_host, open_external};
 
 /// Memilih dari daftar lewat quick pick, menunggu hasilnya.
 pub(crate) async fn pick(cx: &mut AsyncWindowContext, options: QuickPickOptions) -> Option<PickItem> {
@@ -86,6 +86,20 @@ pub fn sign_in(window: &mut Window, cx: &mut App) {
 
 async fn token_flow(kind: ForgeKind, host: Option<String>, cx: &mut AsyncWindowContext) {
     let message = format!("Create a token with the {} in your {} account settings, then paste it here.", scopes_sentence(kind), forge_name(Some(kind)));
+    paste_token_and_login(kind, host, message, cx).await;
+}
+
+/// Login lewat browser tanpa aplikasi OAuth: membuka halaman pembuatan token (nama dan scope
+/// sudah terisi), lalu meminta token yang dibuat di sana.
+async fn browser_token_flow(kind: ForgeKind, host: Option<String>, cx: &mut AsyncWindowContext) {
+    let url = forge_host(kind, host.as_deref()).token_creation_url();
+    let opened = cx.update(|_, cx| open_external(&url, cx)).unwrap_or(false);
+    let lead = if opened { "A page to create a token opened in your browser" } else { "Open this page in your browser to create a token" };
+    let message = format!("{lead}, with the name and the {} already filled in. Create the token, then paste it here.\n\n{url}", scopes_sentence(kind));
+    paste_token_and_login(kind, host, message, cx).await;
+}
+
+async fn paste_token_and_login(kind: ForgeKind, host: Option<String>, message: String, cx: &mut AsyncWindowContext) {
     let Ok(answer) = cx.update(|window, cx| overlay::prompt_text(TextPrompt::new("Personal access token", "Sign In").message(message).secret(), window, cx)) else { return };
     let Some(token) = answer.await.map(|t| t.trim().to_string()).filter(|t| !t.is_empty()) else { return };
     let core = match cx.update(|_, cx| core(cx)) {
@@ -138,17 +152,20 @@ impl Render for DeviceDialog {
 
 async fn device_flow(kind: ForgeKind, host: Option<String>, cx: &mut AsyncWindowContext) {
     let Ok(core) = cx.update(|_, cx| core(cx)) else { return };
-    let start_core = core.clone();
-    let start_host = host.clone();
-    let start = match core_call(cx, async move { forge_api::forge_login_start(&start_core, kind, start_host).await }).await {
-        Ok(start) => start,
-        Err(error) if error.code == "unsupported" => {
-            let _ = cx.update(|window, cx| {
-                overlay::toast_warning(format!("Browser sign-in needs an OAuth Client ID for {} (Settings → Accounts). You can sign in with a personal access token instead.", forge_name(Some(kind))), window, cx)
-            });
-            return;
+    let start = loop {
+        let (start_core, start_host) = (core.clone(), host.clone());
+        let error = match core_call(cx, async move { forge_api::forge_login_start(&start_core, kind, start_host).await }).await {
+            Ok(start) => break start,
+            Err(error) if error.code == "network" || error.code == "cancelled" => return finish(LoginOutcome::Error(error), host.as_deref(), cx),
+            Err(error) => error,
+        };
+        // Device flow tidak bisa dipakai di server ini (belum ada Client ID, atau ditolak server):
+        // tawarkan token lewat browser atau Client ID lain. Tiap putaran menunggu pilihan pengguna.
+        match browser_sign_in_fallback(kind, host.as_deref(), &error, cx).await {
+            Some(Fallback::Token) => return browser_token_flow(kind, host, cx).await,
+            Some(Fallback::ClientId) if ask_client_id(kind, host.clone(), cx).await => continue,
+            _ => return,
         }
-        Err(error) => return finish(LoginOutcome::Error(error), host.as_deref(), cx),
     };
     let url = start.verification_uri_complete.clone().unwrap_or_else(|| start.verification_uri.clone());
     let dialog = match cx.update(|window, cx| {
@@ -195,6 +212,66 @@ async fn device_flow(kind: ForgeKind, host: Option<String>, cx: &mut AsyncWindow
     };
     let _ = cx.update(|window, cx| window.close_dialog(cx));
     finish(outcome, host.as_deref(), cx);
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Fallback {
+    /// Buat token di halaman web server, lalu tempel.
+    Token,
+    /// Isi Client ID aplikasi OAuth milik server itu, lalu coba device flow lagi.
+    ClientId,
+}
+
+/// Pilihan saat device flow tidak bisa dimulai. Aplikasi OAuth hanya dikenal oleh server tempat
+/// ia didaftarkan, jadi server self-hosted tidak bisa memakai Client ID bawaan OnCode.
+async fn browser_sign_in_fallback(kind: ForgeKind, host: Option<&str>, error: &AppError, cx: &mut AsyncWindowContext) -> Option<Fallback> {
+    let server = forge_host(kind, host).hostname();
+    let (title, message) = if error.code == "noClientId" {
+        (
+            format!("Sign in to {server} with the browser"),
+            format!(
+                "Signing in with a code needs an OAuth application registered on {server}, and OnCode has no Client ID for it yet.\n\n\
+                 Create Token in Browser opens the token page of {server} with the name and scopes filled in, so no setup is needed. \
+                 Or enter the Client ID of an OAuth application you registered on {server}."
+            ),
+        )
+    } else {
+        (
+            format!("Browser sign-in to {server} is not available"),
+            format!("{}\n\nYou can create a token in the browser instead, or enter a different Client ID.", describe_forge_error(error, host).line()),
+        )
+    };
+    let choices = vec![Choice::new("cancel", "Cancel"), Choice::new("client-id", "Enter Client ID…"), Choice::new("token", "Create Token in Browser").primary()];
+    let answer = cx.update(|window, cx| overlay::choose(title, message, choices, window, cx)).ok()?.await?;
+    match answer {
+        "token" => Some(Fallback::Token),
+        "client-id" => Some(Fallback::ClientId),
+        _ => None,
+    }
+}
+
+/// Meminta Client ID aplikasi OAuth untuk server itu lalu menyimpannya (`forge.clientIds`).
+/// `false` bila dibatalkan atau gagal disimpan.
+async fn ask_client_id(kind: ForgeKind, host: Option<String>, cx: &mut AsyncWindowContext) -> bool {
+    let server = forge_host(kind, host.as_deref()).hostname();
+    let message = match kind {
+        ForgeKind::GitLab => format!(
+            "On {server}, open User Settings → Applications (or Admin Area → Applications) and add an application with \"Confidential\" unticked \
+             and the scopes api and read_user. Any redirect URI will do; it is not used. Paste its Application ID here."
+        ),
+        ForgeKind::GitHub => format!("On {server}, open Settings → Developer settings → OAuth Apps and register an app with \"Enable Device Flow\" ticked. Paste its Client ID here."),
+    };
+    let prompt = TextPrompt::new("OAuth Client ID", "Continue").message(message).placeholder("Application ID");
+    let Ok(answer) = cx.update(|window, cx| overlay::prompt_text(prompt, window, cx)) else { return false };
+    let Some(client_id) = answer.await.map(|t| t.trim().to_string()).filter(|t| !t.is_empty()) else { return false };
+    let Ok(core) = cx.update(|_, cx| core(cx)) else { return false };
+    match core_call(cx, async move { forge_api::forge_set_client_id(&core, kind, host, client_id).await }).await {
+        Ok(()) => true,
+        Err(error) => {
+            let _ = cx.update(|window, cx| overlay::toast_error(error.message, window, cx));
+            false
+        }
+    }
 }
 
 /// Alur "Sign Out": pilih akun lalu konfirmasi.

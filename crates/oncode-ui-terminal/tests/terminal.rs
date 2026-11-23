@@ -62,3 +62,26 @@ async fn shell_keys_are_not_taken_by_app_shortcuts(cx: &mut TestAppContext) {
     cx.run_until_parked();
     assert!(cx.update(|cx| !workbench.read(cx).is_panel_visible()));
 }
+
+#[gpui_kit::test]
+async fn tab_and_shift_tab_stay_in_the_terminal(cx: &mut TestAppContext) {
+    let app = TestApp::new(cx);
+    cx.update(oncode_ui_terminal::init);
+    let project = app.project(&[("a.txt", "a\n")]);
+    let window = app.open(Some(&project), cx).await;
+    let workbench = window.workbench(cx);
+    assert!(window.run_command(cx, "terminal.toggle"));
+    let panel = cx.update(|cx| oncode_ui_terminal::panel(workbench.read(cx)).unwrap());
+    window.wait_until(cx, "shell berjalan", |_, cx| panel.read(cx).active_session().is_some_and(|s| s.read(cx).is_running())).await;
+    let session = cx.update(|cx| panel.read(cx).active_session().unwrap().clone());
+
+    // Tab (pelengkapan) dan Shift+Tab milik shell: fokus tidak pindah ke kontrol lain (mis. tombol branch).
+    for key in ["tab", "shift-tab"] {
+        let focused = window.update(cx, |window, cx| {
+            window.render_frame(cx);
+            window.press(key, cx);
+            session.read(cx).focus_handle_is_focused(window)
+        });
+        assert!(focused, "{key} memindahkan fokus keluar dari terminal");
+    }
+}

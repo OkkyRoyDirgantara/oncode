@@ -103,6 +103,25 @@ impl ForgeHost {
     pub fn matches(&self, repo: &RepoRef) -> bool {
         self.hostname() == repo.host.to_ascii_lowercase()
     }
+
+    /// `true` untuk layanan publik (github.com, gitlab.com), bukan instance sendiri.
+    pub fn is_public(&self) -> bool {
+        let hostname = self.hostname();
+        match self.kind {
+            ForgeKind::GitHub => hostname == "github.com" || hostname == "www.github.com",
+            ForgeKind::GitLab => hostname == "gitlab.com" || hostname == "www.gitlab.com",
+        }
+    }
+
+    /// Halaman web untuk membuat Personal Access Token, dengan nama dan scope yang dibutuhkan
+    /// OnCode sudah terisi. Jalan login lewat browser yang tidak memerlukan aplikasi OAuth.
+    pub fn token_creation_url(&self) -> String {
+        let base = self.web_base();
+        match self.kind {
+            ForgeKind::GitHub => format!("{base}/settings/tokens/new?description=OnCode&scopes=repo,read:user"),
+            ForgeKind::GitLab => format!("{base}/-/user_settings/personal_access_tokens?name=OnCode&scopes=api,read_user"),
+        }
+    }
 }
 
 /// Repositori di sebuah forge, hasil parse URL remote.
@@ -314,6 +333,30 @@ mod tests {
         assert_eq!(ForgeHost::new(ForgeKind::GitLab, "http://Git.Lokal:8080/").hostname(), "git.lokal");
         assert_eq!(ForgeHost::github().hostname(), "github.com");
         assert_eq!(ForgeHost::new(ForgeKind::GitLab, "https://[::1]:8443").hostname(), "[::1]");
+    }
+
+    #[test]
+    fn token_creation_url_prefills_name_and_scopes() {
+        assert_eq!(ForgeHost::github().token_creation_url(), "https://github.com/settings/tokens/new?description=OnCode&scopes=repo,read:user");
+        assert_eq!(
+            ForgeHost::new(ForgeKind::GitLab, "git.contoh.id/").token_creation_url(),
+            "https://git.contoh.id/-/user_settings/personal_access_tokens?name=OnCode&scopes=api,read_user"
+        );
+        // Instance di bawah sub-path tetap memakai path dasarnya.
+        assert_eq!(
+            ForgeHost::new(ForgeKind::GitLab, "https://contoh.id/gitlab").token_creation_url(),
+            "https://contoh.id/gitlab/-/user_settings/personal_access_tokens?name=OnCode&scopes=api,read_user"
+        );
+    }
+
+    #[test]
+    fn only_github_com_and_gitlab_com_are_public() {
+        assert!(ForgeHost::github().is_public());
+        assert!(ForgeHost::gitlab().is_public());
+        assert!(!ForgeHost::new(ForgeKind::GitLab, "git.contoh.id").is_public());
+        assert!(!ForgeHost::new(ForgeKind::GitHub, "ghe.contoh.id").is_public());
+        // Jenis yang tidak cocok dengan host-nya bukan layanan publik.
+        assert!(!ForgeHost::new(ForgeKind::GitLab, "github.com").is_public());
     }
 
     #[test]

@@ -5,11 +5,11 @@ use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::TestAppContext;
 use oncode_core::api::forge as forge_api;
 use oncode_forge::ForgeKind;
-use oncode_ui::testing::{git, TestApp};
+use oncode_ui::testing::{git, TestApp, TestWindow};
 use oncode_ui::ViewTab;
 use oncode_ui_forge::views::PullRequestTab;
 use serde_json::json;
-use wiremock::matchers::{method, path};
+use wiremock::matchers::{body_string_contains, header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 const PROJECT: &str = "/api/v4/projects/tim%2Fproyek";
@@ -70,4 +70,143 @@ async fn gitlab_token_login_lists_merge_requests_and_opens_one(cx: &mut TestAppC
     assert_eq!(detail.pull_request.number, 12);
     assert_eq!(detail.body, "## Ringkasan\n\nMemperbaiki *login*.");
     assert_eq!(detail.labels, ["bug"]);
+}
+
+/// Memilih butir quick pick dengan mengetik lalu Enter.
+async fn pick(window: &TestWindow, cx: &mut TestAppContext, text: &str) {
+    for _ in 0..300 {
+        let ready = window.update(cx, |window, cx| {
+            window.render_frame(cx);
+            window.try_find("quick-pick-input").is_some()
+        });
+        if ready {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        cx.run_until_parked();
+    }
+    window.update(cx, |window, cx| window.input(text, cx));
+    cx.run_until_parked();
+    window.update(cx, |window, cx| {
+        window.render_frame(cx);
+        window.press("enter", cx);
+    });
+    cx.run_until_parked();
+}
+
+/// Menunggu kotak masukan dialog lalu mengetik dan menekan Enter.
+async fn answer(window: &TestWindow, cx: &mut TestAppContext, text: &str) {
+    for _ in 0..300 {
+        let open = window.update(cx, |window, cx| {
+            use gpui_kit::component::WindowExt as _;
+            window.render_frame(cx);
+            window.has_active_dialog(cx) && window.try_find("choice-token").is_none()
+        });
+        if open {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        cx.run_until_parked();
+    }
+    cx.run_until_parked();
+    window.update(cx, |window, cx| {
+        window.render_frame(cx);
+        window.input(text, cx);
+        window.press("enter", cx);
+    });
+    cx.run_until_parked();
+}
+
+async fn click_when_ready(window: &TestWindow, cx: &mut TestAppContext, id: &'static str) {
+    for _ in 0..300 {
+        let found = window.update(cx, |window, cx| {
+            window.render_frame(cx);
+            window.try_find(id).is_some()
+        });
+        if found {
+            window.update(cx, |window, cx| window.click(id, cx));
+            cx.run_until_parked();
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        cx.run_until_parked();
+    }
+    panic!("tombol {id} tidak muncul");
+}
+
+/// Sign In → GitLab (self-hosted) → alamat server → lewat browser, sampai dialog pilihan
+/// "belum ada Client ID" tampil.
+async fn start_browser_sign_in(window: &TestWindow, cx: &mut TestAppContext, base: &str) {
+    assert!(window.run_command(cx, "forge.signIn"));
+    pick(window, cx, "self-hosted").await;
+    answer(window, cx, base).await;
+    pick(window, cx, "browser").await;
+}
+
+async fn wait_for_account(app: &TestApp, window: &TestWindow, cx: &mut TestAppContext, username: &'static str) {
+    let core = app.core.clone();
+    window
+        .wait_until(cx, "akun tersimpan", |_, _| {
+            let core = core.clone();
+            app.runtime.block_on(async move { forge_api::forge_accounts(&core).await }).is_ok_and(|accounts| accounts.iter().any(|a| a.username == username))
+        })
+        .await;
+}
+
+#[gpui_kit::test]
+async fn self_hosted_browser_sign_in_without_client_id_creates_a_token(cx: &mut TestAppContext) {
+    let app = TestApp::new(cx);
+    cx.update(oncode_ui_forge::init);
+    let server = app.runtime.block_on(gitlab());
+    let base = server.uri();
+    let window = app.open(None, cx).await;
+
+    // Tanpa Client ID untuk server ini: halaman pembuatan token dibuka dengan nama dan scope terisi.
+    start_browser_sign_in(&window, cx, &base).await;
+    click_when_ready(&window, cx, "choice-token").await;
+    assert_eq!(cx.opened_url(), Some(format!("{base}/-/user_settings/personal_access_tokens?name=OnCode&scopes=api,read_user")));
+    answer(&window, cx, "glpat-uji").await;
+
+    wait_for_account(&app, &window, cx, "budi").await;
+    assert!(app.core.user_settings().forge.client_ids.is_empty(), "jalur token tidak menyimpan Client ID");
+}
+
+#[gpui_kit::test]
+async fn self_hosted_browser_sign_in_saves_the_client_id_of_the_server(cx: &mut TestAppContext) {
+    let app = TestApp::new(cx);
+    cx.update(oncode_ui_forge::init);
+    let server = app.runtime.block_on(async {
+        let server = MockServer::start().await;
+        let base = server.uri();
+        Mock::given(method("POST"))
+            .and(path("/oauth/authorize_device"))
+            .and(body_string_contains("client_id=klien-server"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "device_code": "dev-1", "user_code": "WXYZ-0001", "verification_uri": format!("{base}/oauth/device"), "expires_in": 300, "interval": 1 })))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/oauth/token"))
+            .and(body_string_contains("client_id=klien-server"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "access_token": "token-server", "refresh_token": "segar", "expires_in": 7200, "token_type": "Bearer" })))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/api/v4/user"))
+            .and(header("authorization", "Bearer token-server"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "id": 9, "username": "sari", "name": "Sari", "avatar_url": null })))
+            .mount(&server)
+            .await;
+        server
+    });
+    let base = server.uri();
+    let window = app.open(None, cx).await;
+
+    // Client ID aplikasi OAuth milik server diisi saat login, lalu device flow berjalan.
+    start_browser_sign_in(&window, cx, &base).await;
+    click_when_ready(&window, cx, "choice-client-id").await;
+    answer(&window, cx, "klien-server").await;
+
+    wait_for_account(&app, &window, cx, "sari").await;
+    assert_eq!(cx.opened_url(), Some(format!("{base}/oauth/device")), "halaman verifikasi dibuka di browser");
+    assert_eq!(app.core.user_settings().forge.client_ids.get(&base).map(String::as_str), Some("klien-server"));
 }

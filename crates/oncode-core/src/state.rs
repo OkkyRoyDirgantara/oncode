@@ -64,8 +64,17 @@ pub struct Core {
     pub terminals: Arc<TerminalManager>,
     pub lsp: Arc<LspManager>,
     pub tokens: Arc<FallbackStore>,
-    /// Login device flow yang sedang menunggu: kode pengguna → (host, device code).
-    pub pending_logins: Mutex<HashMap<String, (oncode_forge::ForgeHost, String)>>,
+    /// Login device flow yang sedang menunggu, menurut kode pengguna.
+    pub pending_logins: Mutex<HashMap<String, PendingLogin>>,
+}
+
+/// Satu login device flow yang menunggu persetujuan di browser.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingLogin {
+    pub host: oncode_forge::ForgeHost,
+    pub device_code: String,
+    /// Client ID yang dipakai saat memulai; polling wajib memakai yang sama.
+    pub client_id: String,
 }
 
 impl Core {

@@ -2,7 +2,7 @@
 
 use gpui_kit::App;
 use oncode_core::AppError;
-use oncode_forge::{ForgeKind, RepoRef};
+use oncode_forge::{ForgeHost, ForgeKind, RepoRef};
 
 /// Nama penyedia untuk ditampilkan.
 pub fn forge_name(kind: Option<ForgeKind>) -> &'static str {
@@ -49,6 +49,15 @@ pub fn pr_number(kind: Option<ForgeKind>, number: u32) -> String {
 pub fn host_name(origin: &str) -> String {
     let without_scheme = origin.split_once("://").map_or(origin, |(_, rest)| rest);
     without_scheme.split('/').next().unwrap_or_default().to_lowercase()
+}
+
+/// Server tujuan login: origin yang diisi pengguna, atau layanan publik penyedia itu bila kosong.
+pub fn forge_host(kind: ForgeKind, host: Option<&str>) -> ForgeHost {
+    match host.filter(|h| !h.trim().is_empty()) {
+        Some(host) => ForgeHost::new(kind, host),
+        None if kind == ForgeKind::GitHub => ForgeHost::github(),
+        None => ForgeHost::gitlab(),
+    }
 }
 
 /// Argumen `host` untuk login: `None` untuk github.com/gitlab.com, selain itu origin lengkap.

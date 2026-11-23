@@ -452,7 +452,7 @@ pub static FIELDS: [Field; 19] = [
         id: "forge.githubClientId",
         section: SectionId::Accounts,
         label: "GitHub OAuth Client ID",
-        description: "Client ID of a GitHub OAuth app with device flow enabled. Needed only for browser sign-in; signing in with a personal access token works without it.",
+        description: "Client ID of a GitHub OAuth app with device flow enabled, used for github.com and for servers without their own Client ID. GitHub Enterprise servers ask for theirs when you sign in; browser sign-in also works without one by creating a token.",
         keywords: "login sign in device flow",
         kind: FieldKind::Text(TextSpec {
             placeholder: "Not set",
@@ -466,7 +466,7 @@ pub static FIELDS: [Field; 19] = [
         id: "forge.gitlabClientId",
         section: SectionId::Accounts,
         label: "GitLab OAuth Client ID",
-        description: "Application ID of a GitLab OAuth application with device authorization enabled. Needed only for browser sign-in; token sign-in works without it.",
+        description: "Application ID of a GitLab OAuth application, used for gitlab.com and for servers without their own Client ID. Self-hosted servers ask for theirs when you sign in; browser sign-in also works without one by creating a token.",
         keywords: "login sign in device flow",
         kind: FieldKind::Text(TextSpec {
             placeholder: "Not set",
