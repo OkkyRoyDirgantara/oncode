@@ -19,9 +19,9 @@ use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::{h_flex, v_flex, ActiveTheme as _, Icon, Selectable as _, Sizable as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
-    canvas, div, px, App, AppContext as _, Bounds, ClipboardItem, Context, Entity, EventEmitter, FocusHandle, Focusable, FontStyle, FontWeight, HighlightStyle,
+    canvas, div, px, relative, App, AppContext as _, Bounds, ClipboardItem, Context, Entity, EventEmitter, FocusHandle, Focusable, FontStyle, FontWeight, HighlightStyle,
     InteractiveElement as _, IntoElement, KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, ParentElement as _, Pixels, Render, ScrollEvent,
-    SharedString, StatefulInteractiveElement as _, StrikethroughStyle, Styled as _, StyledText, Subscription, Task, UnderlineStyle, WeakEntity, Window,
+    SharedString, StatefulInteractiveElement as _, StrikethroughStyle, Styled as _, StyledText, Subscription, Task, TestSupportExt as _, UnderlineStyle, WeakEntity, Window,
 };
 use oncode_core::api::term::{self, TermEvent};
 use oncode_ui::keys::KeyPress;
@@ -30,7 +30,8 @@ use oncode_ui::{spawn_core, Env, Lucide, Workbench};
 use tokio::sync::mpsc;
 
 use crate::emulator::{Emulator, GridSize};
-use crate::keys::{self, KeyAction, KeyModes};
+use crate::keys::{self, KeyAction, KeyModes, ScrollKey};
+use crate::mouse::{self, MouseAction, MouseEncoding, ReportModifiers, WheelTarget};
 use crate::palette::{cell_style, to_hsla, Palette};
 
 const IS_MAC: bool = cfg!(target_os = "macos");
@@ -70,6 +71,8 @@ pub struct TerminalSession {
     /// Sisa gulir roda (piksel) yang belum genap satu baris.
     scroll_remainder: f32,
     selecting: bool,
+    /// Ibu jari scrollbar sedang diseret.
+    scrollbar_drag: bool,
     font_family: SharedString,
     font_size: Pixels,
     _reader: Task<()>,
@@ -121,6 +124,7 @@ impl TerminalSession {
             bounds: Rc::new(StdCell::new(None)),
             scroll_remainder: 0.,
             selecting: false,
+            scrollbar_drag: false,
             font_family,
             font_size,
             _reader: Task::ready(()),
@@ -164,6 +168,16 @@ impl TerminalSession {
     /// Isi buffer (riwayat dan layar) sebagai teks; untuk uji dan "salin semua".
     pub fn text(&self) -> String {
         self.emulator.text()
+    }
+
+    /// Jumlah baris yang sedang digulir ke atas (0 = di bawah, menampilkan keluaran terbaru).
+    pub fn display_offset(&self) -> usize {
+        self.emulator.display_offset()
+    }
+
+    /// Jumlah baris riwayat di atas layar.
+    pub fn history_size(&self) -> usize {
+        self.emulator.history_size()
     }
 
     /// Memulai proses shell (juga untuk "Restart" setelah proses berakhir).
@@ -320,6 +334,22 @@ impl TerminalSession {
 
     fn on_key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         let press = press_of(event);
+        // Gulir riwayat dengan keyboard (di program layar penuh tombolnya milik program itu).
+        if !self.emulator.mode().contains(TermMode::ALT_SCREEN) {
+            if let Some(key) = keys::scroll_key(&press) {
+                self.emulator.scroll(match key {
+                    ScrollKey::PageUp => Scroll::PageUp,
+                    ScrollKey::PageDown => Scroll::PageDown,
+                    ScrollKey::LineUp => Scroll::Delta(1),
+                    ScrollKey::LineDown => Scroll::Delta(-1),
+                    ScrollKey::Top => Scroll::Top,
+                    ScrollKey::Bottom => Scroll::Bottom,
+                });
+                cx.notify();
+                cx.stop_propagation();
+                return;
+            }
+        }
         match keys::classify_key(&press, IS_MAC, &app_bindings(window, cx)) {
             KeyAction::App => return,
             KeyAction::Copy => {
@@ -384,6 +414,14 @@ impl TerminalSession {
     }
 
     fn on_mouse_move(&mut self, event: &MouseMoveEvent, _: &mut Window, cx: &mut Context<Self>) {
+        if self.scrollbar_drag {
+            if event.pressed_button == Some(MouseButton::Left) {
+                self.scroll_to_pointer(event.position.y, cx);
+            } else {
+                self.scrollbar_drag = false;
+            }
+            return;
+        }
         if !self.selecting || event.pressed_button != Some(MouseButton::Left) {
             return;
         }
@@ -393,9 +431,28 @@ impl TerminalSession {
         }
     }
 
+    /// Sel layar (kolom, baris) di bawah posisi jendela, berbasis nol.
+    fn screen_cell(&self, position: gpui_kit::Point<Pixels>) -> Option<(usize, usize)> {
+        let (point, _) = self.point_at(position)?;
+        Some((point.column.0, (point.line.0 + self.emulator.display_offset() as i32).max(0) as usize))
+    }
+
+    /// Menggulir riwayat ke posisi pointer di lintasan scrollbar.
+    fn scroll_to_pointer(&mut self, y: Pixels, cx: &mut Context<Self>) {
+        let Some(bounds) = self.bounds.get() else { return };
+        let fraction = f32::from(y - bounds.origin.y) / f32::from(bounds.size.height).max(1.0);
+        let offset = mouse::offset_at_fraction(fraction, self.emulator.history_size());
+        if offset != self.emulator.display_offset() {
+            self.emulator.set_display_offset(offset);
+            cx.notify();
+        }
+    }
+
     fn on_scroll(&mut self, event: &ScrollEvent, _: &mut Window, cx: &mut Context<Self>) {
         let Some(metrics) = self.metrics else { return };
-        let delta = event.delta.pixel_delta(metrics.line_height).y;
+        let pixels = event.delta.pixel_delta(metrics.line_height);
+        // Sebagian platform mengubah Shift+roda menjadi gulir horizontal.
+        let delta = if event.modifiers.shift && pixels.y == px(0.) { pixels.x } else { pixels.y };
         let total = self.scroll_remainder + f32::from(delta);
         let lines = (total / f32::from(metrics.line_height)).trunc();
         self.scroll_remainder = total - lines * f32::from(metrics.line_height);
@@ -403,14 +460,39 @@ impl TerminalSession {
             return;
         }
         let mode = self.emulator.mode();
-        if mode.contains(TermMode::ALT_SCREEN) && mode.contains(TermMode::ALTERNATE_SCROLL) && !mode.intersects(TermMode::MOUSE_MODE) {
-            // Program layar penuh (less, vim) tanpa laporan tetikus: roda menjadi panah atas/bawah.
-            let arrow: &[u8] = if lines > 0. { if mode.contains(TermMode::APP_CURSOR) { b"\x1bOA" } else { b"\x1b[A" } } else if mode.contains(TermMode::APP_CURSOR) { b"\x1bOB" } else { b"\x1b[B" };
-            for _ in 0..lines.abs() as usize {
-                self.write(arrow.to_vec());
+        let target = mouse::wheel_target(
+            mode.intersects(TermMode::MOUSE_MODE),
+            mode.contains(TermMode::ALT_SCREEN),
+            mode.contains(TermMode::ALTERNATE_SCROLL),
+            event.modifiers.shift,
+        );
+        match target {
+            WheelTarget::Report => {
+                // Program yang menangkap mouse (vim `mouse=a`, htop, lazygit) menerima rodanya sendiri.
+                let Some((column, row)) = self.screen_cell(event.position) else { return };
+                let encoding = if mode.contains(TermMode::SGR_MOUSE) {
+                    MouseEncoding::Sgr
+                } else if mode.contains(TermMode::UTF8_MOUSE) {
+                    MouseEncoding::Utf8
+                } else {
+                    MouseEncoding::Normal
+                };
+                let action = if lines > 0. { MouseAction::WheelUp } else { MouseAction::WheelDown };
+                let modifiers = ReportModifiers { shift: false, alt: event.modifiers.alt, control: event.modifiers.control };
+                for _ in 0..(lines.abs() as usize).min(10) {
+                    if let Some(bytes) = mouse::mouse_report(action, column, row, modifiers, encoding) {
+                        self.write(bytes);
+                    }
+                }
             }
-        } else {
-            self.emulator.scroll(Scroll::Delta(lines as i32));
+            WheelTarget::Arrows => {
+                // Program layar penuh (less, man) tanpa laporan mouse: roda menjadi panah atas/bawah.
+                let arrow: &[u8] = if lines > 0. { if mode.contains(TermMode::APP_CURSOR) { b"\x1bOA" } else { b"\x1b[A" } } else if mode.contains(TermMode::APP_CURSOR) { b"\x1bOB" } else { b"\x1b[B" };
+                for _ in 0..lines.abs() as usize {
+                    self.write(arrow.to_vec());
+                }
+            }
+            WheelTarget::History => self.emulator.scroll(Scroll::Delta(lines as i32)),
         }
         cx.notify();
     }
@@ -539,6 +621,9 @@ impl Render for TerminalSession {
 
         let bounds_cell = self.bounds.clone();
         let entity: WeakEntity<Self> = cx.weak_entity();
+        let (rows, history, offset) = (self.emulator.size().rows, self.emulator.history_size(), self.emulator.display_offset());
+        let thumb = cx.theme().muted_foreground.opacity(if offset > 0 { 0.55 } else { 0.3 });
+        let thumb_hover = cx.theme().muted_foreground.opacity(0.7);
         let status = match (&self.error, self.id) {
             (Some(error), _) => Some(format!("The terminal could not start: {error}")),
             (None, None) => Some("Starting terminal…".to_string()),
@@ -547,6 +632,7 @@ impl Render for TerminalSession {
 
         div()
             .id("terminal-session")
+            .test_support()
             .size_full()
             .relative()
             .overflow_hidden()
@@ -562,7 +648,13 @@ impl Render for TerminalSession {
             .on_key_down(cx.listener(Self::on_key_down))
             .on_mouse_down(MouseButton::Left, cx.listener(Self::on_mouse_down))
             .on_mouse_move(cx.listener(Self::on_mouse_move))
-            .on_mouse_up(MouseButton::Left, cx.listener(|this, _, _, _| this.selecting = false))
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, _, _, _| {
+                    this.selecting = false;
+                    this.scrollbar_drag = false;
+                }),
+            )
             .on_scroll(cx.listener(Self::on_scroll))
             .child(
                 div()
@@ -589,6 +681,41 @@ impl Render for TerminalSession {
                     .children(lines.into_iter().map(|(text, runs)| div().h(metrics.line_height).whitespace_nowrap().child(StyledText::new(text).with_highlights(runs))))
                     .children(cursor_overlay),
             )
+            .when(history > 0, |el| {
+                // Scrollbar riwayat: klik untuk melompat, seret ibu jarinya untuk menggulir.
+                let (top, height) = mouse::scrollbar_thumb(rows, history, offset);
+                el.child(
+                    div()
+                        .id("terminal-scrollbar")
+                        .test_support()
+                        .group("terminal-scrollbar")
+                        .absolute()
+                        .top_0()
+                        .right_0()
+                        .w(px(12.))
+                        .h_full()
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(|this, event: &MouseDownEvent, _, cx| {
+                                cx.stop_propagation();
+                                this.scrollbar_drag = true;
+                                this.scroll_to_pointer(event.position.y, cx);
+                            }),
+                        )
+                        .child(
+                            div()
+                                .absolute()
+                                .right(px(3.))
+                                .w(px(6.))
+                                .min_h(px(16.))
+                                .top(relative(top))
+                                .h(relative(height))
+                                .rounded_full()
+                                .bg(thumb)
+                                .group_hover("terminal-scrollbar", |style| style.bg(thumb_hover)),
+                        ),
+                )
+            })
             .when_some(status, |el, status| {
                 el.child(div().absolute().top_2().left_2().text_color(cx.theme().muted_foreground).font_family(cx.theme().font_family.clone()).child(status))
             })

@@ -69,6 +69,34 @@ pub fn classify_key(press: &KeyPress, is_mac: bool, app_bindings: &HashSet<Strin
     KeyAction::Shell
 }
 
+/// Gulir riwayat terminal lewat keyboard.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScrollKey {
+    PageUp,
+    PageDown,
+    LineUp,
+    LineDown,
+    Top,
+    Bottom,
+}
+
+/// Shift+PageUp/PageDown (halaman), Ctrl+Shift+↑/↓ (baris), Ctrl+Shift+Home/End (ujung), seperti
+/// VS Code. Hanya berlaku di luar program layar penuh; pemanggil yang memeriksanya.
+pub fn scroll_key(press: &KeyPress) -> Option<ScrollKey> {
+    if press.alt || press.platform || !press.shift {
+        return None;
+    }
+    match (press.control, press.key.to_lowercase().as_str()) {
+        (false, "pageup") => Some(ScrollKey::PageUp),
+        (false, "pagedown") => Some(ScrollKey::PageDown),
+        (true, "up") => Some(ScrollKey::LineUp),
+        (true, "down") => Some(ScrollKey::LineDown),
+        (true, "home") => Some(ScrollKey::Top),
+        (true, "end") => Some(ScrollKey::Bottom),
+        _ => None,
+    }
+}
+
 /// Mode terminal yang memengaruhi urutan byte tombol.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct KeyModes {
@@ -355,6 +383,20 @@ mod tests {
 
     fn app_cursor(spec: &str) -> Option<String> {
         key_to_bytes(&key(spec), KeyModes { app_cursor: true, ..Default::default() }, false).map(|b| String::from_utf8(b).unwrap())
+    }
+
+    #[test]
+    fn scroll_keys_match_vs_code() {
+        assert_eq!(scroll_key(&key("Shift+pageup")), Some(ScrollKey::PageUp));
+        assert_eq!(scroll_key(&key("Shift+pagedown")), Some(ScrollKey::PageDown));
+        assert_eq!(scroll_key(&key("Ctrl+Shift+up")), Some(ScrollKey::LineUp));
+        assert_eq!(scroll_key(&key("Ctrl+Shift+down")), Some(ScrollKey::LineDown));
+        assert_eq!(scroll_key(&key("Ctrl+Shift+home")), Some(ScrollKey::Top));
+        assert_eq!(scroll_key(&key("Ctrl+Shift+end")), Some(ScrollKey::Bottom));
+        // Tanpa Shift tetap milik shell (PageUp untuk riwayat perintah, dsb.).
+        for spec in ["pageup", "Ctrl+up", "up", "Shift+up", "Alt+Shift+pageup"] {
+            assert_eq!(scroll_key(&key(spec)), None, "{spec}");
+        }
     }
 
     #[test]

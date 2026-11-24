@@ -114,3 +114,62 @@ async fn more_terminals_open_from_the_shortcut_and_the_panel_button(cx: &mut Tes
     window.wait_until(cx, "terminal ketiga dari tombol", |_, cx| panel.read(cx).sessions().len() == 3).await;
     window.wait_until(cx, "semua terminal berjalan", |_, cx| panel.read(cx).sessions().iter().all(|s| s.read(cx).is_running())).await;
 }
+
+#[gpui_kit::test]
+async fn mouse_wheel_scrolls_back_through_the_output(cx: &mut TestAppContext) {
+    let app = TestApp::new(cx);
+    cx.update(oncode_ui_terminal::init);
+    let project = app.project(&[("a.txt", "a\n")]);
+    let window = app.open(Some(&project), cx).await;
+    let workbench = window.workbench(cx);
+    assert!(window.run_command(cx, "terminal.toggle"));
+    let panel = cx.update(|cx| oncode_ui_terminal::panel(workbench.read(cx)).unwrap());
+    window.wait_until(cx, "shell berjalan", |_, cx| panel.read(cx).active_session().is_some_and(|s| s.read(cx).is_running())).await;
+    let session = cx.update(|cx| panel.read(cx).active_session().unwrap().clone());
+
+    // Keluaran lebih panjang dari layar, sehingga sebagian masuk riwayat.
+    let command = if cfg!(windows) { "1..150 | ForEach-Object { \"baris $_\" }" } else { "seq 1 150 | sed 's/^/baris /'" };
+    window.update(cx, |window, cx| {
+        window.render_frame(cx);
+        window.input(command, cx);
+        window.press("enter", cx);
+    });
+    window.wait_until(cx, "keluaran selesai", |_, cx| session.read(cx).text().contains("baris 150")).await;
+    window.wait_until(cx, "ada riwayat", |_, cx| session.read(cx).history_size() > 0).await;
+    assert_eq!(cx.update(|cx| session.read(cx).display_offset()), 0);
+
+    // Roda mouse ke atas: tampilan bergeser ke riwayat.
+    window.update(cx, |window, cx| window.scroll("terminal-session", gpui_kit::ScrollDelta::Lines(gpui_kit::point(0., 5.)), cx));
+    cx.run_until_parked();
+    let offset = cx.update(|cx| session.read(cx).display_offset());
+    assert!(offset > 0, "roda mouse ke atas menggulir riwayat (offset {offset})");
+
+    // Roda ke bawah kembali ke keluaran terbaru.
+    window.update(cx, |window, cx| window.scroll("terminal-session", gpui_kit::ScrollDelta::Lines(gpui_kit::point(0., -50.)), cx));
+    cx.run_until_parked();
+    assert_eq!(cx.update(|cx| session.read(cx).display_offset()), 0);
+
+    // Keyboard: Shift+PageUp naik satu halaman, Ctrl+Shift+End kembali ke bawah.
+    let press = |cx: &mut TestAppContext, key: &str| {
+        window.update(cx, |window, cx| {
+            window.render_frame(cx);
+            window.press(key, cx);
+        });
+        cx.run_until_parked();
+    };
+    press(cx, "shift-pageup");
+    assert!(cx.update(|cx| session.read(cx).display_offset()) > 0, "Shift+PageUp menggulir riwayat");
+    press(cx, "ctrl-shift-end");
+    assert_eq!(cx.update(|cx| session.read(cx).display_offset()), 0);
+    press(cx, "ctrl-shift-up");
+    assert_eq!(cx.update(|cx| session.read(cx).display_offset()), 1, "Ctrl+Shift+Up naik satu baris");
+
+    // Scrollbar: klik di ujung atas lintasan melompat ke riwayat tertua.
+    let history = cx.update(|cx| session.read(cx).history_size());
+    window.update(cx, |window, cx| {
+        window.render_frame(cx);
+        window.click_with_options("terminal-scrollbar", gpui_kit::test::ClickOptions::new().with_offset(gpui_kit::point(gpui_kit::px(6.), gpui_kit::px(0.))), cx);
+    });
+    cx.run_until_parked();
+    assert_eq!(cx.update(|cx| session.read(cx).display_offset()), history, "klik di atas scrollbar = riwayat tertua");
+}
