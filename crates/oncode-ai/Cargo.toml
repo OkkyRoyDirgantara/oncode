@@ -1,0 +1,19 @@
+[package]
+name = "oncode-ai"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Klien Claude API untuk OnCode: menulis pesan commit dari diff yang di-stage"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+# Sama dengan oncode-forge: TLS lewat rustls, proxy sistem dihormati. Stream dibaca dengan
+# `Response::chunk()`, jadi fitur `stream` tidak diperlukan.
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "http2", "json", "system-proxy"] }
+
+[dev-dependencies]
+tokio.workspace = true
+wiremock = "0.6"

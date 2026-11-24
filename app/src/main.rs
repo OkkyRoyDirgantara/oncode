@@ -68,6 +68,7 @@ fn main() {
         oncode_ui_lsp::init(cx);
         oncode_ui_forge::init(cx);
         oncode_ui_settings::init(cx);
+        oncode_ui_markdown::init(cx);
         cx.activate(true);
         if let Err(error) = oncode_ui::try_open_window(folder, cx) {
             // Tanpa jendela, aplikasi tidak akan pernah menerima "jendela terakhir ditutup";

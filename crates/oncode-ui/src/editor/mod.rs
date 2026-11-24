@@ -2,18 +2,23 @@
 //! berkas dari luar.
 
 mod buffer;
+pub mod format;
 mod language;
+pub mod lines;
+pub mod symbols;
 mod view;
 
-use gpui_kit::component::input::EditorState;
+use gpui_kit::component::input::{EditorState, RopeExt as _};
 use gpui_kit::component::{h_flex, ActiveTheme as _};
-use gpui_kit::{div, App, AppContext as _, ClipboardItem, Context, Entity, IntoElement, ParentElement as _, Render, Styled as _, Subscription, WeakEntity, Window};
+use gpui_kit::{div, App, AppContext as _, ClipboardItem, Context, Entity, Focusable as _, IntoElement, ParentElement as _, Render, Styled as _, Subscription, WeakEntity, Window};
 use oncode_core::settings::AutoSave;
 use oncode_workspace::Eol;
 use serde_json::Value;
 
-pub use buffer::{Buffer, BufferEvent, BufferStatus, Buffers, BuffersEvent, ExternalChange, Reveal, LARGE_FILE_BYTES};
+pub use buffer::{is_untitled, Buffer, BufferEvent, BufferStatus, Buffers, BuffersEvent, ExternalChange, Reveal, LARGE_FILE_BYTES, UNTITLED_PREFIX};
+pub use format::{format_buffer, register_format_provider, save_with_format, FormatOutcome, EXTERNAL_PRIORITY, LSP_PRIORITY};
 pub use language::{language_for_path, LanguageInfo};
+pub use symbols::{symbol_definition_links, SymbolSearchProvider};
 pub use view::{FileTab, FileView};
 
 use crate::commands::Command;
@@ -101,7 +106,25 @@ struct PendingBuffers(Option<Entity<Buffers>>);
 
 impl gpui_kit::Global for PendingBuffers {}
 
+/// Mendaftarkan grammar yang tidak disediakan gpui-kit ke highlighter (sekali per proses).
+fn register_grammars() {
+    use gpui_kit::component::highlighter::{GrammarConfig, LanguageRegistry};
+    LanguageRegistry::singleton().register(
+        "dart",
+        &GrammarConfig {
+            name: "dart".into(),
+            language: Some(tree_sitter_dart::LANGUAGE.into()),
+            injection_languages: Vec::new(),
+            highlights: tree_sitter_dart::HIGHLIGHTS_QUERY.into(),
+            injections: "".into(),
+            locals: tree_sitter_dart::LOCALS_QUERY.into(),
+        },
+    );
+}
+
 pub(crate) fn install(cx: &mut App) {
+    register_grammars();
+    format::register_format_provider(format::EXTERNAL_PRIORITY, format::external_provider, cx);
     cx.set_global(PendingBuffers::default());
     register_tab_kind(cx, "file", FileKind);
     register_feature(cx, setup);
@@ -130,10 +153,21 @@ fn setup(workbench: &mut Workbench, window: &mut Window, cx: &mut Context<Workbe
     };
 
     workbench.register_command(
-        Command::new("file.save", "Save", with_file(|_, buffer, _, window, cx| buffer.update(cx, |buffer, cx| buffer.save(window, cx)).detach()))
+        Command::new("file.save", "Save", with_file(|_, buffer, state, window, cx| save_with_format(&buffer, &state, window, cx)))
             .category("File")
             .key("Mod+S")
             .when(has_file.clone()),
+    );
+    workbench.register_command(
+        Command::new("file.newUntitled", "New Text File", {
+            let (weak, buffers) = (weak.clone(), buffers.clone());
+            move |_, window, cx| {
+                let path = buffers.read(cx).next_untitled_path();
+                let _ = weak.update(cx, |workbench, cx| workbench.open_tab(file_tab(&path), OpenOptions::default(), window, cx));
+            }
+        })
+        .category("File")
+        .key("Mod+N"),
     );
     workbench.register_command(
         Command::new("file.saveAll", "Save All", {
@@ -173,6 +207,46 @@ fn setup(workbench: &mut Workbench, window: &mut Window, cx: &mut Context<Workbe
         .key("Mod+G")
         .when(has_file.clone()),
     );
+    // Hanya saat editor benar-benar fokus: di kotak lain (terminal, pesan commit) tombolnya tetap milik kotak itu.
+    let editor_focused = {
+        let weak = weak.clone();
+        move |window: &Window, cx: &App| weak.upgrade().and_then(|w| active_file(w.read(cx), cx)).is_some_and(|(_, _, state)| state.focus_handle(cx).is_focused(window))
+    };
+    workbench.register_command(
+        // Language server bila ada; selain itu pencarian definisi di proyek (ekstensi Symbol Search).
+        Command::new("editor.goToDefinition", "Go to Definition", with_file(|_, _, state, window, cx| {
+            // Aksi editor dikirim ke editor itu sendiri, juga saat dipilih dari menu.
+            state.update(cx, |state, cx| state.focus(window, cx));
+            window.dispatch_action(Box::new(gpui_kit::component::input::GoToDefinition), cx);
+        }))
+        .category("Edit")
+        .key("F12")
+        .when(has_file.clone())
+        .keys_when(editor_focused.clone()),
+    );
+    workbench.register_command(
+        Command::new("editor.format", "Format Document", with_file(|_, buffer, state, window, cx| format_buffer(&buffer, &state, false, window, cx).detach()))
+            .category("Edit")
+            .key("Shift+Alt+F")
+            .when(has_file.clone())
+            .keys_when(editor_focused.clone()),
+    );
+    workbench.register_command(
+        Command::new("editor.moveLineUp", "Move Line Up", with_file(|_, _, state, window, cx| move_lines(&state, true, window, cx)))
+            .category("Edit")
+            .key("Ctrl+Up")
+            .key("Alt+Up")
+            .when(has_file.clone())
+            .keys_when(editor_focused.clone()),
+    );
+    workbench.register_command(
+        Command::new("editor.moveLineDown", "Move Line Down", with_file(|_, _, state, window, cx| move_lines(&state, false, window, cx)))
+            .category("Edit")
+            .key("Ctrl+Down")
+            .key("Alt+Down")
+            .when(has_file.clone())
+            .keys_when(editor_focused),
+    );
     workbench.register_command(
         Command::new("editor.copyPath", "Copy Path of Active File", with_file(|_, buffer, _, _, cx| {
             let path = buffer.read(cx).path().to_string();
@@ -187,6 +261,17 @@ fn setup(workbench: &mut Workbench, window: &mut Window, cx: &mut Context<Workbe
     // Perubahan berkas dari luar dan simpan otomatis saat jendela kehilangan fokus.
     let watcher = cx.new(|cx| ExternalChanges::new(env, buffers, window, cx));
     workbench.set_extension(watcher);
+}
+
+/// Memindahkan baris di kursor (atau semua baris yang dipilih) satu baris ke atas/bawah.
+fn move_lines(state: &Entity<EditorState>, up: bool, window: &mut Window, cx: &mut App) {
+    state.update(cx, |state, cx| {
+        let text = state.text().clone();
+        let Some(change) = lines::move_lines(&text.to_string(), state.selected_range(), up) else { return };
+        let range = lsp_types::Range { start: text.offset_to_position(change.replace.start), end: text.offset_to_position(change.replace.end) };
+        state.apply_lsp_edits(&vec![lsp_types::TextEdit { range, new_text: change.text }], window, cx);
+        state.set_selected_range(change.selection, cx);
+    });
 }
 
 /// Menanggapi perubahan berkas di disk dan menyimpan otomatis saat fokus berpindah.
@@ -287,5 +372,38 @@ impl Render for EditorStatus {
             .child(div().child(if buffer.eol() == Eol::Crlf { "CRLF" } else { "LF" }))
             .child(div().child(language_for_path(buffer.path()).name))
             .into_any_element()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use gpui_kit::component::highlighter::{HighlightTheme, SyntaxHighlighter};
+    use gpui_kit::component::input::Rope;
+
+    /// Grammar Dart terpasang di highlighter: kodenya terurai tanpa galat dan mendapat warna.
+    #[test]
+    fn dart_grammar_highlights_flutter_code() {
+        super::register_grammars();
+        let code = "import 'package:flutter/material.dart';\n\nclass App extends StatelessWidget {\n  @override\n  Widget build(BuildContext context) => const Text('Halo');\n}\n";
+        let mut highlighter = SyntaxHighlighter::new("dart");
+        assert_eq!(highlighter.language().as_ref(), "dart", "bukan fallback ke teks polos");
+        highlighter.update(None, &Rope::from(code), None);
+        assert!(highlighter.tree().is_some_and(|tree| !tree.root_node().has_error()), "kode Dart terurai tanpa galat");
+        let theme = HighlightTheme::default_dark();
+        let styles = highlighter.styles(&(0..code.len()), &*theme);
+        assert!(styles.len() > 5, "kata kunci, string, dan tipe diberi warna: {}", styles.len());
+    }
+}
+
+#[cfg(test)]
+mod extra_language_tests {
+    use gpui_kit::component::highlighter::SyntaxHighlighter;
+
+    /// Grammar dari fitur gpui-kit untuk ekstensi "Extra languages" benar-benar ikut terpasang.
+    #[test]
+    fn extra_grammars_are_compiled_in() {
+        for language in ["kotlin", "csharp", "php", "lua", "swift", "scala", "graphql", "proto", "make", "cmake", "zig", "elixir", "svelte"] {
+            assert_eq!(SyntaxHighlighter::new(language).language().as_ref(), language, "{language}");
+        }
     }
 }

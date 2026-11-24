@@ -67,6 +67,14 @@ const TABLE: &[(&[&str], &str, &[&str], &str)] = &[
         &[],
         "Install clangd through your system package manager, e.g. `apt install clangd` or `brew install llvm`.",
     ),
+    (&["java"], "jdtls", &[], "Install the Eclipse JDT Language Server (jdtls) and put it on PATH, e.g. `brew install jdtls`."),
+    (&["kotlin"], "kotlin-language-server", &[], "Install kotlin-language-server from github.com/fwcd/kotlin-language-server and put it on PATH."),
+    (&["dart"], "dart", &["language-server", "--protocol=lsp"], "Install the Dart or Flutter SDK; `dart language-server` comes with it."),
+    (&["php"], "intelephense", &["--stdio"], "Install Intelephense with `npm install -g intelephense`."),
+    (&["csharp"], "csharp-ls", &[], "Install csharp-ls with `dotnet tool install --global csharp-ls`."),
+    (&["lua"], "lua-language-server", &[], "Install lua-language-server through your package manager, e.g. `brew install lua-language-server`."),
+    (&["swift"], "sourcekit-lsp", &[], "Install a Swift toolchain (Xcode on macOS); sourcekit-lsp comes with it."),
+    (&["sql"], "sqls", &[], "Install sqls with `go install github.com/sqls-server/sqls@latest`."),
 ];
 
 /// Daftar server bawaan per bahasa. Pengaturan pengguna boleh menimpa atau menambahnya.
@@ -113,7 +121,10 @@ mod tests {
         assert_eq!(command_line("go"), "gopls");
         assert_eq!(command_line("c"), "clangd");
         assert_eq!(command_line("cpp"), "clangd");
-        assert_eq!(default_servers().len(), 9);
+        assert_eq!(command_line("dart"), "dart language-server --protocol=lsp");
+        assert_eq!(command_line("kotlin"), "kotlin-language-server");
+        assert_eq!(command_line("php"), "intelephense --stdio");
+        assert_eq!(default_servers().len(), 17);
     }
 
     #[test]

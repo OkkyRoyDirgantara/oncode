@@ -85,3 +85,32 @@ async fn tab_and_shift_tab_stay_in_the_terminal(cx: &mut TestAppContext) {
         assert!(focused, "{key} memindahkan fokus keluar dari terminal");
     }
 }
+
+#[gpui_kit::test]
+async fn more_terminals_open_from_the_shortcut_and_the_panel_button(cx: &mut TestAppContext) {
+    let app = TestApp::new(cx);
+    cx.update(oncode_ui_terminal::init);
+    let project = app.project(&[("a.txt", "a\n")]);
+    let window = app.open(Some(&project), cx).await;
+    let workbench = window.workbench(cx);
+    assert!(window.run_command(cx, "terminal.toggle"));
+    let panel = cx.update(|cx| oncode_ui_terminal::panel(workbench.read(cx)).unwrap());
+    window.wait_until(cx, "terminal pertama berjalan", |_, cx| panel.read(cx).active_session().is_some_and(|s| s.read(cx).is_running())).await;
+
+    // Ctrl+Shift+` seperti yang dikirim GPUI di Windows: Ctrl + "~", Shift sudah menjadi karakter.
+    window.update(cx, |window, cx| {
+        window.render_frame(cx);
+        window.press("ctrl-~", cx);
+    });
+    cx.run_until_parked();
+    window.wait_until(cx, "terminal kedua dari pintasan", |_, cx| panel.read(cx).sessions().len() == 2).await;
+
+    // Tombol "+" di bilah tab panel.
+    window.update(cx, |window, cx| {
+        window.render_frame(cx);
+        window.click("terminal-new", cx);
+    });
+    cx.run_until_parked();
+    window.wait_until(cx, "terminal ketiga dari tombol", |_, cx| panel.read(cx).sessions().len() == 3).await;
+    window.wait_until(cx, "semua terminal berjalan", |_, cx| panel.read(cx).sessions().iter().all(|s| s.read(cx).is_running())).await;
+}

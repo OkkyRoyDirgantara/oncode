@@ -25,6 +25,9 @@ pub struct Command {
     pub keybindings: Vec<String>,
     /// Command hanya aktif (dan hanya menangkap pintasan) bila ini mengembalikan true.
     pub when: Option<WhenFn>,
+    /// Syarat tambahan khusus pintasan keyboard, mis. "editor sedang fokus". Menu dan command
+    /// palette hanya memakai `when`, sehingga command tetap bisa dipilih dari sana.
+    pub keys_when: Option<WhenFn>,
     /// Tidak ditampilkan di command palette.
     pub hidden: bool,
     pub run: RunFn,
@@ -32,7 +35,7 @@ pub struct Command {
 
 impl Command {
     pub fn new(id: impl Into<SharedString>, title: impl Into<SharedString>, run: impl Fn(&Value, &mut Window, &mut App) + 'static) -> Self {
-        Self { id: id.into(), title: title.into(), category: None, keybindings: Vec::new(), when: None, hidden: false, run: Rc::new(run) }
+        Self { id: id.into(), title: title.into(), category: None, keybindings: Vec::new(), when: None, keys_when: None, hidden: false, run: Rc::new(run) }
     }
 
     pub fn category(mut self, category: impl Into<SharedString>) -> Self {
@@ -51,6 +54,12 @@ impl Command {
 
     pub fn when(mut self, when: impl Fn(&Window, &App) -> bool + 'static) -> Self {
         self.when = Some(Rc::new(when));
+        self
+    }
+
+    /// Pintasan keyboard command ini hanya berlaku bila `when` juga mengembalikan true.
+    pub fn keys_when(mut self, when: impl Fn(&Window, &App) -> bool + 'static) -> Self {
+        self.keys_when = Some(Rc::new(when));
         self
     }
 
@@ -213,7 +222,7 @@ pub fn command_for_keybinding(binding: &str, window: &Window, cx: &App) -> Optio
         if !keybindings_for(&command, cx).iter().any(|b| b == binding) {
             continue;
         }
-        if command.when.as_ref().is_some_and(|when| !when(window, cx)) {
+        if command.when.as_ref().is_some_and(|when| !when(window, cx)) || command.keys_when.as_ref().is_some_and(|when| !when(window, cx)) {
             continue;
         }
         found = Some(command);

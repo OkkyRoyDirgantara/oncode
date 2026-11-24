@@ -84,7 +84,7 @@ impl TestCore {
     pub fn project(&self, name: &str) -> PathBuf {
         let path = self.dir.path().join(name);
         std::fs::create_dir_all(&path).unwrap();
-        std::fs::canonicalize(path).unwrap()
+        canonical(&path)
     }
 
     /// Repositori dengan satu commit berisi `README.md`, sudah ditandai dipercaya.
@@ -111,4 +111,14 @@ pub async fn recv<T>(events: &mut UnboundedReceiver<CoreEvent>, mut pick: impl F
     })
     .await
     .expect("event yang ditunggu tidak datang")
+}
+
+/// Path kanonik seperti yang dipakai `workspace_open`: di Windows tanpa awalan `\\?\`.
+fn canonical(path: &std::path::Path) -> PathBuf {
+    let path = std::fs::canonicalize(path).unwrap();
+    let text = path.to_string_lossy();
+    match text.strip_prefix(r"\\?\") {
+        Some(rest) if !rest.starts_with("UNC") => PathBuf::from(rest),
+        _ => path,
+    }
 }

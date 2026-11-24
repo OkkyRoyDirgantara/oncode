@@ -5,7 +5,7 @@
 
 use std::collections::HashSet;
 
-use oncode_ui::keys::{canonical_keybinding, KeyPress};
+use oncode_ui::keys::{keybinding_from_press_on, KeyPress};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KeyAction {
@@ -40,29 +40,7 @@ pub const COMMANDS_TO_SKIP_SHELL: &[&str] = &[
 /// `oncode_ui::keys::keybinding_from_press`, tetapi platformnya diberikan dari luar.
 /// `None` bila hanya modifier.
 pub fn binding_of(press: &KeyPress, is_mac: bool) -> Option<String> {
-    let lower = press.key.to_lowercase();
-    if press.key.is_empty() || matches!(lower.as_str(), "shift" | "control" | "alt" | "platform" | "function" | "cmd" | "super") {
-        return None;
-    }
-    let mut parts: Vec<String> = Vec::new();
-    let (primary, secondary_ctrl, meta) = if is_mac { (press.platform, press.control, false) } else { (press.control, false, press.platform) };
-    if primary {
-        parts.push("Mod".into());
-    }
-    if secondary_ctrl {
-        parts.push("Ctrl".into());
-    }
-    if meta {
-        parts.push("Meta".into());
-    }
-    if press.alt {
-        parts.push("Alt".into());
-    }
-    if press.shift {
-        parts.push("Shift".into());
-    }
-    parts.push(if press.key == "+" { "+".into() } else { canonical_keybinding(&press.key) });
-    Some(parts.join("+"))
+    keybinding_from_press_on(press, is_mac)
 }
 
 /// - `Copy` / `Paste`: Mod+Shift+C / Mod+Shift+V; di macOS juga Cmd+C / Cmd+V.
@@ -261,7 +239,7 @@ mod tests {
 
     // Keybinding bawaan command yang tetap berlaku di terminal.
     fn app_bindings() -> HashSet<String> {
-        ["Mod+`", "Mod+~", "Mod+J", "Mod+Shift+P", "F1", "Mod+P", "Mod+B"].into_iter().map(String::from).collect()
+        ["Mod+`", "Mod+Shift+`", "Mod+J", "Mod+Shift+P", "F1", "Mod+P", "Mod+B"].into_iter().map(String::from).collect()
     }
 
     fn linux(spec: &str) -> KeyAction {
@@ -290,7 +268,8 @@ mod tests {
             }
         }
         assert_eq!(binding_of(&key("Ctrl+Shift+c"), false).as_deref(), Some("Mod+Shift+C"));
-        assert_eq!(binding_of(&key("Ctrl+~"), false).as_deref(), Some("Mod+~"));
+        // Simbol ber-Shift dinormalkan: Windows mengirim Ctrl+Shift+` sebagai Ctrl + "~".
+        assert_eq!(binding_of(&key("Ctrl+~"), false).as_deref(), Some("Mod+Shift+`"));
         assert_eq!(binding_of(&key("Ctrl+Alt+s"), false).as_deref(), Some("Mod+Alt+S"));
     }
 

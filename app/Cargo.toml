@@ -29,6 +29,7 @@ oncode-ui-terminal = { path = "../crates/oncode-ui-terminal" }
 oncode-ui-lsp = { path = "../crates/oncode-ui-lsp" }
 oncode-ui-forge = { path = "../crates/oncode-ui-forge" }
 oncode-ui-settings = { path = "../crates/oncode-ui-settings" }
+oncode-ui-markdown = { path = "../crates/oncode-ui-markdown" }
 gpui-kit = "=0.10.0"
 tokio.workspace = true
 serde_json.workspace = true

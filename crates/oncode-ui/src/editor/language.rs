@@ -8,12 +8,30 @@ pub struct LanguageInfo {
     pub highlighter: &'static str,
     /// `languageId` menurut LSP; juga kunci `lsp.servers` di pengaturan.
     pub lsp: &'static str,
+    /// Highlight-nya berasal dari ekstensi "Extra languages"; tanpa ekstensi itu ditampilkan polos.
+    pub extra: bool,
 }
 
-const PLAIN: LanguageInfo = LanguageInfo { name: "Plain Text", highlighter: "text", lsp: "plaintext" };
+impl LanguageInfo {
+    /// Nama bahasa untuk highlighter, dengan memperhitungkan ekstensi "Extra languages".
+    pub fn highlighter_with(&self, extra_languages: bool) -> &'static str {
+        if self.extra && !extra_languages {
+            "text"
+        } else {
+            self.highlighter
+        }
+    }
+}
+
+const PLAIN: LanguageInfo = LanguageInfo { name: "Plain Text", highlighter: "text", lsp: "plaintext", extra: false };
 
 const fn lang(name: &'static str, highlighter: &'static str, lsp: &'static str) -> LanguageInfo {
-    LanguageInfo { name, highlighter, lsp }
+    LanguageInfo { name, highlighter, lsp, extra: false }
+}
+
+/// Bahasa yang highlight-nya disediakan ekstensi "Extra languages".
+const fn extra(name: &'static str, highlighter: &'static str, lsp: &'static str) -> LanguageInfo {
+    LanguageInfo { name, highlighter, lsp, extra: true }
 }
 
 /// Bahasa menurut nama berkas atau ekstensinya.
@@ -21,7 +39,8 @@ pub fn language_for_path(path: &str) -> LanguageInfo {
     let file = path.rsplit(['/', '\\']).next().unwrap_or(path);
     let lower = file.to_lowercase();
     match lower.as_str() {
-        "makefile" | "gnumakefile" => return lang("Makefile", "text", "makefile"),
+        "makefile" | "gnumakefile" => return extra("Makefile", "make", "makefile"),
+        "cmakelists.txt" => return extra("CMake", "cmake", "cmake"),
         "dockerfile" => return lang("Dockerfile", "text", "dockerfile"),
         "cargo.lock" => return lang("TOML", "toml", "toml"),
         ".gitignore" | ".gitattributes" | ".gitmodules" => return lang("Git Config", "text", "plaintext"),
@@ -35,7 +54,9 @@ pub fn language_for_path(path: &str) -> LanguageInfo {
         "tsx" => lang("TypeScript JSX", "tsx", "typescriptreact"),
         "js" | "mjs" | "cjs" => lang("JavaScript", "javascript", "javascript"),
         "jsx" => lang("JavaScript JSX", "javascript", "javascriptreact"),
-        "json" | "jsonc" => lang("JSON", "json", "json"),
+        "json" | "jsonc" | "json5" | "jsonl" | "ndjson" => lang("JSON", "json", "json"),
+        // Berkas terjemahan Flutter.
+        "arb" => lang("JSON", "json", "json"),
         "py" | "pyi" => lang("Python", "python", "python"),
         "go" => lang("Go", "go", "go"),
         "c" | "h" => lang("C", "c", "c"),
@@ -49,15 +70,26 @@ pub fn language_for_path(path: &str) -> LanguageInfo {
         "toml" => lang("TOML", "toml", "toml"),
         "yml" | "yaml" => lang("YAML", "yaml", "yaml"),
         "sh" | "bash" | "zsh" => lang("Shell Script", "bash", "shellscript"),
-        "sql" => lang("SQL", "sql", "sql"),
+        "sql" | "psql" | "mysql" => lang("SQL", "sql", "sql"),
+        // NoSQL: Cassandra (CQL) dan playground MongoDB.
+        "cql" => lang("CQL", "sql", "sql"),
+        "mongodb" => lang("MongoDB", "javascript", "javascript"),
         "diff" | "patch" => lang("Diff", "diff", "diff"),
-        "php" => lang("PHP", "text", "php"),
-        "lua" => lang("Lua", "text", "lua"),
-        "kt" | "kts" => lang("Kotlin", "text", "kotlin"),
-        "swift" => lang("Swift", "text", "swift"),
-        "cs" => lang("C#", "text", "csharp"),
+        "php" => extra("PHP", "php", "php"),
+        "lua" => extra("Lua", "lua", "lua"),
+        "kt" | "kts" => extra("Kotlin", "kotlin", "kotlin"),
+        "dart" => extra("Dart", "dart", "dart"),
+        "swift" => extra("Swift", "swift", "swift"),
+        "cs" | "csx" => extra("C#", "csharp", "csharp"),
+        "scala" | "sc" | "sbt" => extra("Scala", "scala", "scala"),
+        "graphql" | "gql" => extra("GraphQL", "graphql", "graphql"),
+        "proto" => extra("Protocol Buffers", "proto", "proto"),
+        "cmake" => extra("CMake", "cmake", "cmake"),
+        "mk" => extra("Makefile", "make", "makefile"),
+        "zig" => extra("Zig", "zig", "zig"),
+        "ex" | "exs" => extra("Elixir", "elixir", "elixir"),
         "vue" => lang("Vue", "html", "vue"),
-        "svelte" => lang("Svelte", "html", "svelte"),
+        "svelte" => extra("Svelte", "svelte", "svelte"),
         "xml" | "svg" => lang("XML", "html", "xml"),
         "txt" | "log" => PLAIN,
         _ => PLAIN,
@@ -76,5 +108,39 @@ mod tests {
         assert_eq!(language_for_path("/x/Cargo.lock").highlighter, "toml");
         assert_eq!(language_for_path("README").name, "Plain Text");
         assert_eq!(language_for_path("notes.unknown").highlighter, "text");
+    }
+
+    #[test]
+    fn extra_languages_follow_their_extension_setting() {
+        for (file, highlighter, lsp) in [
+            ("Main.kt", "kotlin", "kotlin"),
+            ("build.gradle.kts", "kotlin", "kotlin"),
+            ("lib/main.dart", "dart", "dart"),
+            ("Program.cs", "csharp", "csharp"),
+            ("index.php", "php", "php"),
+            ("init.lua", "lua", "lua"),
+            ("App.swift", "swift", "swift"),
+            ("schema.graphql", "graphql", "graphql"),
+            ("api.proto", "proto", "proto"),
+            ("Makefile", "make", "makefile"),
+            ("CMakeLists.txt", "cmake", "cmake"),
+        ] {
+            let info = language_for_path(file);
+            assert_eq!((info.highlighter, info.lsp, info.extra), (highlighter, lsp, true), "{file}");
+            assert_eq!(info.highlighter_with(true), highlighter, "{file}");
+            assert_eq!(info.highlighter_with(false), "text", "{file} tanpa ekstensi");
+        }
+        // Bahasa bawaan tidak terpengaruh ekstensi.
+        assert_eq!(language_for_path("main.rs").highlighter_with(false), "rust");
+    }
+
+    #[test]
+    fn database_and_flutter_files() {
+        assert_eq!(language_for_path("query.sql").highlighter, "sql");
+        assert_eq!(language_for_path("keyspace.cql").highlighter, "sql");
+        assert_eq!(language_for_path("playground.mongodb").highlighter, "javascript");
+        assert_eq!(language_for_path("export.jsonl").highlighter, "json");
+        assert_eq!(language_for_path("lib/l10n/app_id.arb").highlighter, "json");
+        assert_eq!(language_for_path("pubspec.yaml").highlighter, "yaml");
     }
 }

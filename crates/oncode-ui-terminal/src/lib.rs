@@ -10,8 +10,8 @@ pub mod palette;
 pub mod view;
 
 use gpui_kit::component::button::{Button, ButtonVariants as _};
-use gpui_kit::component::{Icon, Sizable as _};
-use gpui_kit::{App, AppContext as _, Context, Entity, IntoElement, KeyBinding, NoAction, Render, Window};
+use gpui_kit::component::{h_flex, Icon, Sizable as _};
+use gpui_kit::{AnyElement, App, AppContext as _, Context, Entity, IntoElement, KeyBinding, NoAction, ParentElement as _, Render, Styled as _, Window};
 use oncode_ui::commands::Command;
 use oncode_ui::{Lucide, PanelView, StatusAlign, StatusItem, Workbench};
 use serde_json::Value;
@@ -38,10 +38,13 @@ fn setup(workbench: &mut Workbench, window: &mut Window, cx: &mut Context<Workbe
     }
     let terminal = cx.new(|cx| TerminalPanel::new(env.clone(), cx));
     workbench.set_extension(terminal.clone());
-    workbench.register_panel(PanelView::new(PANEL_ID, "Terminal", 10, {
-        let terminal = terminal.clone();
-        move |_, _, _| terminal.clone().into()
-    }));
+    workbench.register_panel(
+        PanelView::new(PANEL_ID, "Terminal", 10, {
+            let terminal = terminal.clone();
+            move |_, _, _| terminal.clone().into()
+        })
+        .actions(panel_actions),
+    );
     workbench.register_status(StatusItem::new("terminal.toggle", StatusAlign::Left, 30, |_, _, cx| cx.new(|_| TerminalButton).into()), window, cx);
 
     let with_panel = |f: fn(&mut Workbench, Entity<TerminalPanel>, &mut Window, &mut Context<Workbench>)| {
@@ -105,6 +108,20 @@ fn toggle(workbench: &mut Workbench, terminal: Entity<TerminalPanel>, window: &m
     }
     workbench.show_panel(PANEL_ID, cx);
     terminal.update(cx, |terminal, cx| terminal.ensure_session(window, cx));
+}
+
+/// Tombol di bilah tab panel: terminal baru dan matikan terminal aktif.
+fn panel_actions(_: &mut Window, _: &mut App) -> AnyElement {
+    let button = |id: &'static str, icon: Lucide, tooltip: &'static str, command: &'static str| {
+        Button::new(id).ghost().xsmall().icon(Icon::new(icon)).tooltip(tooltip).on_click(move |_, window, cx| {
+            oncode_ui::execute(command, Value::Null, window, cx);
+        })
+    };
+    h_flex()
+        .gap_0p5()
+        .child(button("terminal-new", Lucide::Plus, "New Terminal", "terminal.new"))
+        .child(button("terminal-kill", Lucide::Trash, "Kill Terminal", "terminal.kill"))
+        .into_any_element()
 }
 
 /// Tombol "Terminal" di status bar.

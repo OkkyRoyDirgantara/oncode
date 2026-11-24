@@ -1,0 +1,9 @@
+[package]
+name = "oncode-format"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Tabel formatter per bahasa untuk OnCode (Prettier, rustfmt, gofmt, ruff, …) dan pemilihan programnya"
+
+[dependencies]

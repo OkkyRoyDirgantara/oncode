@@ -66,7 +66,7 @@ pub async fn forge_set_client_id(core: &Shared, kind: ForgeKind, host: Option<St
 }
 
 /// Akses keychain bisa memblokir (mis. menunggu dialog buka kunci), jadi dijalankan di thread tersendiri.
-async fn keychain<T: Send + 'static>(core: &Shared, f: impl FnOnce(&dyn TokenStore) -> oncode_forge::Result<T> + Send + 'static) -> AppResult<T> {
+pub(crate) async fn keychain<T: Send + 'static>(core: &Shared, f: impl FnOnce(&dyn TokenStore) -> oncode_forge::Result<T> + Send + 'static) -> AppResult<T> {
     let store = core.tokens.clone();
     core.runtime()
         .spawn_blocking(move || f(store.as_ref() as &dyn TokenStore))

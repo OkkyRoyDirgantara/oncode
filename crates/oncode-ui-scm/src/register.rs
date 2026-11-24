@@ -79,6 +79,17 @@ pub(crate) fn setup(workbench: &mut Workbench, window: &mut Window, cx: &mut Con
         })
         .category("Git"),
     );
+    let generate_store = store.clone();
+    let generate_weak = cx.weak_entity();
+    workbench.register_command(
+        Command::new("git.generateCommitMessage", "Generate Commit Message", move |_, _, cx| {
+            let _ = generate_weak.update(cx, |workbench, cx| workbench.show_sidebar(SCM_SIDEBAR, cx));
+            generate_store.update(cx, |store, cx| store.request_generate(cx));
+        })
+        .category("Git"),
+    );
+    workbench.register_command(Command::new("ai.setApiKey", "Set Anthropic API Key…", |_, window, cx| crate::ai::set_api_key(window, cx)).category("AI"));
+    workbench.register_command(Command::new("ai.removeApiKey", "Remove Anthropic API Key", |_, window, cx| crate::ai::remove_api_key(window, cx)).category("AI"));
     let commands = [
         repo_command("git.stageAll", "Stage All Changes", |git, window, cx| run(git, window, cx, async |git, cx| { actions::stage_all(&git, cx).await; })),
         repo_command("git.unstageAll", "Unstage All Changes", |git, window, cx| run(git, window, cx, async |git, cx| { actions::unstage_all(&git, cx).await; })),

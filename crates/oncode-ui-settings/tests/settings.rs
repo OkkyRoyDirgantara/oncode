@@ -426,7 +426,7 @@ async fn search_box_hides_rows_and_sections_that_do_not_match(cx: &mut TestAppCo
     window.wait_until(cx, "tabel server dimuat", |_, cx| page.read(cx).servers().is_some()).await;
     let visible = |cx: &mut TestAppContext, ids: &[&'static str]| ids.iter().map(|id| exists(&window, cx, id)).collect::<Vec<_>>();
 
-    assert_eq!(visible(cx, &["section-editor", "section-files", "section-appearance", "section-git", "section-terminal", "section-lsp", "section-accounts", "section-keyboard"]), [true; 8]);
+    assert_eq!(visible(cx, &["section-editor", "section-files", "section-appearance", "section-git", "section-terminal", "section-lsp", "section-accounts", "section-ai", "section-extensions", "section-keyboard"]), [true; 10]);
     assert!(!exists(&window, cx, "settings-no-match"));
 
     search(&window, cx, "font size");

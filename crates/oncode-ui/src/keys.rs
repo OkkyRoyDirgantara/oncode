@@ -57,8 +57,8 @@ fn canonical_for(binding: &str, mac: bool) -> String {
         parts.push("+");
     }
     let Some((key, mods)) = parts.split_last() else { return String::new() };
-    let key = canonical_key(key);
-    let mods: Vec<String> = mods
+    let mut key = canonical_key(key);
+    let mut mods: Vec<String> = mods
         .iter()
         .map(|m| match m.to_lowercase().as_str() {
             "cmd" | "meta" | "command" | "super" | "win" => if mac { "Mod" } else { "Meta" }.to_string(),
@@ -69,6 +69,11 @@ fn canonical_for(binding: &str, mac: bool) -> String {
             _ => m.to_string(),
         })
         .collect();
+    // `Ctrl+~` dan `Ctrl+Shift+`` adalah pintasan yang sama (lihat `unshifted`).
+    if let Some(base) = unshifted(&key) {
+        key = base.to_string();
+        mods.push("Shift".to_string());
+    }
     let mut out: Vec<&str> = MODIFIER_ORDER.iter().copied().filter(|m| mods.iter().any(|x| x == m)).collect();
     out.push(&key);
     out.join("+")
@@ -85,15 +90,54 @@ pub struct KeyPress {
     pub key: String,
 }
 
-/// Pintasan kanonis untuk sebuah penekanan tombol, atau `None` bila hanya modifier.
-pub fn keybinding_from_press(press: &KeyPress) -> Option<String> {
-    press_for(press, IS_MAC)
+/// Tombol dasar (layout US) untuk simbol yang diketik dengan Shift, mis. `~` → `` ` ``.
+///
+/// GPUI di Windows melaporkan Ctrl+Shift+` sebagai `ctrl` + `~` (Shift sudah "terpakai" menjadi
+/// karakter), sedangkan platform lain bisa melaporkan `ctrl-shift` + `` ` ``. Keduanya dinormalkan
+/// ke `Shift+<tombol dasar>` agar pintasan seperti `Mod+Shift+`` cocok di semua platform. `+`
+/// sengaja tidak termasuk: `Ctrl++` berarti tombol plus, yang di banyak layout tidak memakai Shift.
+fn unshifted(key: &str) -> Option<&'static str> {
+    Some(match key {
+        "~" => "`",
+        "!" => "1",
+        "@" => "2",
+        "#" => "3",
+        "$" => "4",
+        "%" => "5",
+        "^" => "6",
+        "&" => "7",
+        "*" => "8",
+        "(" => "9",
+        ")" => "0",
+        "_" => "-",
+        "{" => "[",
+        "}" => "]",
+        "|" => "\\",
+        ":" => ";",
+        "\"" => "'",
+        "<" => ",",
+        ">" => ".",
+        "?" => "/",
+        _ => return None,
+    })
 }
 
-fn press_for(press: &KeyPress, mac: bool) -> Option<String> {
+/// Pintasan kanonis untuk sebuah penekanan tombol, atau `None` bila hanya modifier.
+pub fn keybinding_from_press(press: &KeyPress) -> Option<String> {
+    keybinding_from_press_on(press, IS_MAC)
+}
+
+/// Seperti [`keybinding_from_press`], dengan platform yang ditentukan pemanggil (untuk uji lintas platform).
+pub fn keybinding_from_press_on(press: &KeyPress, mac: bool) -> Option<String> {
     let lower = press.key.to_lowercase();
     if press.key.is_empty() || matches!(lower.as_str(), "shift" | "control" | "alt" | "platform" | "function" | "cmd" | "super") {
         return None;
+    }
+    let mut key = canonical_key(&press.key);
+    let mut shift = press.shift;
+    if let Some(base) = unshifted(&key) {
+        key = base.to_string();
+        shift = true;
     }
     let mut mods: Vec<&str> = Vec::new();
     let (primary, secondary_ctrl, meta) = if mac { (press.platform, press.control, false) } else { (press.control, false, press.platform) };
@@ -109,10 +153,9 @@ fn press_for(press: &KeyPress, mac: bool) -> Option<String> {
     if press.alt {
         mods.push("Alt");
     }
-    if press.shift {
+    if shift {
         mods.push("Shift");
     }
-    let key = canonical_key(&press.key);
     mods.push(&key);
     Some(mods.join("+"))
 }
@@ -217,15 +260,37 @@ mod tests {
     #[test]
     fn press_maps_to_canonical_binding() {
         let press = KeyPress { control: true, shift: true, key: "p".into(), ..Default::default() };
-        assert_eq!(press_for(&press, false).as_deref(), Some("Mod+Shift+P"));
+        assert_eq!(keybinding_from_press_on(&press, false).as_deref(), Some("Mod+Shift+P"));
         let press = KeyPress { platform: true, key: "s".into(), ..Default::default() };
-        assert_eq!(press_for(&press, true).as_deref(), Some("Mod+S"));
+        assert_eq!(keybinding_from_press_on(&press, true).as_deref(), Some("Mod+S"));
         let press = KeyPress { key: "escape".into(), ..Default::default() };
-        assert_eq!(press_for(&press, false).as_deref(), Some("Escape"));
+        assert_eq!(keybinding_from_press_on(&press, false).as_deref(), Some("Escape"));
         let press = KeyPress { control: true, key: "pagedown".into(), ..Default::default() };
-        assert_eq!(press_for(&press, false).as_deref(), Some("Mod+PageDown"));
+        assert_eq!(keybinding_from_press_on(&press, false).as_deref(), Some("Mod+PageDown"));
         let press = KeyPress { shift: true, key: "shift".into(), ..Default::default() };
-        assert_eq!(press_for(&press, false), None);
+        assert_eq!(keybinding_from_press_on(&press, false), None);
+    }
+
+    #[test]
+    fn shifted_symbols_match_their_base_key_with_shift() {
+        // Windows: Ctrl+Shift+` datang sebagai ctrl + "~" tanpa Shift; platform lain bisa ctrl-shift + "`".
+        let windows = KeyPress { control: true, key: "~".into(), ..Default::default() };
+        let other = KeyPress { control: true, shift: true, key: "`".into(), ..Default::default() };
+        assert_eq!(keybinding_from_press_on(&windows, false).as_deref(), Some("Mod+Shift+`"));
+        assert_eq!(keybinding_from_press_on(&other, false).as_deref(), Some("Mod+Shift+`"));
+        assert_eq!(canonical_for("Ctrl+Shift+`", false), "Mod+Shift+`");
+        assert_eq!(canonical_for("Ctrl+~", false), "Mod+Shift+`");
+        assert_eq!(canonical_for("Ctrl+Shift+~", false), "Mod+Shift+`");
+        // Shift+angka dan simbol lain.
+        let bang = KeyPress { control: true, key: "!".into(), ..Default::default() };
+        assert_eq!(keybinding_from_press_on(&bang, false).as_deref(), Some("Mod+Shift+1"));
+        assert_eq!(canonical_for("Ctrl+Shift+1", false), "Mod+Shift+1");
+        assert_eq!(canonical_for("Ctrl+?", false), "Mod+Shift+/");
+        // Tanpa Shift tetap tombol dasarnya; `+` tidak diubah.
+        assert_eq!(canonical_for("Mod+`", false), "Mod+`");
+        assert_eq!(canonical_for("Ctrl++", false), "Mod++");
+        let plus = KeyPress { control: true, key: "+".into(), ..Default::default() };
+        assert_eq!(keybinding_from_press_on(&plus, false).as_deref(), Some("Mod++"));
     }
 
     #[test]

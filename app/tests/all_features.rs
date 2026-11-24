@@ -18,6 +18,7 @@ fn init_all(cx: &mut TestAppContext) {
         oncode_ui_lsp::init(cx);
         oncode_ui_forge::init(cx);
         oncode_ui_settings::init(cx);
+        oncode_ui_markdown::init(cx);
     });
 }
 

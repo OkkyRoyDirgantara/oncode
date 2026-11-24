@@ -1,6 +1,7 @@
 //! Panel Source Control, commit, branch, remote, stash, dan Git Output.
 
 pub mod actions;
+mod ai;
 pub mod logic;
 pub mod output;
 pub mod prompts;

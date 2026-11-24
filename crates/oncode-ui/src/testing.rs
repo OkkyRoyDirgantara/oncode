@@ -113,7 +113,7 @@ impl TestApp {
             }
             std::fs::write(full, content).unwrap();
         }
-        let path = std::fs::canonicalize(dir.path()).unwrap();
+        let path = canonical(dir.path());
         self.projects.borrow_mut().push(dir);
         path
     }
@@ -192,5 +192,15 @@ impl TestWindow {
     /// Menjalankan command seperti dari command palette.
     pub fn run_command(&self, cx: &mut TestAppContext, id: &str) -> bool {
         self.update(cx, |window, cx| crate::execute_now(id, &serde_json::Value::Null, window, cx))
+    }
+}
+
+/// Path kanonik seperti yang dipakai `workspace_open`: di Windows tanpa awalan `\\?\`.
+fn canonical(path: &std::path::Path) -> PathBuf {
+    let path = std::fs::canonicalize(path).unwrap();
+    let text = path.to_string_lossy();
+    match text.strip_prefix(r"\\?\") {
+        Some(rest) if !rest.starts_with("UNC") => PathBuf::from(rest),
+        _ => path,
     }
 }

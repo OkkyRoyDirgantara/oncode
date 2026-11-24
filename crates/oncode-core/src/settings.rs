@@ -18,6 +18,8 @@ pub struct EditorSettings {
     pub line_numbers: bool,
     /// Tampilkan anotasi blame di baris kursor.
     pub inline_blame: bool,
+    /// Format berkas setiap kali disimpan (butuh ekstensi Formatters atau language server).
+    pub format_on_save: bool,
 }
 
 impl Default for EditorSettings {
@@ -30,6 +32,7 @@ impl Default for EditorSettings {
             word_wrap: false,
             line_numbers: true,
             inline_blame: false,
+            format_on_save: false,
         }
     }
 }
@@ -121,6 +124,41 @@ pub struct ForgeSettings {
     pub client_ids: BTreeMap<String, String>,
 }
 
+/// Fitur tambahan yang bisa dinyalakan atau dimatikan satu per satu (Settings → Extensions).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExtensionSettings {
+    /// Pratinjau Markdown (`Ctrl+Shift+V`).
+    pub markdown_preview: bool,
+    /// Formatter eksternal per bahasa (Prettier, rustfmt, gofmt, ruff, dart format, …).
+    pub formatters: bool,
+    /// Highlight untuk bahasa tambahan (Kotlin, Dart, C#, PHP, Lua, Swift, GraphQL, …).
+    pub extra_languages: bool,
+    /// Go to Definition dan Ctrl+klik tanpa language server: mencari definisi di seluruh proyek.
+    pub symbol_search: bool,
+}
+
+impl Default for ExtensionSettings {
+    fn default() -> Self {
+        Self { markdown_preview: true, formatters: true, extra_languages: true, symbol_search: true }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AiSettings {
+    /// Model Claude untuk "Generate Commit Message".
+    pub model: String,
+    /// Origin Claude API, mis. gateway/proxy organisasi. Kosong = `https://api.anthropic.com`.
+    pub base_url: Option<String>,
+}
+
+impl Default for AiSettings {
+    fn default() -> Self {
+        Self { model: oncode_ai::DEFAULT_MODEL.to_string(), base_url: None }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Settings {
@@ -131,6 +169,8 @@ pub struct Settings {
     pub terminal: TerminalSettings,
     pub lsp: LspSettings,
     pub forge: ForgeSettings,
+    pub ai: AiSettings,
+    pub extensions: ExtensionSettings,
 }
 
 impl Default for Settings {
@@ -143,6 +183,8 @@ impl Default for Settings {
             terminal: TerminalSettings::default(),
             lsp: LspSettings { enabled: true, servers: BTreeMap::new() },
             forge: ForgeSettings::default(),
+            ai: AiSettings::default(),
+            extensions: ExtensionSettings::default(),
         }
     }
 }

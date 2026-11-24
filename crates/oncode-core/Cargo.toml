@@ -12,6 +12,8 @@ oncode-workspace = { path = "../oncode-workspace" }
 oncode-terminal = { path = "../oncode-terminal" }
 oncode-lsp = { path = "../oncode-lsp" }
 oncode-forge = { path = "../oncode-forge" }
+oncode-ai = { path = "../oncode-ai" }
+oncode-format = { path = "../oncode-format" }
 
 serde.workspace = true
 serde_json.workspace = true

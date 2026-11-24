@@ -1,6 +1,7 @@
 //! Panel Source Control: kepala repositori, kotak commit, banner operasi, daftar perubahan, dan stash.
 
 use std::ops::Range;
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use gpui_kit::component::button::{Button, ButtonVariants as _, DropdownButton};
@@ -13,12 +14,15 @@ use gpui_kit::component::{h_flex, v_flex, ActiveTheme as _, Disableable as _, Ic
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     div, px, uniform_list, AnyElement, App, AppContext as _, ClipboardItem, Context, Entity, InteractiveElement as _, IntoElement, ParentElement, Render,
-    SharedString, StatefulInteractiveElement, Styled, Subscription, TestSupportExt as _, UniformListScrollHandle, Window,
+    SharedString, StatefulInteractiveElement, Styled, Subscription, Task, TestSupportExt as _, UniformListScrollHandle, Window,
 };
-use oncode_core::api;
+use oncode_core::api::ai::CommitSuggestion;
+use oncode_core::{api, AppResult};
 use oncode_git::{ChangeKind, CommitFile, ConflictEntry, ConflictSide, DiffSource, FileChange, Head, OperationAction, PushOptions, RepoSnapshot, Stash};
+use oncode_ui::overlay;
 use oncode_ui::{execute, spawn_core, Env, Lucide};
 use serde_json::{json, Value};
+use tokio::sync::{mpsc, oneshot};
 
 use crate::actions::{self, AfterCommit, CommitRequest, Git, StashRequest};
 use crate::logic::{self, ChangeRow, SyncState};
@@ -64,7 +68,18 @@ pub struct ScmPanel {
     scroll: UniformListScrollHandle,
     /// Alasan Git tidak tersedia (tidak terpasang atau terlalu lama).
     git_error: Option<String>,
+    /// "Generate Commit Message" yang sedang berjalan.
+    generating: Option<Generation>,
     _subscriptions: Vec<Subscription>,
+}
+
+/// Pesan commit yang sedang ditulis Claude.
+struct Generation {
+    /// Isi kotak commit sebelum dimulai; dikembalikan bila gagal atau dihentikan.
+    draft: String,
+    _task: Task<()>,
+    /// Dijatuhkan untuk membatalkan permintaan HTTP di runtime backend.
+    _cancel: oneshot::Sender<()>,
 }
 
 fn now_seconds() -> f64 {
@@ -88,6 +103,12 @@ impl ScmPanel {
             cx.observe(&store, |_, _, cx| cx.notify()),
             cx.subscribe_in(&store, window, |this: &mut Self, _, event: &ScmEvent, window, cx| match event {
                 ScmEvent::FocusCommit => this.focus_commit(window, cx),
+                ScmEvent::GenerateMessage => {
+                    this.store.update(cx, |store, _| store.take_generate_request());
+                    if this.generating.is_none() {
+                        this.generate_message(window, cx);
+                    }
+                }
             }),
             cx.subscribe_in(&message, window, |this: &mut Self, _, event: &InputEvent, window, cx| match event {
                 InputEvent::PressEnter { secondary: true, .. } => this.submit(None, window, cx),
@@ -119,11 +140,17 @@ impl ScmPanel {
             rows: Vec::new(),
             scroll: UniformListScrollHandle::new(),
             git_error: None,
+            generating: None,
             _subscriptions: subscriptions,
         };
         // Command `git.commit` bisa datang sebelum panel ini dibangun.
         if this.store.update(cx, |store, _| store.take_commit_focus()) {
             cx.defer_in(window, |this, window, cx| this.focus_commit(window, cx));
+        }
+        let weak = cx.weak_entity();
+        this.store.update(cx, |store, _| store.set_panel(weak));
+        if this.store.update(cx, |store, _| store.take_generate_request()) {
+            cx.defer_in(window, |this, window, cx| this.generate_message(window, cx));
         }
         this.sync_placeholder(window, cx);
         this
@@ -176,6 +203,97 @@ impl ScmPanel {
             }
         })
         .detach();
+    }
+
+    /// `true` selagi Claude menulis pesan commit.
+    pub fn is_generating(&self) -> bool {
+        self.generating.is_some()
+    }
+
+    /// "Generate Commit Message": Claude menulis pesan dari perubahan yang di-stage, dan teksnya
+    /// mengalir ke kotak commit. Isi kotak yang sudah diketik menjadi awal pesan. Dipanggil lagi
+    /// selagi berjalan berarti berhenti.
+    pub fn generate_message(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.generating.is_some() {
+            self.stop_generating(window, cx);
+            return;
+        }
+        let Some(git) = self.git.clone() else { return };
+        if self.store.read(cx).snapshot(cx).is_some_and(|snapshot| snapshot.staged.is_empty()) {
+            overlay::toast_info("Stage the changes you want to commit first.", window, cx);
+            return;
+        }
+        let draft = self.message(cx);
+        let (cancel_tx, cancel_rx) = oneshot::channel::<()>();
+        let (text_tx, mut text_rx) = mpsc::unbounded_channel::<String>();
+        let (core, root, prompt_draft) = (git.core.clone(), git.root.clone(), draft.clone());
+        let request = spawn_core(cx, async move {
+            let on_text: api::Callback<String> = Arc::new(move |piece| {
+                let _ = text_tx.send(piece);
+            });
+            tokio::select! {
+                result = api::ai::ai_commit_message(&core, root, prompt_draft, on_text) => Some(result),
+                // Pengirimnya dijatuhkan saat dihentikan: permintaan HTTP ikut dibatalkan.
+                _ = cancel_rx => None,
+            }
+        });
+        let task = cx.spawn_in(window, async move |this, cx| {
+            // Saluran tertutup saat permintaan selesai atau dibatalkan.
+            let mut text = String::new();
+            while let Some(first) = text_rx.recv().await {
+                text.push_str(&first);
+                while let Ok(more) = text_rx.try_recv() {
+                    text.push_str(&more);
+                }
+                let shown = text.clone();
+                if this.update_in(cx, |this, window, cx| this.message.update(cx, |state, cx| state.set_value(shown, window, cx))).is_err() {
+                    return;
+                }
+            }
+            let result = request.await;
+            let _ = this.update_in(cx, |this, window, cx| this.finish_generating(result, window, cx));
+        });
+        self.generating = Some(Generation { draft, _task: task, _cancel: cancel_tx });
+        cx.notify();
+    }
+
+    fn stop_generating(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(generation) = self.generating.take() {
+            self.message.update(cx, |state, cx| state.set_value(generation.draft, window, cx));
+            cx.notify();
+        }
+    }
+
+    fn finish_generating(&mut self, result: Option<AppResult<CommitSuggestion>>, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(generation) = self.generating.take() else { return };
+        cx.notify();
+        let error = match result {
+            None => return,
+            Some(Ok(suggestion)) => {
+                self.message.update(cx, |state, cx| state.set_value(suggestion.message, window, cx));
+                if suggestion.truncated {
+                    overlay::toast_info("The staged diff is long, so only part of it was sent. Check the message before committing.", window, cx);
+                }
+                return;
+            }
+            Some(Err(error)) => error,
+        };
+        // Gagal: kotak commit kembali seperti sebelum dimulai.
+        self.message.update(cx, |state, cx| state.set_value(generation.draft, window, cx));
+        match error.code.as_str() {
+            // Belum ada key, atau key ditolak: minta key lalu coba sekali lagi.
+            "noApiKey" | "unauthorized" => {
+                let reason = (error.code == "unauthorized").then(|| error.message.clone());
+                let core = self.env.core.clone();
+                cx.spawn_in(window, async move |this, cx| {
+                    if crate::ai::ask_api_key(core, reason, cx).await {
+                        let _ = this.update_in(cx, |this, window, cx| this.generate_message(window, cx));
+                    }
+                })
+                .detach();
+            }
+            _ => overlay::show_error(&error, window, cx),
+        }
     }
 
     fn set_amend(&mut self, amend: bool, window: &mut Window, cx: &mut Context<Self>) {
@@ -343,6 +461,14 @@ impl ScmPanel {
                                 .dropdown_menu(menu),
                         ),
                     )
+                    .child({
+                        let generating = self.generating.is_some();
+                        let (icon, tooltip) =
+                            if generating { (Lucide::CircleStop, "Stop generating") } else { (Lucide::Sparkles, "Generate commit message with AI") };
+                        icon_button("scm-ai-generate", icon, tooltip)
+                            .disabled(!generating && (disabled || snapshot.staged.is_empty()))
+                            .on_click(cx.listener(|this, _, window, cx| this.generate_message(window, cx)))
+                    })
                     .child(
                         Checkbox::new("scm-amend")
                             .label("Amend")

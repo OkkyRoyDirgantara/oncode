@@ -801,3 +801,53 @@ async fn opening_a_non_repository_fails_with_not_a_repo() {
     assert_eq!(root.canonicalize().unwrap(), dir.path().canonicalize().unwrap());
     assert!(git.is_supported());
 }
+
+// ----- Bahan pesan commit -----
+
+#[tokio::test]
+async fn staged_diff_covers_only_the_index_and_is_cut_at_the_limit() {
+    let t = TestRepo::with_commit().await;
+    t.write("README.md", "# Proyek\nbelum di-stage\n");
+    t.write("baru.txt", "baris é baru\n");
+    t.write("lain.txt", "lain\n");
+    t.git(&["add", "baru.txt", "lain.txt"]);
+    // Alat diff eksternal milik pengguna tidak dipakai.
+    t.git(&["config", "diff.external", "tidak-ada-perintah-ini"]);
+
+    let diff = t.repo.staged_diff(100_000).await.unwrap();
+    assert!(diff.stat.contains("baru.txt") && diff.stat.contains("lain.txt"), "{}", diff.stat);
+    assert!(diff.stat.contains("2 files changed"), "{}", diff.stat);
+    assert!(diff.patch.contains("+baris é baru") && diff.patch.contains("+lain"));
+    assert!(!diff.patch.contains("belum di-stage"), "perubahan yang belum di-stage tidak ikut");
+    assert!(!diff.truncated);
+
+    // Dipotong di batas karakter: tidak pernah di tengah "é".
+    let cut_at = diff.patch.find('é').unwrap() + 1;
+    let cut = t.repo.staged_diff(cut_at).await.unwrap();
+    assert!(cut.truncated);
+    assert!(cut.patch.len() < cut_at && diff.patch.starts_with(&cut.patch));
+    assert_eq!(cut.stat, diff.stat, "stat tetap utuh");
+
+    t.git(&["reset", "-q"]);
+    let empty = t.repo.staged_diff(100_000).await.unwrap();
+    assert!(empty.stat.is_empty() && empty.patch.is_empty());
+}
+
+#[tokio::test]
+async fn staged_diff_and_subjects_work_before_the_first_commit() {
+    let t = TestRepo::new().await;
+    assert!(t.repo.recent_subjects(10).await.unwrap().is_empty());
+    t.write("a.txt", "a\n");
+    t.git(&["add", "a.txt"]);
+    let diff = t.repo.staged_diff(100_000).await.unwrap();
+    assert!(diff.patch.contains("+a"), "{}", diff.patch);
+}
+
+#[tokio::test]
+async fn recent_subjects_are_newest_first() {
+    let t = TestRepo::with_commit().await;
+    t.commit_file("a.txt", "a\n", "feat: tambah a\n\nBadan pesan.");
+    t.commit_file("b.txt", "b\n", "fix: perbaiki b");
+    let subjects = t.repo.recent_subjects(2).await.unwrap();
+    assert_eq!(subjects, ["fix: perbaiki b", "feat: tambah a"]);
+}

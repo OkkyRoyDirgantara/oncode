@@ -8,6 +8,7 @@ pub mod app;
 pub mod commands;
 pub mod editor;
 pub mod keys;
+pub mod menubar;
 pub mod model;
 pub mod overlay;
 pub mod quick_pick;

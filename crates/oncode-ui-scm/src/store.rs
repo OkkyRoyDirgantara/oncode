@@ -3,7 +3,7 @@
 
 use std::time::{Duration, Instant};
 
-use gpui_kit::{App, Context, Entity, EventEmitter, SharedString, Subscription, Task, Window};
+use gpui_kit::{App, Context, Entity, EventEmitter, SharedString, Subscription, Task, WeakEntity, Window};
 use oncode_core::api;
 use oncode_git::{Head, Refs, RepoSnapshot, Stash};
 use oncode_ui::{repos, spawn_core, Env, ReposEvent, Workbench};
@@ -36,6 +36,8 @@ impl Busy {
 pub enum ScmEvent {
     /// Command `git.commit`: pindahkan fokus ke kotak pesan commit.
     FocusCommit,
+    /// Command `git.generateCommitMessage`: tulis pesan commit dengan Claude.
+    GenerateMessage,
 }
 
 pub struct ScmStore {
@@ -50,6 +52,9 @@ pub struct ScmStore {
     reload_again: bool,
     /// Fokus ke kotak commit diminta sebelum panelnya dibangun.
     pending_focus: bool,
+    pending_generate: bool,
+    /// Panel Source Control jendela ini, bila sudah dibangun.
+    panel: Option<WeakEntity<crate::view::ScmPanel>>,
     _auto_fetch: Task<()>,
     _subscriptions: Vec<Subscription>,
 }
@@ -106,6 +111,8 @@ impl ScmStore {
             reloading: false,
             reload_again: false,
             pending_focus: false,
+            pending_generate: false,
+            panel: None,
             _auto_fetch: auto_fetch,
             _subscriptions: vec![subscription],
         };
@@ -172,6 +179,25 @@ impl ScmStore {
     /// Mengambil permintaan fokus yang belum dilayani.
     pub fn take_commit_focus(&mut self) -> bool {
         std::mem::take(&mut self.pending_focus)
+    }
+
+    pub fn request_generate(&mut self, cx: &mut Context<Self>) {
+        self.pending_generate = true;
+        cx.emit(ScmEvent::GenerateMessage);
+    }
+
+    /// Mengambil permintaan "Generate Commit Message" yang belum dilayani (panel belum dibangun).
+    pub fn take_generate_request(&mut self) -> bool {
+        std::mem::take(&mut self.pending_generate)
+    }
+
+    pub(crate) fn set_panel(&mut self, panel: WeakEntity<crate::view::ScmPanel>) {
+        self.panel = Some(panel);
+    }
+
+    /// Panel Source Control jendela ini, bila sudah dibangun dan masih ada.
+    pub fn panel(&self) -> Option<Entity<crate::view::ScmPanel>> {
+        self.panel.as_ref()?.upgrade()
     }
 
     fn on_snapshot(&mut self, cx: &mut Context<Self>) {

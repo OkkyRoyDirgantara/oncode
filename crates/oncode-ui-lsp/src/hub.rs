@@ -593,15 +593,29 @@ impl HoverProvider for Provider {
 }
 
 impl DefinitionProvider for Provider {
-    fn definitions(&self, text: &Rope, offset: usize, _: &mut Window, cx: &mut App) -> Task<GpuiResult<Vec<LocationLink>>> {
-        let Some((client, position)) = self.context(text, offset, Feature::Definition, cx) else { return Task::ready(Ok(Vec::new())) };
+    fn definitions(&self, text: &Rope, offset: usize, window: &mut Window, cx: &mut App) -> Task<GpuiResult<Vec<LocationLink>>> {
+        // Tanpa server yang berjalan, atau bila server tidak menemukan apa-apa: pencarian di proyek.
+        let env = oncode_ui::Workbench::for_window(window, cx).map(|workbench| workbench.read(cx).env().clone());
+        let Some((client, position)) = self.context(text, offset, Feature::Definition, cx) else {
+            return match env {
+                Some(env) => oncode_ui::editor::symbol_definition_links(&env, &self.path, text, offset, cx),
+                None => Task::ready(Ok(Vec::new())),
+            };
+        };
         let params = GotoDefinitionParams {
             text_document_position_params: self.position_params(position),
             work_done_progress_params: WorkDoneProgressParams::default(),
             partial_result_params: PartialResultParams::default(),
         };
         let task = spawn_core(cx, client.request::<GotoDefinition>(params));
-        cx.background_spawn(async move { to_gpui(task.await).map(|response| definition_links(response)) })
+        let (path, text) = (self.path.clone(), text.clone());
+        cx.spawn(async move |cx| {
+            let links = to_gpui(task.await).map(definition_links).unwrap_or_default();
+            match env {
+                Some(env) if links.is_empty() => cx.update(|cx| oncode_ui::editor::symbol_definition_links(&env, &path, &text, offset, cx)).await,
+                _ => Ok(links),
+            }
+        })
     }
 }
 

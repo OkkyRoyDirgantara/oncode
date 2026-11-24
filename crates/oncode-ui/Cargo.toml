@@ -10,6 +10,8 @@ description = "Kerangka UI native OnCode: jendela, tab, panel, command, keybindi
 oncode-core = { path = "../oncode-core" }
 oncode-git = { path = "../oncode-git" }
 oncode-workspace = { path = "../oncode-workspace" }
+# Konversi path ↔ URI LSP untuk Go to Definition berbasis pencarian proyek.
+oncode-lsp = { path = "../oncode-lsp" }
 # Satu-satunya pintu ke GPUI: versi GPUI ditentukan oleh gpui-kit (lihat docs/RANCANGAN.md 3.2).
 gpui-kit = { version = "=0.10.0", features = [
     "tree-sitter-bash", "tree-sitter-c", "tree-sitter-cpp", "tree-sitter-css", "tree-sitter-diff",
@@ -17,7 +19,14 @@ gpui-kit = { version = "=0.10.0", features = [
     "tree-sitter-markdown", "tree-sitter-python", "tree-sitter-ruby", "tree-sitter-rust",
     "tree-sitter-sql", "tree-sitter-toml", "tree-sitter-tsx", "tree-sitter-typescript",
     "tree-sitter-yaml",
+    # Ekstensi "Extra languages" (bisa dimatikan di Settings → Extensions).
+    "tree-sitter-kotlin", "tree-sitter-csharp", "tree-sitter-php", "tree-sitter-lua",
+    "tree-sitter-swift", "tree-sitter-scala", "tree-sitter-graphql", "tree-sitter-proto",
+    "tree-sitter-make", "tree-sitter-cmake", "tree-sitter-zig", "tree-sitter-elixir",
+    "tree-sitter-svelte",
 ] }
+# Grammar Dart (Flutter): tidak disediakan gpui-kit, didaftarkan sendiri ke highlighter.
+tree-sitter-dart = "0.3"
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true

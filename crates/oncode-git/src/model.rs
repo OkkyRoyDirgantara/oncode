@@ -194,6 +194,17 @@ pub struct CommitFile {
     pub deletions: Option<u32>,
 }
 
+/// Perubahan yang di-stage, sebagai teks untuk menulis pesan commit.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StagedDiff {
+    /// Keluaran `git diff --cached --stat`; kosong bila tidak ada yang di-stage.
+    pub stat: String,
+    pub patch: String,
+    /// `patch` dipotong karena terlalu panjang.
+    pub truncated: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CommitDetail {

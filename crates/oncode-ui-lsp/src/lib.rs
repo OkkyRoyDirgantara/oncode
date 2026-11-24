@@ -9,12 +9,11 @@ pub mod model;
 use std::collections::HashSet;
 use std::ops::Range;
 
-use gpui_kit::component::input::GoToDefinition;
 use gpui_kit::component::{h_flex, v_flex, ActiveTheme as _, Icon, Sizable as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     div, px, uniform_list, AnyElement, App, AppContext as _, Context, Entity, FocusHandle, Focusable, InteractiveElement as _, IntoElement, ParentElement as _, Render,
-    SharedString, StatefulInteractiveElement as _, Styled as _, Subscription, TestSupportExt as _, Window,
+    SharedString, StatefulInteractiveElement as _, Styled as _, Subscription, Task, TestSupportExt as _, Window,
 };
 use lsp_types::request::{Formatting, References, Rename};
 use lsp_types::{DocumentFormattingParams, FormattingOptions, ReferenceContext, ReferenceParams, RenameParams, TextDocumentIdentifier, TextDocumentPositionParams, WorkDoneProgressParams};
@@ -22,7 +21,7 @@ use oncode_lsp::position::position_at;
 use oncode_lsp::uri::{path_to_lsp_uri, uri_to_path};
 use oncode_lsp::Feature;
 use oncode_ui::commands::Command;
-use oncode_ui::editor::{active_file, language_for_path, open_file, OpenFile};
+use oncode_ui::editor::{active_file, language_for_path, open_file, Buffer, FormatOutcome, OpenFile};
 use oncode_ui::overlay::{self, TextPrompt};
 use oncode_ui::quick_pick::{quick_pick, PickItem, QuickPickOptions};
 use oncode_ui::{spawn_core, Lucide, PanelView, StatusAlign, StatusItem, Workbench};
@@ -36,6 +35,7 @@ pub const PROBLEMS_PANEL: &str = "problems";
 
 /// Mendaftarkan fitur ini. Dipanggil sekali dari `app/src/main.rs` setelah `oncode_ui::init`.
 pub fn init(cx: &mut App) {
+    oncode_ui::editor::register_format_provider(oncode_ui::editor::LSP_PRIORITY, lsp_format_provider, cx);
     oncode_ui::register_feature(cx, setup);
 }
 
@@ -102,21 +102,26 @@ fn setup(workbench: &mut Workbench, window: &mut Window, cx: &mut Context<Workbe
         cx,
     );
 
-    // Pintasan hanya berlaku saat editor dengan server aktif sedang fokus (F2 juga dipakai explorer).
-    let connected = {
+    // Tersedia bila berkas aktif punya server yang berjalan; pintasannya hanya saat editornya fokus
+    // (F2 juga dipakai explorer).
+    let has_server = {
         let hub = hub.clone();
         move |window: &Window, cx: &App| {
             let Some(workbench) = Workbench::for_window(window, cx) else { return false };
-            let Some((_, buffer, state)) = active_file(workbench.read(cx), cx) else { return false };
-            state.focus_handle(cx).is_focused(window) && hub.read(cx).server_for_path(buffer.read(cx).path()).is_some()
+            let Some((_, buffer, _)) = active_file(workbench.read(cx), cx) else { return false };
+            hub.read(cx).server_for_path(buffer.read(cx).path()).is_some()
         }
     };
+    let editor_focused = |window: &Window, cx: &App| {
+        let Some(workbench) = Workbench::for_window(window, cx) else { return false };
+        active_file(workbench.read(cx), cx).is_some_and(|(_, _, state)| state.focus_handle(cx).is_focused(window))
+    };
+    // "Go to Definition" (F12) dan "Format Document" didaftarkan editor: keduanya juga berjalan
+    // tanpa server (pencarian proyek, ekstensi Formatters); server ini menjadi salah satu penyedianya.
     workbench.register_command(
-        Command::new("editor.goToDefinition", "Go to Definition", |_, window, cx| window.dispatch_action(Box::new(GoToDefinition), cx)).category("Edit").key("F12").when(connected.clone()),
+        Command::new("editor.findReferences", "Find All References", find_references).category("Edit").key("Shift+F12").when(has_server.clone()).keys_when(editor_focused),
     );
-    workbench.register_command(Command::new("editor.findReferences", "Find All References", find_references).category("Edit").key("Shift+F12").when(connected.clone()));
-    workbench.register_command(Command::new("editor.rename", "Rename Symbol", rename_symbol).category("Edit").key("F2").when(connected.clone()));
-    workbench.register_command(Command::new("editor.format", "Format Document", format_document).category("Edit").key("Shift+Alt+F").when(connected));
+    workbench.register_command(Command::new("editor.rename", "Rename Symbol", rename_symbol).category("Edit").key("F2").when(has_server).keys_when(editor_focused));
     workbench.register_command(
         Command::new("lsp.restart", "Restart Language Server", |_, window, cx| {
             let Some(workbench) = Workbench::for_window(window, cx) else { return };
@@ -134,7 +139,6 @@ fn setup(workbench: &mut Workbench, window: &mut Window, cx: &mut Context<Workbe
 struct Active {
     workbench: Entity<Workbench>,
     hub: Entity<LspHub>,
-    path: String,
     state: Entity<gpui_kit::component::input::EditorState>,
     client: std::sync::Arc<oncode_lsp::Client>,
     position: lsp_types::Position,
@@ -155,7 +159,7 @@ fn active(feature: Feature, unsupported: &str, window: &mut Window, cx: &mut App
         return None;
     }
     let uri = path_to_lsp_uri(&path)?;
-    Some(Active { workbench, hub, path, state, client, position, uri })
+    Some(Active { workbench, hub, state, client, position, uri })
 }
 
 fn find_references(_: &Value, window: &mut Window, cx: &mut App) {
@@ -231,34 +235,34 @@ fn rename_symbol(_: &Value, window: &mut Window, cx: &mut App) {
         .detach();
 }
 
-fn format_document(_: &Value, window: &mut Window, cx: &mut App) {
-    let Some(active) = active(Feature::Formatting, "The language server does not support formatting.", window, cx) else { return };
-    let settings = active.workbench.read(cx).settings().editor.clone();
+/// Penyedia format language server: dipakai bila ekstensi Formatters tidak punya formatter untuk
+/// berkas ini. `None` bila server tidak berjalan atau tidak mendukung formatting.
+fn lsp_format_provider(buffer: &Entity<Buffer>, state: &Entity<gpui_kit::component::input::EditorState>, window: &mut Window, cx: &mut App) -> Option<Task<FormatOutcome>> {
+    let workbench = Workbench::for_window(window, cx)?;
+    let hub = hub(workbench.read(cx))?;
+    let path = buffer.read(cx).path().to_string();
+    let language = language_for_path(&path).lsp.to_string();
+    let text = state.read(cx).text().clone();
+    let (client, _) = hub.update(cx, |hub, _| hub.request_context(&language, &path, &text, 0))?;
+    if !client.supports(Feature::Formatting) {
+        return None;
+    }
+    let settings = workbench.read(cx).settings().editor.clone();
     let params = DocumentFormattingParams {
-        text_document: TextDocumentIdentifier { uri: active.uri.clone() },
+        text_document: TextDocumentIdentifier { uri: path_to_lsp_uri(&path)? },
         options: FormattingOptions { tab_size: settings.tab_size, insert_spaces: settings.insert_spaces, ..Default::default() },
         work_done_progress_params: WorkDoneProgressParams::default(),
     };
-    let task = spawn_core(cx, active.client.request::<Formatting>(params));
-    let (state, encoding) = (active.state.clone(), active.client.encoding());
-    let _ = active.path;
-    window
-        .spawn(cx, async move |cx| {
-            let result = task.await;
-            let _ = cx.update(|window, cx| match result {
-                Ok(Some(edits)) if !edits.is_empty() => state.update(cx, |state, cx| {
-                    let text = oncode_lsp::position::apply_text_edits(&state.text().to_string(), &edits, encoding);
-                    // Kursor dipertahankan sedekat mungkin.
-                    let cursor = state.cursor_position();
-                    state.set_value(text, window, cx);
-                    state.set_cursor_position(cursor, window, cx);
-                    cx.notify();
-                }),
-                Ok(_) => {}
-                Err(error) => overlay::toast_error(format!("Format Document failed: {error}"), window, cx),
-            });
-        })
-        .detach();
+    let encoding = client.encoding();
+    let task = spawn_core(cx, client.request::<Formatting>(params));
+    let original = text.to_string();
+    Some(cx.background_spawn(async move {
+        match task.await {
+            Ok(Some(edits)) if !edits.is_empty() => FormatOutcome::Formatted(oncode_lsp::position::apply_text_edits(&original, &edits, encoding)),
+            Ok(_) => FormatOutcome::Unchanged,
+            Err(error) => FormatOutcome::Failed(format!("Format Document failed: {error}")),
+        }
+    }))
 }
 
 /// Kata di bawah kursor, untuk mengisi kotak rename.

@@ -18,18 +18,27 @@ Rancangan lengkap ada di [docs/RANCANGAN.md](docs/RANCANGAN.md); panduan pengemb
 - Stash, tag, cherry-pick, revert, reset, blame, riwayat berkas, reflog
 - Worktree dan submodule
 - Semua perintah Git yang dijalankan tercatat di panel **Git Output**
+- **Generate commit message** dengan Claude (opsional): menulis pesan dari perubahan yang di-stage, mengikuti gaya commit repositori. Butuh API key Anthropic; diff yang di-stage dikirim ke Anthropic hanya saat tombolnya ditekan
 
 **Editor dan workspace**
 
-- Explorer dengan penanda status Git, tab dan split editor, quick open (`Ctrl+P`), command palette (`Ctrl+Shift+P`)
-- Highlight sintaks (tree-sitter), cari/ganti, multi-kursor, lipat kode
+- Explorer dengan penanda status Git, tab dan split editor, quick open (`Ctrl+P`), command palette (`Ctrl+Shift+P`), menu File/Edit/View/Go/Git/Terminal/Help di bilah judul
+- Berkas baru tanpa judul (`Ctrl+N`, disimpan lewat Save As), pindah baris (`Ctrl+↑/↓` atau `Alt+↑/↓`)
+- Highlight sintaks (tree-sitter) termasuk Kotlin, Dart/Flutter, C#, PHP, Lua, Swift, GraphQL; cari/ganti, multi-kursor, lipat kode
 - Pencarian dan penggantian teks di seluruh proyek (menghormati `.gitignore`)
 - Deteksi encoding dan akhir baris, deteksi perubahan dari luar, pemulihan tab saat folder dibuka lagi
-- Terminal terintegrasi
+- Terminal terintegrasi, bisa lebih dari satu sesi
 - LSP: completion, hover, diagnostics, go to definition, references, rename, format (language server dipasang sendiri)
+
+**Extensions** (bawaan, masing-masing bisa dimatikan di Settings → Extensions)
+
+- **Markdown Preview** (`Ctrl+Shift+V`): pratinjau langsung di samping editor
+- **Formatters** (`Shift+Alt+F`, opsional Format on Save): Prettier, rustfmt, gofmt, Ruff/Black, dart format, ktlint, sql-formatter, clang-format, dan lainnya bila terpasang; selain itu format dari language server
+- **Extra languages**: highlight untuk bahasa tambahan
+- **Go to Definition tanpa language server**: `Ctrl+klik`/`F12` mencari definisi di seluruh proyek
 - GitHub dan GitLab: login, clone dari akun, daftar / detail / checkout / buat pull request
 
-**Yang sengaja tidak ada:** marketplace ekstensi, debugger, remote development, notebook, sinkronisasi pengaturan, fitur AI.
+**Yang sengaja tidak ada:** marketplace ekstensi, debugger, remote development, notebook, sinkronisasi pengaturan, asisten AI di editor.
 
 ## Menjalankan
 

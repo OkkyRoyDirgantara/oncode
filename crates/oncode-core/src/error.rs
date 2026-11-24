@@ -64,6 +64,12 @@ impl From<oncode_forge::ForgeError> for AppError {
     }
 }
 
+impl From<oncode_ai::AiError> for AppError {
+    fn from(e: oncode_ai::AiError) -> Self {
+        Self { code: code_name(&e.code), message: e.message, detail: None }
+    }
+}
+
 impl From<std::io::Error> for AppError {
     fn from(e: std::io::Error) -> Self {
         Self::new("io", e.to_string())

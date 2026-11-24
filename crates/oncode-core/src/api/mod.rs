@@ -5,11 +5,14 @@
 
 use std::sync::Arc;
 
+pub mod ai;
 pub mod app;
 pub mod forge;
+pub mod format;
 pub mod fs;
 pub mod git;
 pub mod lsp;
+pub mod symbols;
 pub mod term;
 
 /// Pengganti `Channel<T>` v0.2: dipanggil untuk tiap kiriman, dari thread mana pun.
@@ -37,6 +40,7 @@ mod tests {
         drop(assert_send(super::term::term_write(core, 1, b"x")));
         drop(assert_send(super::lsp::lsp_start(core, "w", String::new(), Arc::new(|_| {}))));
         drop(assert_send(super::forge::forge_login_poll(core, String::new())));
+        drop(assert_send(super::ai::ai_commit_message(core, String::new(), String::new(), Arc::new(|_| {}))));
         drop(assert_send(super::forge::forge_pr_checkout(core, String::new(), oncode_forge::ForgeKind::GitHub, String::new(), 1, String::new(), Arc::new(|_| {}))));
 
         // Pola pemakaian dari UI: future memiliki `Shared` sendiri dan dijalankan di runtime core.

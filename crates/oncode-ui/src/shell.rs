@@ -50,7 +50,8 @@ impl SessionData {
         let mut files: Vec<String> = Vec::new();
         for tab in model.all_tabs() {
             if tab.kind == "file" && !tab.preview {
-                if let Some(path) = tab.param_str("path") {
+                // Berkas baru yang belum disimpan tidak bisa dibuka lagi dari disk.
+                if let Some(path) = tab.param_str("path").filter(|path| !crate::editor::is_untitled(path)) {
                     if !files.iter().any(|f| f == path) {
                         files.push(path.to_string());
                     }
@@ -62,8 +63,11 @@ impl SessionData {
     }
 }
 
-/// Tab berkas untuk sebuah path absolut.
+/// Tab berkas untuk sebuah path absolut, atau berkas baru (`untitled:Untitled-1`).
 pub fn file_tab(path: &str) -> TabData {
+    if let Some(name) = path.strip_prefix(crate::editor::UNTITLED_PREFIX) {
+        return TabData::new("file", name.to_string(), json!({ "path": path })).with_id(format!("file:{path}")).with_description("New file, not saved yet".to_string());
+    }
     let name = path.rsplit(['/', '\\']).next().unwrap_or(path).to_string();
     TabData::new("file", name, json!({ "path": path })).with_id(format!("file:{path}")).with_description(path.to_string())
 }
@@ -424,7 +428,7 @@ impl Shell {
 }
 
 impl Render for Shell {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let title: SharedString = match &self.workspace {
             Some(workspace) => workspace.name.clone().into(),
             None => "OnCode".into(),
@@ -442,7 +446,12 @@ impl Render for Shell {
                             window.remove_window();
                         }
                     })
-                    .child(div().id("window-title").text_sm().text_color(cx.theme().muted_foreground).child(title)),
+                    .child(
+                        gpui_kit::component::h_flex()
+                            .gap_3()
+                            .child(crate::menubar::menu_bar(window, cx))
+                            .child(div().id("window-title").text_sm().text_color(cx.theme().muted_foreground).child(title)),
+                    ),
             )
             .child(div().flex_1().min_h_0().w_full().child(self.workbench.clone()))
     }

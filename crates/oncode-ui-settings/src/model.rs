@@ -16,6 +16,8 @@ pub enum SectionId {
     Terminal,
     Lsp,
     Accounts,
+    Ai,
+    Extensions,
     /// Tanpa kolom: hanya tombol untuk membuka `keybindings.json`.
     Keyboard,
 }
@@ -30,6 +32,8 @@ impl SectionId {
             SectionId::Terminal => "Terminal",
             SectionId::Lsp => "Language Servers",
             SectionId::Accounts => "Accounts",
+            SectionId::Ai => "AI",
+            SectionId::Extensions => "Extensions",
             SectionId::Keyboard => "Keyboard Shortcuts",
         }
     }
@@ -44,14 +48,26 @@ impl SectionId {
             SectionId::Terminal => "terminal",
             SectionId::Lsp => "lsp",
             SectionId::Accounts => "accounts",
+            SectionId::Ai => "ai",
+            SectionId::Extensions => "extensions",
             SectionId::Keyboard => "keyboard",
         }
     }
 }
 
 /// Urutan bagian di halaman.
-pub const SECTIONS: [SectionId; 8] =
-    [SectionId::Editor, SectionId::Files, SectionId::Appearance, SectionId::Git, SectionId::Terminal, SectionId::Lsp, SectionId::Accounts, SectionId::Keyboard];
+pub const SECTIONS: [SectionId; 10] = [
+    SectionId::Editor,
+    SectionId::Files,
+    SectionId::Appearance,
+    SectionId::Git,
+    SectionId::Terminal,
+    SectionId::Lsp,
+    SectionId::Accounts,
+    SectionId::Ai,
+    SectionId::Extensions,
+    SectionId::Keyboard,
+];
 
 pub struct TextSpec {
     pub placeholder: &'static str,
@@ -162,6 +178,20 @@ fn validate_path(text: &str) -> Option<&'static str> {
     None
 }
 
+fn validate_model(text: &str) -> Option<&'static str> {
+    let value = text.trim();
+    if value.is_empty() {
+        return Some("Enter a model name, e.g. claude-opus-5-5");
+    }
+    if value.chars().any(char::is_whitespace) || has_control(value) {
+        return Some("A model name cannot contain spaces");
+    }
+    if value.chars().count() > 100 {
+        return Some("This is too long for a model name");
+    }
+    None
+}
+
 fn validate_client_id(text: &str) -> Option<&'static str> {
     let value = text.trim();
     if value.is_empty() {
@@ -203,7 +233,7 @@ const STARTUP_VIEW: &[ChoiceOption] = &[ChoiceOption { value: "scm", label: "Sou
 const PULL_STRATEGY: &[ChoiceOption] =
     &[ChoiceOption { value: "ffOnly", label: "Fast-forward only" }, ChoiceOption { value: "merge", label: "Merge" }, ChoiceOption { value: "rebase", label: "Rebase" }];
 
-pub static FIELDS: [Field; 19] = [
+pub static FIELDS: [Field; 25] = [
     Field {
         id: "editor.fontFamily",
         section: SectionId::Editor,
@@ -281,6 +311,14 @@ pub static FIELDS: [Field; 19] = [
         description: "Show who last changed the current line, and when, at the end of that line.",
         keywords: "git annotation author",
         kind: FieldKind::Checkbox(CheckboxSpec { get: |s| s.editor.inline_blame, set: |s, value| s.editor.inline_blame = value }),
+    },
+    Field {
+        id: "editor.formatOnSave",
+        section: SectionId::Editor,
+        label: "Format on save",
+        description: "Format the file every time you save it, with the language's formatter or language server.",
+        keywords: "prettier format beautify",
+        kind: FieldKind::Checkbox(CheckboxSpec { get: |s| s.editor.format_on_save, set: |s, value| s.editor.format_on_save = value }),
     },
     Field {
         id: "files.autoSave",
@@ -475,6 +513,52 @@ pub static FIELDS: [Field; 19] = [
             validate: validate_client_id,
             set: |s, text| s.forge.gitlab_client_id = nullable(text),
         }),
+    },
+    Field {
+        id: "ai.model",
+        section: SectionId::Ai,
+        label: "Claude model",
+        description: "Model used by \"Generate Commit Message\" in Source Control. The staged diff is sent to Anthropic when you use it. Set the API key with the command \"AI: Set Anthropic API Key…\".",
+        keywords: "ai claude anthropic commit message generate llm",
+        kind: FieldKind::Text(TextSpec {
+            placeholder: "claude-opus-5-5",
+            monospace: true,
+            get: |s| s.ai.model.clone(),
+            validate: validate_model,
+            set: |s, text| s.ai.model = text.trim().to_string(),
+        }),
+    },
+    Field {
+        id: "extensions.markdownPreview",
+        section: SectionId::Extensions,
+        label: "Markdown Preview",
+        description: "Show a live preview of Markdown files (Ctrl+Shift+V, or Ctrl+K V to open it beside the editor).",
+        keywords: "md readme render",
+        kind: FieldKind::Checkbox(CheckboxSpec { get: |s| s.extensions.markdown_preview, set: |s, value| s.extensions.markdown_preview = value }),
+    },
+    Field {
+        id: "extensions.formatters",
+        section: SectionId::Extensions,
+        label: "Formatters",
+        description: "Format Document uses each language's own formatter when it is installed: Prettier, rustfmt, gofmt, ruff or black, dart format, ktlint, sql-formatter, clang-format. Otherwise the language server formats.",
+        keywords: "prettier format beautify rustfmt gofmt black ruff",
+        kind: FieldKind::Checkbox(CheckboxSpec { get: |s| s.extensions.formatters, set: |s, value| s.extensions.formatters = value }),
+    },
+    Field {
+        id: "extensions.extraLanguages",
+        section: SectionId::Extensions,
+        label: "Extra languages",
+        description: "Syntax highlighting for Kotlin, Dart (Flutter), C#, PHP, Lua, Swift, Scala, GraphQL, Protocol Buffers, Makefile and more. Applies to files opened after the change.",
+        keywords: "syntax highlight kotlin flutter dart csharp php lua swift graphql",
+        kind: FieldKind::Checkbox(CheckboxSpec { get: |s| s.extensions.extra_languages, set: |s, value| s.extensions.extra_languages = value }),
+    },
+    Field {
+        id: "extensions.symbolSearch",
+        section: SectionId::Extensions,
+        label: "Go to Definition without a language server",
+        description: "When no language server answers, Ctrl+click and F12 search the project for the definition of the symbol (functions, classes, variables).",
+        keywords: "ctrl click definition jump function symbol navigation",
+        kind: FieldKind::Checkbox(CheckboxSpec { get: |s| s.extensions.symbol_search, set: |s, value| s.extensions.symbol_search = value }),
     },
 ];
 
@@ -727,6 +811,7 @@ mod tests {
                 "editor.wordWrap",
                 "editor.lineNumbers",
                 "editor.inlineBlame",
+                "editor.formatOnSave",
                 "files.autoSave",
                 "workbench.theme",
                 "workbench.startupView",
@@ -739,6 +824,11 @@ mod tests {
                 "lsp.enabled",
                 "forge.githubClientId",
                 "forge.gitlabClientId",
+                "ai.model",
+                "extensions.markdownPreview",
+                "extensions.formatters",
+                "extensions.extraLanguages",
+                "extensions.symbolSearch",
             ]
         );
         for f in &FIELDS {
@@ -839,6 +929,9 @@ mod tests {
         assert_eq!(check("forge.githubClientId", ""), None);
         assert!(check("forge.githubClientId", "two words").unwrap().contains("cannot contain spaces"));
         assert!(check("forge.gitlabClientId", &"x".repeat(201)).unwrap().contains("too long"));
+        assert_eq!(check("ai.model", "claude-opus-5-5"), None);
+        assert!(check("ai.model", "  ").unwrap().contains("Enter a model"));
+        assert!(check("ai.model", "claude opus").unwrap().contains("cannot contain spaces"));
         assert_eq!(validate_server_command("rust-analyzer"), None);
         assert_eq!(validate_server_command("  "), Some("Enter a command"));
         assert!(validate_server_command("a\tb").unwrap().contains("control characters"));

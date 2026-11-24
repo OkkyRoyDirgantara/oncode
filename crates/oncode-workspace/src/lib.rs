@@ -9,6 +9,7 @@ pub mod fs;
 mod gitignore;
 pub mod index;
 pub mod search;
+pub mod symbols;
 pub mod watcher;
 
 pub use error::{Result, WsError, WsErrorCode};

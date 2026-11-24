@@ -117,6 +117,30 @@ impl Repo {
         Ok(out.text().trim_end().to_string())
     }
 
+    /// Subjek `limit` commit terakhir, terbaru lebih dulu; kosong pada repositori tanpa commit.
+    pub async fn recent_subjects(&self, limit: u32) -> Result<Vec<String>> {
+        let out = self.run(Cmd::new(["log".to_string(), format!("--max-count={limit}"), "--format=%s".to_string()]).ok_codes(&[0, 128])).await?;
+        Ok(out.text().lines().map(str::trim).filter(|line| !line.is_empty()).map(String::from).collect())
+    }
+
+    /// Perubahan yang di-stage (untuk menulis pesan commit): ringkasan `--stat` dan patch-nya.
+    /// Patch yang lebih panjang dari `max_bytes` dipotong di batas karakter dan `truncated` diisi.
+    /// Pengaturan diff milik pengguna (alat diff eksternal, warna) tidak dipakai.
+    pub async fn staged_diff(&self, max_bytes: usize) -> Result<StagedDiff> {
+        let base = ["diff", "--cached", "--no-color", "--no-ext-diff", "-M"];
+        let stat = self.run(Cmd::new(base).args(["--stat"])).await?.text();
+        let mut patch = self.run(Cmd::new(base).args(["-U3"])).await?.text();
+        let truncated = patch.len() > max_bytes;
+        if truncated {
+            let mut end = max_bytes;
+            while !patch.is_char_boundary(end) {
+                end -= 1;
+            }
+            patch.truncate(end);
+        }
+        Ok(StagedDiff { stat: stat.trim_end().to_string(), patch, truncated })
+    }
+
     // ----- Ref -----
 
     pub async fn refs(&self) -> Result<Refs> {

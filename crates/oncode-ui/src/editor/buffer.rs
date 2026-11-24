@@ -19,6 +19,14 @@ use crate::workbench::{Env, WorkbenchEvent};
 /// Batas ukuran untuk fitur berat (highlight, lipat, LSP).
 pub const LARGE_FILE_BYTES: u32 = 5 * 1024 * 1024;
 
+/// Awalan path berkas baru yang belum pernah disimpan (`untitled:Untitled-1`).
+pub const UNTITLED_PREFIX: &str = "untitled:";
+
+/// `true` untuk berkas baru yang belum punya tempat di disk.
+pub fn is_untitled(path: &str) -> bool {
+    path.starts_with(UNTITLED_PREFIX)
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum BufferStatus {
     Loading,
@@ -84,8 +92,20 @@ impl Buffer {
             _load: Task::ready(()),
             _auto_save: Task::ready(()),
         };
-        this.load(window, cx);
+        if is_untitled(&this.path) {
+            // Berkas baru: langsung siap, kosong, tanpa membaca disk.
+            this.status = BufferStatus::Ready;
+            this.initial = Some(String::new());
+            this.revision = 1;
+        } else {
+            this.load(window, cx);
+        }
         this
+    }
+
+    /// Berkas baru yang belum pernah disimpan.
+    pub fn is_untitled(&self) -> bool {
+        is_untitled(&self.path)
     }
 
     pub fn path(&self) -> &str {
@@ -93,6 +113,9 @@ impl Buffer {
     }
 
     pub fn file_name(&self) -> &str {
+        if let Some(name) = self.path.strip_prefix(UNTITLED_PREFIX) {
+            return name;
+        }
         self.path.rsplit(['/', '\\']).next().unwrap_or(&self.path)
     }
 
@@ -229,7 +252,8 @@ impl Buffer {
     }
 
     fn schedule_auto_save(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.auto_save_mode(cx) != AutoSave::AfterDelay || !self.dirty || self.conflict {
+        // Berkas baru tidak disimpan otomatis: menyimpannya berarti memilih tempat.
+        if self.auto_save_mode(cx) != AutoSave::AfterDelay || !self.dirty || self.conflict || self.is_untitled() {
             return;
         }
         self._auto_save = cx.spawn_in(window, async move |this, cx| {
@@ -291,11 +315,18 @@ impl Buffer {
 
     /// Memuat ulang dari disk, membuang perubahan yang belum disimpan.
     pub fn reload(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.is_untitled() {
+            return;
+        }
         self.load(window, cx);
     }
 
     /// Menyimpan ke disk dengan encoding dan akhir baris aslinya. Hasil `false` bila gagal.
+    /// Berkas baru lebih dulu menanyakan tempat penyimpanannya.
     pub fn save(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Task<bool> {
+        if self.is_untitled() {
+            return self.save_untitled(window, cx);
+        }
         let Some(text) = self.text(cx) else { return Task::ready(false) };
         let (core, label, path) = (self.env.core.clone(), self.env.window.to_string(), self.path.clone());
         let (encoding, bom, eol) = (self.encoding.clone(), self.bom, self.eol);
@@ -331,9 +362,76 @@ impl Buffer {
         })
     }
 
+    /// "Save As" untuk berkas baru: pilih path di dalam folder proyek, simpan, lalu buffer dan
+    /// tabnya pindah ke path itu (bahasa dan highlight mengikuti nama berkas barunya).
+    fn save_untitled(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Task<bool> {
+        let Some(text) = self.text(cx) else { return Task::ready(false) };
+        let Some(root) = self.env.root.clone() else {
+            crate::overlay::toast_info("Open a folder to save new files.", window, cx);
+            return Task::ready(false);
+        };
+        let suggested = format!("{}.txt", self.file_name());
+        let chosen = cx.prompt_for_new_path(&root, Some(&suggested));
+        let (core, label, from) = (self.env.core.clone(), self.env.window.to_string(), self.path.clone());
+        cx.spawn_in(window, async move |this, cx| {
+            let Ok(Ok(Some(target))) = chosen.await else { return false };
+            let target = target.to_string_lossy().into_owned();
+            let (save_target, content) = (target.clone(), text.to_string());
+            let Ok(task) = cx.update(|_, cx| spawn_core(cx, async move { fs::fs_save(&core, &label, save_target, content, "UTF-8".into(), false, Eol::Lf).await })) else {
+                return false;
+            };
+            let result = task.await;
+            this.update_in(cx, |this, window, cx| match result {
+                Ok(stat) => {
+                    this.saved = text;
+                    this.mtime_ms = stat.mtime_ms;
+                    this.size = stat.size;
+                    this.dirty = this.primary().is_some_and(|primary| *primary.read(cx).text() != this.saved);
+                    this.move_to_saved_path(from, target, window, cx);
+                    true
+                }
+                Err(mut error) => {
+                    if error.code == "invalidPath" {
+                        error.message = "New files can only be saved inside the open folder.".into();
+                    }
+                    crate::overlay::show_error(&error, window, cx);
+                    false
+                }
+            })
+            .unwrap_or(false)
+        })
+    }
+
+    /// Memindahkan buffer berkas baru dan tabnya ke path tempat ia disimpan.
+    fn move_to_saved_path(&mut self, from: String, to: String, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(workbench) = self.env.workbench.upgrade() else { return };
+        // Buffer dan state editornya dipegang sampai tab baru menautkan diri ke buffer ini.
+        let held = (cx.entity(), self.primary());
+        window.defer(cx, move |window, cx| {
+            if let Some(registry) = super::buffers(workbench.read(cx)) {
+                registry.update(cx, |registry, cx| registry.rename(&from, &to, cx));
+            }
+            workbench.update(cx, |workbench, cx| {
+                workbench.update_tabs(
+                    |tab| {
+                        (tab.kind == "file" && tab.param_str("path") == Some(from.as_str())).then(|| {
+                            let mut next = crate::shell::file_tab(&to);
+                            next.preview = false;
+                            next
+                        })
+                    },
+                    window,
+                    cx,
+                );
+                workbench.broadcast(WorkbenchEvent::FileSaved(to.clone()), cx);
+            });
+            drop(held);
+        });
+    }
+
     /// Menanggapi perubahan berkas dari luar: buffer bersih dimuat ulang, buffer kotor ditandai konflik.
     pub fn check_external_change(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Task<ExternalChange> {
-        if self.status == BufferStatus::Loading {
+        if self.status == BufferStatus::Loading || self.is_untitled() {
             return Task::ready(ExternalChange::Unchanged);
         }
         let (core, label, path) = (self.env.core.clone(), self.env.window.to_string(), self.path.clone());
@@ -401,6 +499,14 @@ impl EventEmitter<BuffersEvent> for Buffers {}
 impl Buffers {
     pub fn new(env: Env) -> Self {
         Self { env, buffers: HashMap::new(), reveals: HashMap::new() }
+    }
+
+    /// Path untuk berkas baru berikutnya: `untitled:Untitled-N` dengan N terkecil yang belum terbuka.
+    pub fn next_untitled_path(&self) -> String {
+        (1..)
+            .map(|n| format!("{UNTITLED_PREFIX}Untitled-{n}"))
+            .find(|path| self.get(path).is_none())
+            .expect("selalu ada nomor yang belum dipakai")
     }
 
     pub fn get(&self, path: &str) -> Option<Entity<Buffer>> {

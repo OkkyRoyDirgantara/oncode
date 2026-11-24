@@ -61,10 +61,12 @@ impl FileView {
     pub fn new(path: &str, env: Env, buffers: Entity<Buffers>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let buffer = buffers.update(cx, |buffers, cx| buffers.open(path, window, cx));
         let settings = EditorSettings::default();
-        let language = language_for_path(path);
+        // Pengaturan efektif dibaca dari core: `Workbench` sedang dipinjam saat tab dibangun.
+        let extra_languages = env.core.effective_settings(&env.window).extensions.extra_languages;
+        let highlighter = language_for_path(path).highlighter_with(extra_languages);
         let state = cx.new(|cx| {
             EditorState::new(window, cx)
-                .language(language.highlighter)
+                .language(highlighter)
                 .line_number(settings.line_numbers)
                 .indent_guides(true)
                 .folding(true)
@@ -72,6 +74,8 @@ impl FileView {
                 .tab_size(TabSize { tab_size: settings.tab_size as usize, hard_tabs: !settings.insert_spaces })
         });
         buffer.update(cx, |buffer, cx| buffer.attach(&state, window, cx));
+        // Ctrl+klik/F12 tanpa language server; hub LSP menimpanya saat `editor_created` bila ada server.
+        super::symbols::attach(&state, &env, path, cx);
         buffers.update(cx, |buffers, cx| buffers.editor_created(buffer.clone(), state.clone(), cx));
 
         let mut subscriptions = vec![
