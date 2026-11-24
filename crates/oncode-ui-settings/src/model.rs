@@ -346,7 +346,7 @@ pub static FIELDS: [Field; 30] = [
         id: "editor.inlineBlame",
         section: SectionId::Editor,
         label: "Inline blame",
-        description: "Show who last changed the current line, and when, at the end of that line.",
+        description: "Show who last changed the current line, when, and the commit message, faded at the end of that line (like GitLens). Also in the menu Git → Toggle Inline Blame.",
         keywords: "git annotation author",
         kind: FieldKind::Checkbox(CheckboxSpec { get: |s| s.editor.inline_blame, set: |s, value| s.editor.inline_blame = value }),
     },

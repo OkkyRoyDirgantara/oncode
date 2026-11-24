@@ -16,7 +16,7 @@ pub struct EditorSettings {
     pub insert_spaces: bool,
     pub word_wrap: bool,
     pub line_numbers: bool,
-    /// Tampilkan anotasi blame di baris kursor.
+    /// Tampilkan blame baris kursor di ujung baris itu (inline blame, seperti GitLens).
     pub inline_blame: bool,
     /// Format berkas setiap kali disimpan (butuh ekstensi Formatters atau language server).
     pub format_on_save: bool,
@@ -31,7 +31,7 @@ impl Default for EditorSettings {
             insert_spaces: true,
             word_wrap: false,
             line_numbers: true,
-            inline_blame: false,
+            inline_blame: true,
             format_on_save: false,
         }
     }

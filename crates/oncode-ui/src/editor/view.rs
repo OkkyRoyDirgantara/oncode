@@ -1,5 +1,6 @@
 //! Tampilan tab berkas: editor kode di atas sebuah [`Buffer`].
 
+use std::cell::RefCell;
 use std::rc::Rc;
 
 use gpui_kit::component::button::Button;
@@ -7,8 +8,8 @@ use gpui_kit::component::input::{Editor, EditorState, InputEvent, Position, Rope
 use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::{h_flex, v_flex, ActiveTheme as _, Sizable as _};
 use gpui_kit::{
-    div, px, relative, App, AppContext as _, Context, Entity, FocusHandle, Focusable, Global, IntoElement, ParentElement as _, Render, SharedString, Styled as _, Subscription,
-    Task, Window,
+    canvas, div, font, point, px, relative, size, App, AppContext as _, Bounds, ContentMask, Context, Entity, EntityInputHandler as _, FocusHandle, Focusable, Global, Hsla,
+    IntoElement, ParentElement as _, Pixels, Point, Render, SharedString, Styled as _, Subscription, Task, TextAlign, TextRun, Window,
 };
 use oncode_core::settings::EditorSettings;
 
@@ -54,7 +55,46 @@ pub struct FileView {
     buffer: Entity<Buffer>,
     state: Entity<EditorState>,
     settings: EditorSettings,
+    /// Hint ujung baris yang tergambar di frame terakhir beserta letaknya (untuk uji).
+    painted_hint: Rc<RefCell<Option<(SharedString, Bounds<Pixels>)>>>,
     _subscriptions: Vec<Subscription>,
+}
+
+/// Letak ujung sebuah baris di layar, dari tata letak editor frame ini.
+struct LineEnd {
+    origin: Point<Pixels>,
+    line_height: Pixels,
+    /// Area teks editor yang terlihat; hint dipotong di sini.
+    clip: Bounds<Pixels>,
+}
+
+/// Ujung baris `row` (mulai dari 0) dalam koordinat jendela, atau `None` bila baris itu tidak
+/// terlihat. Dipanggil setelah prepaint editor, sehingga ikut posisi gulir frame yang sama.
+fn line_end(state: &mut EditorState, row: usize, window: &mut Window, cx: &mut Context<EditorState>) -> Option<LineEnd> {
+    if !state.visible_row_range()?.contains(&row) {
+        return None;
+    }
+    let line_height = state.line_height()?;
+    let text_bounds = state.text_bounds()?;
+    let input = state.input_bounds();
+    let text = state.text();
+    let start = text.line_start_offset(row);
+    let mut end = text.line_end_offset(row);
+    if end > start && text.char_at(end - 1) == Some('\r') {
+        end -= 1;
+    }
+    let end = text.offset_to_offset_utf16(end);
+    let start = text.offset_to_offset_utf16(start);
+    let line_start = state.bounds_for_range(start..start, text_bounds, window, cx)?;
+    let line_end = state.bounds_for_range(end..end, text_bounds, window, cx)?;
+    // Awal area teks (setelah gutter) tidak ikut bergulir mendatar.
+    let gutter = line_start.origin.x - text_bounds.origin.x;
+    let left = input.origin.x + gutter;
+    if line_end.origin.x < left {
+        return None;
+    }
+    let clip = Bounds::from_corners(point(left, input.origin.y), input.bottom_right());
+    Some(LineEnd { origin: line_end.origin, line_height, clip })
 }
 
 impl FileView {
@@ -85,11 +125,13 @@ impl FileView {
                     this.apply_reveal(window, cx);
                 }
             }),
-            cx.subscribe_in(&buffers, window, |this, _, event: &BuffersEvent, window, cx| {
-                if matches!(event, BuffersEvent::Reveal(path) if path == this.buffer.read(cx).path()) {
-                    this.apply_reveal(window, cx);
-                }
+            cx.subscribe_in(&buffers, window, |this, _, event: &BuffersEvent, window, cx| match event {
+                BuffersEvent::Reveal(path) if path == this.buffer.read(cx).path() => this.apply_reveal(window, cx),
+                BuffersEvent::LineHintsChanged => cx.notify(),
+                _ => {}
             }),
+            // Hint ujung baris mengikuti baris kursor.
+            cx.observe(&state, |_, _, cx| cx.notify()),
             // Mulai menyunting menjadikan tab pratinjau sebagai tab tetap.
             cx.subscribe_in(&state, window, |this, _, event: &InputEvent, window, cx| {
                 if matches!(event, InputEvent::Change) {
@@ -110,7 +152,7 @@ impl FileView {
             }));
         }
 
-        let mut this = Self { env, buffers, buffer, state, settings, _subscriptions: subscriptions };
+        let mut this = Self { env, buffers, buffer, state, settings, painted_hint: Rc::default(), _subscriptions: subscriptions };
         // `Workbench` sedang dipinjam saat tab dibangun; pengaturan dibaca setelahnya.
         cx.defer_in(window, |this, window, cx| {
             if let Some(workbench) = this.env.workbench.upgrade() {
@@ -172,6 +214,45 @@ impl FileView {
         });
     }
 
+    /// Hint ujung baris yang tergambar di frame terakhir dan batasnya di jendela.
+    pub fn painted_line_hint(&self) -> Option<(SharedString, Bounds<Pixels>)> {
+        self.painted_hint.borrow().clone()
+    }
+
+    /// Hint untuk baris kursor dari penyedia yang terpasang (mis. inline blame).
+    fn cursor_line_hint(&self, cx: &App) -> Option<(usize, SharedString)> {
+        let buffer = self.buffer.read(cx);
+        if buffer.is_large() {
+            return None;
+        }
+        let row = self.state.read(cx).cursor_position().line;
+        let hint = self.buffers.read(cx).line_hint(buffer.path(), row, cx)?;
+        Some((row as usize, hint))
+    }
+
+    /// Lapisan di atas editor yang menggambar hint di ujung baris kursor, sedikit berjarak dari teks.
+    fn line_hint_layer(&self, row: usize, text: SharedString, family: SharedString, font_size: Pixels, color: Hsla) -> impl IntoElement {
+        let state = self.state.clone();
+        let painted = self.painted_hint.clone();
+        canvas(
+            move |_, window, cx| state.update(cx, |state, cx| line_end(state, row, window, cx)),
+            move |_, end, window, cx| {
+                let Some(LineEnd { origin, line_height, clip }) = end else { return };
+                let run = TextRun { len: text.len(), font: font(family), color, background_color: None, underline: None, strikethrough: None };
+                let line = window.text_system().shape_line(text.clone(), font_size, &[run], None);
+                let origin = point(origin.x + font_size * 2.5, origin.y);
+                window.with_content_mask(Some(ContentMask { bounds: clip }), |window| {
+                    let _ = line.paint(origin, line_height, TextAlign::Left, None, window, cx);
+                });
+                *painted.borrow_mut() = Some((text, Bounds::new(origin, size(line.width, line_height))));
+            },
+        )
+        .absolute()
+        .top_0()
+        .left_0()
+        .size_full()
+    }
+
     /// Posisi kursor (baris dan kolom mulai dari 1) dan jumlah karakter terpilih.
     pub fn cursor_info(&self, cx: &App) -> (u32, u32, usize) {
         let state = self.state.read(cx);
@@ -220,7 +301,17 @@ impl Render for FileView {
                 }));
                 self.render_message(format!("Could not open {name}: {message}"), Some(retry), cx)
             }
-            BufferStatus::Ready => Editor::new(&self.state).readonly(read_only).bordered(false).p_0().h(relative(1.)).font_family(font).text_size(font_size).into_any_element(),
+            BufferStatus::Ready => {
+                *self.painted_hint.borrow_mut() = None;
+                let color = cx.theme().muted_foreground.opacity(0.6);
+                let hint = self.cursor_line_hint(cx).map(|(row, text)| self.line_hint_layer(row, text, font.clone(), font_size, color));
+                div()
+                    .relative()
+                    .size_full()
+                    .child(Editor::new(&self.state).readonly(read_only).bordered(false).p_0().h(relative(1.)).font_family(font).text_size(font_size))
+                    .children(hint)
+                    .into_any_element()
+            }
         };
 
         v_flex()

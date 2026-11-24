@@ -1,10 +1,11 @@
 //! Penanda perubahan di gutter editor berkas (dibandingkan dengan isi index) dan blame.
 //!
 //! Penanda dihitung ulang (dengan jeda) setiap kali berkas disunting atau keadaan repositori
-//! berubah. Blame ditampilkan untuk baris kursor di status bar, karena komponen editor tidak
-//! menyediakan anotasi per baris di gutter.
+//! berubah. Blame baris kursor ditampilkan di ujung baris itu (inline blame, seperti GitLens)
+//! lewat hint ujung baris editor, dan juga di status bar.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
 use std::time::Duration;
 
 use gpui_kit::component::input::{EditorState, GutterDecoration, GutterDecorationCollection};
@@ -12,14 +13,16 @@ use gpui_kit::component::{h_flex, ActiveTheme as _, Icon, Sizable as _};
 use gpui_kit::{div, App, AppContext as _, Context, Entity, EventEmitter, InteractiveElement as _, StatefulInteractiveElement as _, IntoElement, ParentElement as _, Render, Styled as _, Subscription, Task, TestSupportExt as _, WeakEntity, Window};
 use oncode_core::api::git as git_api;
 use oncode_git::{BlameRange, DiffSource};
-use oncode_ui::editor::{active_file, buffers, Buffer, BufferEvent, BuffersEvent};
+use oncode_ui::editor::{active_file, buffers, Buffer, BufferEvent, Buffers, BuffersEvent};
 use oncode_ui::{overlay, repos, spawn_core, Env, Lucide, ReposEvent, StatusAlign, StatusItem, Workbench, WorkbenchEvent};
 
-use crate::gutter::{blame_at, blame_label, blame_summary, gutter_ranges, repo_for_path, ChangeKind};
+use crate::gutter::{blame_at, blame_label, blame_summary, gutter_ranges, inline_blame_text, repo_for_path, ChangeKind};
 use crate::lines::LineDiff;
 
 /// Jeda sebelum penanda dihitung ulang setelah suntingan.
 const DEBOUNCE: Duration = Duration::from_millis(250);
+/// Jeda sebelum blame dimuat ulang setelah suntingan (selama itu inline blame disembunyikan).
+const BLAME_DEBOUNCE: Duration = Duration::from_millis(600);
 
 struct Tracked {
     buffer: WeakEntity<Buffer>,
@@ -40,9 +43,19 @@ pub enum MarkersEvent {
 /// Penanda perubahan dan blame untuk semua editor berkas satu jendela.
 pub struct ChangeMarkers {
     env: Env,
+    buffers: Option<WeakEntity<Buffers>>,
     files: HashMap<String, Tracked>,
     /// Blame per path untuk berkas yang blame-nya sedang ditampilkan.
     blame: HashMap<String, Vec<BlameRange>>,
+    /// Berkas yang disunting setelah blame-nya dimuat; nomor barisnya bisa sudah bergeser,
+    /// jadi blame-nya tidak ditampilkan sampai dimuat ulang.
+    stale_blame: HashSet<String>,
+    blame_tasks: HashMap<String, Task<()>>,
+    /// Email `user.email` per repositori, untuk menulis "You" di inline blame. `None` selama
+    /// masih dimuat (inline blame menunggu supaya tidak berganti dari nama ke "You").
+    identities: HashMap<String, Option<Option<String>>>,
+    /// Nilai terakhir `editor.inlineBlame`.
+    inline_blame: bool,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -58,15 +71,39 @@ impl ChangeMarkers {
                 }
             }
         })];
-        // `Workbench` sedang dibangun saat ini dipanggil, jadi registry buffer diberikan dari luar.
-        if let Some(buffers) = buffers {
-            subscriptions.push(cx.subscribe_in(&buffers, window, |this: &mut Self, _, event: &BuffersEvent, _, cx| {
+        // `Workbench` sedang dibangun saat ini dipanggil, jadi registry buffer diberikan dari luar
+        // dan pengaturan dibaca dari core.
+        if let Some(buffers) = &buffers {
+            subscriptions.push(cx.subscribe_in(buffers, window, |this: &mut Self, _, event: &BuffersEvent, _, cx| {
                 if let BuffersEvent::EditorCreated { buffer, state } = event {
                     this.attach(buffer.clone(), state.clone(), cx);
                 }
             }));
+            // Inline blame: hint di ujung baris kursor.
+            let markers = cx.weak_entity();
+            let provider: oncode_ui::editor::LineHintProvider = Rc::new(move |path, row, cx| markers.upgrade()?.read(cx).inline_hint(path, row));
+            buffers.update(cx, |buffers, cx| buffers.set_line_hint_provider("git.blame", provider, cx));
         }
-        Self { env, files: HashMap::new(), blame: HashMap::new(), _subscriptions: subscriptions }
+        if let Some(workbench) = env.workbench.upgrade() {
+            subscriptions.push(cx.subscribe(&workbench, |this: &mut Self, workbench, event: &WorkbenchEvent, cx| {
+                if matches!(event, WorkbenchEvent::SettingsChanged) {
+                    let on = workbench.read(cx).settings().editor.inline_blame;
+                    this.set_inline_blame(on, cx);
+                }
+            }));
+        }
+        let inline_blame = env.core.effective_settings(&env.window).editor.inline_blame;
+        Self {
+            env,
+            buffers: buffers.map(|buffers| buffers.downgrade()),
+            files: HashMap::new(),
+            blame: HashMap::new(),
+            stale_blame: HashSet::new(),
+            blame_tasks: HashMap::new(),
+            identities: HashMap::new(),
+            inline_blame,
+            _subscriptions: subscriptions,
+        }
     }
 
     fn attach(&mut self, buffer: Entity<Buffer>, state: Entity<EditorState>, cx: &mut Context<Self>) {
@@ -74,20 +111,33 @@ impl ChangeMarkers {
         let roots = repos(cx).read(cx).roots();
         let Some((root, relative)) = repo_for_path(&path, &roots) else { return };
         let collection = state.update(cx, |state, cx| state.create_gutter_decorations_collection(Vec::new(), cx));
+        if !self.identities.contains_key(&root) {
+            self.load_identity(root.clone(), cx);
+        }
         if !self.files.contains_key(&path) {
             let subscription = cx.subscribe(&buffer, |this: &mut Self, buffer, event: &BufferEvent, cx| {
-                if matches!(event, BufferEvent::Edited | BufferEvent::Loaded | BufferEvent::Saved) {
-                    let path = buffer.read(cx).path().to_string();
-                    this.schedule(&path, cx);
-                    if this.blame.contains_key(&path) && !matches!(event, BufferEvent::Edited) {
-                        this.load_blame(&path, cx);
+                let path = buffer.read(cx).path().to_string();
+                this.schedule(&path, cx);
+                if !this.blame.contains_key(&path) {
+                    return;
+                }
+                match event {
+                    // Nomor baris bisa bergeser: sembunyikan dulu, muat ulang setelah jeda.
+                    BufferEvent::Edited => {
+                        if this.stale_blame.insert(path.clone()) {
+                            this.refresh_hints(cx);
+                        }
+                        this.load_blame(&path, BLAME_DEBOUNCE, cx);
                     }
+                    BufferEvent::Loaded | BufferEvent::Saved => this.load_blame(&path, Duration::ZERO, cx),
                 }
             });
             let release = cx.observe_release(&buffer, |this: &mut Self, buffer, _| {
                 let path = buffer.path().to_string();
                 this.files.remove(&path);
                 this.blame.remove(&path);
+                this.stale_blame.remove(&path);
+                this.blame_tasks.remove(&path);
             });
             self._subscriptions.extend([subscription, release]);
             self.files.insert(
@@ -100,14 +150,30 @@ impl ChangeMarkers {
             tracked.collections.retain(|(state, _)| state.upgrade().is_some());
             tracked.collections.push((state.downgrade(), collection));
         }
-        if self.inline_blame(cx) {
-            self.load_blame(&path, cx);
+        if self.inline_blame && !self.blame.contains_key(&path) && !self.blame_tasks.contains_key(&path) {
+            self.load_blame(&path, Duration::ZERO, cx);
         }
         self.schedule(&path, cx);
     }
 
-    fn inline_blame(&self, cx: &App) -> bool {
-        self.env.workbench.upgrade().is_some_and(|w| w.read(cx).settings().editor.inline_blame)
+    /// Menerapkan `editor.inlineBlame`: menyala memuat blame semua berkas yang terbuka,
+    /// mati menyembunyikannya.
+    fn set_inline_blame(&mut self, on: bool, cx: &mut Context<Self>) {
+        if on == self.inline_blame {
+            return;
+        }
+        self.inline_blame = on;
+        if on {
+            let paths: Vec<String> = self.files.keys().filter(|path| !self.blame.contains_key(*path)).cloned().collect();
+            for path in paths {
+                self.load_blame(&path, Duration::ZERO, cx);
+            }
+        } else {
+            self.blame.clear();
+            self.stale_blame.clear();
+            self.blame_tasks.clear();
+            self.blame_changed(cx);
+        }
     }
 
     /// Memuat ulang isi index berkas ini lalu menghitung ulang penanda.
@@ -190,36 +256,111 @@ impl ChangeMarkers {
         self.blame.get(path).map(Vec::as_slice)
     }
 
+    /// Blame sebuah baris (mulai dari 1), kecuali blame berkas itu belum mengikuti suntingan terakhir.
+    pub fn line_blame(&self, path: &str, line: u32) -> Option<&BlameRange> {
+        if self.stale_blame.contains(path) {
+            return None;
+        }
+        blame_at(self.blame.get(path)?, line)
+    }
+
+    /// Teks inline blame untuk baris `row` (mulai dari 0).
+    pub fn inline_hint(&self, path: &str, row: u32) -> Option<gpui_kit::SharedString> {
+        let range = self.line_blame(path, row + 1)?;
+        let me = match self.files.get(path).and_then(|tracked| self.identities.get(&tracked.root)) {
+            Some(None) => return None,
+            Some(Some(email)) => email.as_deref(),
+            None => None,
+        };
+        Some(inline_blame_text(range, now(), me).into())
+    }
+
     /// Menyalakan atau mematikan blame berkas ini. Hasil `false` bila berkas bukan bagian repositori.
     pub fn toggle_blame(&mut self, path: &str, cx: &mut Context<Self>) -> bool {
         if !self.files.contains_key(path) {
             return false;
         }
-        if self.blame.remove(path).is_some() {
-            cx.emit(MarkersEvent::BlameChanged);
-            cx.notify();
+        if self.blame.contains_key(path) || self.blame_tasks.contains_key(path) {
+            self.blame.remove(path);
+            self.stale_blame.remove(path);
+            self.blame_tasks.remove(path);
+            self.blame_changed(cx);
         } else {
-            self.load_blame(path, cx);
+            self.load_blame(path, Duration::ZERO, cx);
         }
         true
     }
 
-    fn load_blame(&mut self, path: &str, cx: &mut Context<Self>) {
-        let Some(tracked) = self.files.get(path) else { return };
-        let contents = tracked.buffer.upgrade().and_then(|b| b.read(cx).text(cx)).map(|rope| rope.to_string());
-        let (core, root, relative, key) = (self.env.core.clone(), tracked.root.clone(), tracked.relative.clone(), path.to_string());
-        let task = spawn_core(cx, async move { git_api::git_blame(&core, root, relative, contents).await });
+    /// Memuat blame berkas ini (dengan isi buffer saat ini) setelah `delay`. Permintaan yang
+    /// lebih baru menggantikan yang masih menunggu.
+    fn load_blame(&mut self, path: &str, delay: Duration, cx: &mut Context<Self>) {
+        if !self.files.contains_key(path) {
+            return;
+        }
+        let key = path.to_string();
+        let task = cx.spawn({
+            let key = key.clone();
+            async move |this, cx| {
+                if !delay.is_zero() {
+                    cx.background_executor().timer(delay).await;
+                }
+                // Isi dibaca setelah jeda supaya ikut suntingan terakhir.
+                let Ok(Some(request)) = this.update(cx, |this, cx| {
+                    let tracked = this.files.get(&key)?;
+                    let contents = tracked.buffer.upgrade().and_then(|b| b.read(cx).text(cx)).map(|rope| rope.to_string());
+                    let (core, root, relative) = (this.env.core.clone(), tracked.root.clone(), tracked.relative.clone());
+                    Some(spawn_core(cx, async move { git_api::git_blame(&core, root, relative, contents).await }))
+                }) else {
+                    return;
+                };
+                let result = request.await;
+                let _ = this.update(cx, |this, cx| {
+                    this.blame_tasks.remove(&key);
+                    // Berkas untracked atau baru: blame kosong, tetap ditandai aktif.
+                    this.blame.insert(key.clone(), result.unwrap_or_default());
+                    this.stale_blame.remove(&key);
+                    this.blame_changed(cx);
+                });
+            }
+        });
+        self.blame_tasks.insert(key, task);
+    }
+
+    /// Email pengguna di repositori ini, untuk "You".
+    fn load_identity(&mut self, root: String, cx: &mut Context<Self>) {
+        self.identities.insert(root.clone(), None);
+        let core = self.env.core.clone();
+        let task = spawn_core(cx, {
+            let root = root.clone();
+            async move { git_api::git_identity(&core, root).await }
+        });
         cx.spawn(async move |this, cx| {
-            let result = task.await;
+            let email = task.await.ok().and_then(|identity| identity.email);
             let _ = this.update(cx, |this, cx| {
-                // Berkas untracked atau baru: blame kosong, tetap ditandai aktif.
-                this.blame.insert(key, result.unwrap_or_default());
-                cx.emit(MarkersEvent::BlameChanged);
-                cx.notify();
+                this.identities.insert(root, Some(email));
+                this.refresh_hints(cx);
             });
         })
         .detach();
     }
+
+    fn blame_changed(&mut self, cx: &mut Context<Self>) {
+        cx.emit(MarkersEvent::BlameChanged);
+        cx.notify();
+        self.refresh_hints(cx);
+    }
+
+    /// Meminta tampilan editor menggambar ulang inline blame.
+    fn refresh_hints(&self, cx: &mut Context<Self>) {
+        if let Some(buffers) = self.buffers.as_ref().and_then(WeakEntity::upgrade) {
+            buffers.update(cx, |buffers, cx| buffers.refresh_line_hints(cx));
+        }
+    }
+}
+
+/// Detik sejak epoch.
+fn now() -> f64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0.0, |d| d.as_secs_f64())
 }
 
 /// Item status bar: blame baris kursor pada berkas aktif yang blame-nya dinyalakan.
@@ -249,10 +390,9 @@ impl Render for BlameStatus {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let Some((view, buffer, _)) = self.workbench.upgrade().and_then(|w| active_file(w.read(cx), cx)) else { return div().into_any_element() };
         let path = buffer.read(cx).path().to_string();
-        let Some(ranges) = self.markers.read(cx).blame_for(&path) else { return div().into_any_element() };
         let (line, _, _) = view.read(cx).cursor_info(cx);
-        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0.0, |d| d.as_secs_f64());
-        let Some(range) = blame_at(ranges, line) else { return div().into_any_element() };
+        let now = now();
+        let Some(range) = self.markers.read(cx).line_blame(&path, line) else { return div().into_any_element() };
         let theme = cx.theme();
         let summary = blame_summary(range, now);
         h_flex()
@@ -303,6 +443,16 @@ pub(crate) fn setup(workbench: &mut Workbench, window: &mut Window, cx: &mut Con
             let weak = cx.weak_entity();
             move |_, cx| weak.upgrade().is_some_and(|w| active_file(w.read(cx), cx).is_some())
         }),
+    );
+    // Saklar global `editor.inlineBlame`; semua jendela mengikuti lewat `SettingsChanged`.
+    workbench.register_command(
+        oncode_ui::commands::Command::new("git.toggleInlineBlame", "Toggle Inline Blame", move |_, _, cx| {
+            let core = oncode_ui::core(cx);
+            let mut settings = core.user_settings();
+            settings.editor.inline_blame = !core.effective_settings(&env.window).editor.inline_blame;
+            spawn_core(cx, async move { oncode_core::api::app::settings_set(&core, settings).await }).detach();
+        })
+        .category("Git"),
     );
 }
 

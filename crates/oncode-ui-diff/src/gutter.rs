@@ -108,6 +108,46 @@ pub fn blame_label(range: &BlameRange, now: f64) -> String {
     }
 }
 
+/// Umur commit untuk inline blame, dengan satuan sampai menit ("3 hours ago").
+pub fn format_blame_age(seconds: f64, now: f64) -> String {
+    let elapsed = (now - seconds).max(0.0);
+    let ago = |count: i64, unit: &str| if count == 1 { format!("1 {unit} ago") } else { format!("{count} {unit}s ago") };
+    let days = (elapsed / 86_400.0).floor() as i64;
+    if elapsed < 60.0 {
+        "just now".into()
+    } else if elapsed < 3_600.0 {
+        ago((elapsed / 60.0) as i64, "minute")
+    } else if days < 1 {
+        ago((elapsed / 3_600.0) as i64, "hour")
+    } else if days < 30 {
+        ago(days, "day")
+    } else if days < 365 {
+        ago(days / 30, "month")
+    } else {
+        ago(days / 365, "year")
+    }
+}
+
+/// Panjang maksimal ringkasan commit di inline blame (karakter).
+const INLINE_SUMMARY_CHARS: usize = 50;
+
+/// Teks inline blame di ujung baris kursor, seperti GitLens:
+/// "Ana, 3 days ago • Ringkasan". Penulis dengan email `me` ditulis "You".
+pub fn inline_blame_text(range: &BlameRange, now: f64, me: Option<&str>) -> String {
+    if range.uncommitted {
+        return "You • Uncommitted changes".into();
+    }
+    let mine = me.is_some_and(|email| !email.is_empty() && email.eq_ignore_ascii_case(&range.author_email));
+    let author = if mine { "You" } else { range.author.as_str() };
+    let summary = range.summary.trim();
+    let summary = if summary.chars().count() > INLINE_SUMMARY_CHARS {
+        format!("{}…", summary.chars().take(INLINE_SUMMARY_CHARS - 1).collect::<String>().trim_end())
+    } else {
+        summary.to_string()
+    };
+    format!("{author}, {} • {summary}", format_blame_age(range.time, now))
+}
+
 /// Anotasi blame untuk baris kursor (status bar).
 pub fn blame_summary(range: &BlameRange, now: f64) -> String {
     if range.uncommitted {
@@ -200,5 +240,40 @@ mod tests {
         assert_eq!(blame_label(&ranges[0], 86_400.0 * 3.0), "Ana · 3 days ago");
         assert_eq!(blame_summary(&ranges[1], 0.0), "Budi, today • Ringkasan");
         assert_eq!(blame_label(&BlameRange { uncommitted: true, ..ranges[0].clone() }, 0.0), "Not committed yet");
+    }
+
+    #[test]
+    fn inline_blame_reads_like_gitlens() {
+        let now = 1_795_000_000.0;
+        let range = BlameRange {
+            oid: "a".repeat(40),
+            start_line: 1,
+            line_count: 1,
+            author: "Ana".into(),
+            author_email: "ana@contoh.id".into(),
+            time: now - 3.0 * 86_400.0,
+            summary: "  fix: crash saat ctrl+klik  ".into(),
+            uncommitted: false,
+        };
+        assert_eq!(inline_blame_text(&range, now, None), "Ana, 3 days ago • fix: crash saat ctrl+klik");
+        assert_eq!(inline_blame_text(&range, now, Some("ANA@contoh.id")), "You, 3 days ago • fix: crash saat ctrl+klik");
+        assert_eq!(inline_blame_text(&range, now, Some("")), "Ana, 3 days ago • fix: crash saat ctrl+klik");
+        assert_eq!(inline_blame_text(&BlameRange { uncommitted: true, ..range.clone() }, now, None), "You • Uncommitted changes");
+        let long = BlameRange { summary: "x".repeat(80), ..range };
+        let text = inline_blame_text(&long, now, None);
+        assert!(text.ends_with(&format!("{}…", "x".repeat(49))), "{text}");
+    }
+
+    #[test]
+    fn blame_ages_go_down_to_minutes() {
+        let now = 1_795_000_000.0;
+        assert_eq!(format_blame_age(now - 20.0, now), "just now");
+        assert_eq!(format_blame_age(now + 5.0, now), "just now");
+        assert_eq!(format_blame_age(now - 60.0, now), "1 minute ago");
+        assert_eq!(format_blame_age(now - 5.0 * 60.0, now), "5 minutes ago");
+        assert_eq!(format_blame_age(now - 3.5 * 3_600.0, now), "3 hours ago");
+        assert_eq!(format_blame_age(now - 1.2 * 86_400.0, now), "1 day ago");
+        assert_eq!(format_blame_age(now - 95.0 * 86_400.0, now), "3 months ago");
+        assert_eq!(format_blame_age(now - 800.0 * 86_400.0, now), "2 years ago");
     }
 }

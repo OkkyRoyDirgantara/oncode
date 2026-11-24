@@ -16,6 +16,7 @@ Rancangan lengkap ada di [docs/RANCANGAN.md](docs/RANCANGAN.md); panduan pengemb
 - **Interactive rebase** visual (pick, reword, edit, squash, fixup, drop, ubah urutan)
 - **Editor konflik tiga panel** (Current | Result | Incoming)
 - Stash, tag, cherry-pick, revert, reset, blame, riwayat berkas, reflog
+- **Inline blame** seperti GitLens: penulis, waktu, dan pesan commit baris kursor tampil samar di ujung baris itu (bisa dimatikan lewat Git → Toggle Inline Blame atau Settings → Editor)
 - Worktree dan submodule
 - Semua perintah Git yang dijalankan tercatat di panel **Git Output**
 - **Generate commit message** dengan AI (opsional): menulis pesan dari perubahan yang di-stage, mengikuti gaya commit repositori. Provider (Settings → AI): Claude Code CLI (login Claude Code, termasuk langganan Claude; tanpa API key), Anthropic API, atau endpoint kustom (OpenAI-compatible seperti OpenAI, OpenRouter, Groq, Ollama, LM Studio, atau gateway berformat Anthropic). Diff yang di-stage dikirim hanya saat tombolnya ditekan

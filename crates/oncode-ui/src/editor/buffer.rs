@@ -4,10 +4,11 @@
 //! isi semuanya tetap sama dengan meneruskan setiap suntingan ke state lain.
 
 use std::collections::HashMap;
+use std::rc::Rc;
 use std::time::Duration;
 
 use gpui_kit::component::input::{EditorState, InputEditsEvent, InputEvent, Rope, RopeExt as _};
-use gpui_kit::{App, AppContext as _, Context, Entity, EventEmitter, Subscription, Task, WeakEntity, Window};
+use gpui_kit::{App, AppContext as _, Context, Entity, EventEmitter, SharedString, Subscription, Task, WeakEntity, Window};
 use oncode_core::api::fs;
 use oncode_core::settings::AutoSave;
 use oncode_core::AppError;
@@ -485,20 +486,46 @@ pub enum BuffersEvent {
     EditorCreated { buffer: Entity<Buffer>, state: Entity<EditorState> },
     /// Ada posisi yang menunggu untuk path ini; diambil dengan [`Buffers::take_reveal`].
     Reveal(String),
+    /// Isi hint ujung baris berubah; tampilan editor menggambar ulang hint-nya.
+    LineHintsChanged,
 }
+
+/// Penyedia teks samar di ujung baris kursor (mis. inline blame), seperti dekorasi "after"
+/// di VS Code. Menerima path berkas dan baris (mulai dari 0); dipanggil saat render, jadi
+/// harus murah dan tidak boleh memperbarui entitas.
+pub type LineHintProvider = Rc<dyn Fn(&str, u32, &App) -> Option<SharedString>>;
 
 /// Registry buffer milik satu jendela. Buffer dilepas saat tidak ada lagi tab yang memegangnya.
 pub struct Buffers {
     env: Env,
     buffers: HashMap<String, WeakEntity<Buffer>>,
     reveals: HashMap<String, Reveal>,
+    line_hints: Vec<(SharedString, LineHintProvider)>,
 }
 
 impl EventEmitter<BuffersEvent> for Buffers {}
 
 impl Buffers {
     pub fn new(env: Env) -> Self {
-        Self { env, buffers: HashMap::new(), reveals: HashMap::new() }
+        Self { env, buffers: HashMap::new(), reveals: HashMap::new(), line_hints: Vec::new() }
+    }
+
+    /// Memasang penyedia hint ujung baris; id yang sama menggantikan yang lama.
+    pub fn set_line_hint_provider(&mut self, id: impl Into<SharedString>, provider: LineHintProvider, cx: &mut Context<Self>) {
+        let id = id.into();
+        self.line_hints.retain(|(existing, _)| *existing != id);
+        self.line_hints.push((id, provider));
+        cx.emit(BuffersEvent::LineHintsChanged);
+    }
+
+    /// Hint untuk sebuah baris (mulai dari 0): dari penyedia pertama yang punya isi.
+    pub fn line_hint(&self, path: &str, row: u32, cx: &App) -> Option<SharedString> {
+        self.line_hints.iter().find_map(|(_, provider)| provider(path, row, cx))
+    }
+
+    /// Dipanggil penyedia saat isi hint-nya berubah.
+    pub fn refresh_line_hints(&mut self, cx: &mut Context<Self>) {
+        cx.emit(BuffersEvent::LineHintsChanged);
     }
 
     /// Path untuk berkas baru berikutnya: `untitled:Untitled-N` dengan N terkecil yang belum terbuka.
