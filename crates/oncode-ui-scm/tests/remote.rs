@@ -122,11 +122,14 @@ async fn stash_and_pop_then_create_a_branch(cx: &mut TestAppContext) {
     assert!(git(&project, &["stash", "list"]).contains("simpan dulu"));
 
     assert!(window.run_command(cx, "git.stashPop"));
-    // `git stash pop` memulihkan berkas dulu, baru menghapus entri stash: tunggu keduanya.
+    // `git stash pop` memulihkan berkas dulu, baru menghapus entri stash: tunggu keduanya. Selama
+    // pop berjalan `git stash list` bisa gagal sesaat ("bad revision 'refs/stash'"), jadi
+    // kegagalan dianggap belum selesai, bukan galat.
+    let stash_empty = || {
+        std::process::Command::new("git").current_dir(&project).args(["stash", "list"]).output().is_ok_and(|out| out.status.success() && out.stdout.trim_ascii().is_empty())
+    };
     window
-        .wait_until(cx, "stash dikembalikan dan dihapus", |_, _| {
-            std::fs::read_to_string(project.join("a.txt")).is_ok_and(|t| t == "diubah\n") && git(&project, &["stash", "list"]).trim().is_empty()
-        })
+        .wait_until(cx, "stash dikembalikan dan dihapus", |_, _| std::fs::read_to_string(project.join("a.txt")).is_ok_and(|t| t == "diubah\n") && stash_empty())
         .await;
 
     assert!(window.run_command(cx, "git.createBranch"));
