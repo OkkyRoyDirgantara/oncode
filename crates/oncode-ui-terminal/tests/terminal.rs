@@ -354,3 +354,44 @@ async fn closing_an_editor_terminal_kills_it_and_split_editor_opens_a_new_one(cx
 fn panel_count(panel: &Entity<TerminalPanel>, cx: &mut TestAppContext) -> usize {
     cx.update(|cx| panel.read(cx).sessions().len())
 }
+
+// ----- Font dan tampilan -----
+
+#[gpui_kit::test]
+async fn font_settings_apply_to_open_terminals_and_line_drawing_renders(cx: &mut TestAppContext) {
+    let app = TestApp::new(cx);
+    cx.update(oncode_ui_terminal::init);
+    let (window, workbench, panel) = open_with_terminal(&app, cx).await;
+    let session = cx.update(|cx| panel.read(cx).active_session().unwrap().clone());
+    window.update(cx, |window, cx| window.render_frame(cx));
+    let font_size = cx.update(|cx| workbench.read(cx).settings().editor.font_size) as f32;
+    let (_, height) = cx.update(|cx| session.read(cx).cell_size()).expect("sudah digambar");
+    assert!((f32::from(height) - font_size * 1.2).abs() <= 0.5, "tinggi baris bawaan 120%: {height:?}");
+    cx.run_until_parked();
+    let rows_before = cx.update(|cx| session.read(cx).grid_size().1);
+
+    // Pengaturan baru berlaku untuk terminal yang sudah terbuka. Font yang tidak terpasang tidak
+    // dipakai (sebelumnya terminal pindah ke font itu setelah pengaturan berubah).
+    let mut settings = app.core.user_settings();
+    settings.terminal.line_height = Some(150);
+    settings.terminal.font_family = Some("Font Yang Tidak Terpasang".into());
+    let core = app.core.clone();
+    app.runtime.block_on(async move { oncode_core::api::app::settings_set(&core, settings).await }).unwrap();
+    window.wait_until(cx, "pengaturan baru terbaca", |_, cx| workbench.read(cx).settings().terminal.line_height == Some(150)).await;
+    window.update(cx, |window, cx| window.render_frame(cx));
+    let (_, height) = cx.update(|cx| session.read(cx).cell_size()).unwrap();
+    assert!((f32::from(height) - font_size * 1.5).abs() <= 0.5, "tinggi baris 150%: {height:?}");
+    // Jumlah baris grid ikut menyesuaikan walau ukuran panel tidak berubah.
+    window.wait_until(cx, "grid disesuaikan", |_, cx| session.read(cx).grid_size().1 < rows_before).await;
+    assert_ne!(cx.update(|cx| session.read(cx).font_family().to_string()), "Font Yang Tidak Terpasang");
+
+    // Garis kotak, blok, dan pemisah powerline digambar sebagai bentuk tanpa galat.
+    window.update(cx, |window, cx| {
+        window.input("echo ╭─┬─╮ ║ ▌█▒ \u{E0B0}\u{E0B4}", cx);
+        window.render_frame(cx);
+    });
+    if cfg!(unix) {
+        window.wait_until(cx, "karakter garis tampil", |_, cx| session.read(cx).text().contains("╭─┬─╮")).await;
+    }
+    window.update(cx, |window, cx| window.render_frame(cx));
+}

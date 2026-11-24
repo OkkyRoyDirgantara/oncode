@@ -206,6 +206,14 @@ fn validate_client_id(text: &str) -> Option<&'static str> {
     None
 }
 
+/// Daftar font yang boleh dikosongkan (kosong = ikut font editor).
+fn validate_optional_font_family(text: &str) -> Option<&'static str> {
+    if text.trim().is_empty() {
+        return None;
+    }
+    validate_font_family(text)
+}
+
 fn validate_font_family(text: &str) -> Option<&'static str> {
     if text.trim().is_empty() {
         return Some("Enter at least one font name");
@@ -271,12 +279,12 @@ fn validate_custom_model(text: &str) -> Option<&'static str> {
     None
 }
 
-pub static FIELDS: [Field; 30] = [
+pub static FIELDS: [Field; 32] = [
     Field {
         id: "editor.fontFamily",
         section: SectionId::Editor,
         label: "Font family",
-        description: "Comma-separated font list for the editor and terminal; the first installed font is used.",
+        description: "Comma-separated font list for the editor (and the terminal, unless it has its own); the first installed font is used.",
         keywords: "typeface monospace",
         kind: FieldKind::Text(TextSpec {
             placeholder: "",
@@ -522,6 +530,20 @@ pub static FIELDS: [Field; 30] = [
         }),
     },
     Field {
+        id: "terminal.fontFamily",
+        section: SectionId::Terminal,
+        label: "Font family",
+        description: "Comma-separated font list for the terminal; the first installed font is used. Leave empty to use the editor font.",
+        keywords: "typeface monospace nerd powerline",
+        kind: FieldKind::Text(TextSpec {
+            placeholder: "Editor font",
+            monospace: true,
+            get: |s| s.terminal.font_family.clone().unwrap_or_default(),
+            validate: validate_optional_font_family,
+            set: |s, text| s.terminal.font_family = nullable(text),
+        }),
+    },
+    Field {
         id: "terminal.fontSize",
         section: SectionId::Terminal,
         label: "Font size",
@@ -535,6 +557,22 @@ pub static FIELDS: [Field; 30] = [
             unit: "px",
             get: |s| s.terminal.font_size,
             set: |s, value| s.terminal.font_size = value,
+        }),
+    },
+    Field {
+        id: "terminal.lineHeight",
+        section: SectionId::Terminal,
+        label: "Line height",
+        description: "Height of a terminal row as a percentage of the font size. Leave empty for 120%.",
+        keywords: "spacing leading",
+        kind: FieldKind::Number(NumberSpec {
+            min: 100,
+            max: 200,
+            optional: true,
+            placeholder: "120",
+            unit: "%",
+            get: |s| s.terminal.line_height,
+            set: |s, value| s.terminal.line_height = value,
         }),
     },
     Field {
@@ -954,7 +992,9 @@ mod tests {
                 "git.pullStrategy",
                 "git.confirmForcePush",
                 "terminal.shell",
+                "terminal.fontFamily",
                 "terminal.fontSize",
+                "terminal.lineHeight",
                 "lsp.enabled",
                 "forge.githubClientId",
                 "forge.gitlabClientId",
@@ -1040,7 +1080,7 @@ mod tests {
 
     #[test]
     fn nullable_text_fields_store_null_and_trim() {
-        for id in ["git.path", "terminal.shell", "forge.githubClientId", "forge.gitlabClientId"] {
+        for id in ["git.path", "terminal.shell", "terminal.fontFamily", "forge.githubClientId", "forge.gitlabClientId"] {
             let spec = text(id);
             let read = |input: &str| {
                 let mut settings = defaults();
@@ -1172,8 +1212,8 @@ mod tests {
         assert!(matches_query("font size", &["Font size"]));
         assert!(!matches_query("font zzz", &["Font size"]));
         let ids = |query: &str| FIELDS.iter().filter(|f| field_matches(f, query)).map(|f| f.id).collect::<Vec<_>>();
-        assert_eq!(ids("font size"), ["editor.fontSize", "terminal.fontSize"]);
-        assert_eq!(ids("TERMINAL"), ["editor.fontFamily", "terminal.shell", "terminal.fontSize"]);
+        assert_eq!(ids("font size"), ["editor.fontSize", "terminal.fontSize", "terminal.lineHeight"]);
+        assert_eq!(ids("TERMINAL"), ["editor.fontFamily", "terminal.shell", "terminal.fontFamily", "terminal.fontSize", "terminal.lineHeight"]);
         assert_eq!(ids("rebase"), ["git.pullStrategy"]);
         assert_eq!(ids("git.path"), ["git.path"]);
         assert_eq!(ids("accounts"), ["forge.githubClientId", "forge.gitlabClientId"]);

@@ -28,7 +28,7 @@ Rancangan lengkap ada di [docs/RANCANGAN.md](docs/RANCANGAN.md); panduan pengemb
 - Highlight sintaks (tree-sitter) termasuk Kotlin, Dart/Flutter, C#, PHP, Lua, Swift, GraphQL; cari/ganti, multi-kursor, lipat kode
 - Pencarian dan penggantian teks di seluruh proyek (menghormati `.gitignore`)
 - Deteksi encoding dan akhir baris, deteksi perubahan dari luar, pemulihan tab saat folder dibuka lagi
-- Terminal terintegrasi, bisa lebih dari satu sesi: split berdampingan di panel (`Cmd+\` di macOS, `Ctrl+Shift+5` di Linux/Windows), terminal sebagai tab di area editor (bisa di samping kode), dan seret-lepas terminal antara daftar panel dan area editor
+- Terminal terintegrasi, bisa lebih dari satu sesi: split berdampingan di panel (`Cmd+\` di macOS, `Ctrl+Shift+5` di Linux/Windows), terminal sebagai tab di area editor (bisa di samping kode), dan seret-lepas terminal antara daftar panel dan area editor. Digambar per sel: kolom tetap lurus, garis kotak dan prompt powerline menyambung, tanpa ligatur; font dan tinggi baris terminal bisa diatur di Settings → Terminal
 - LSP: completion, hover, diagnostics, go to definition, references, rename, format (language server dipasang sendiri)
 
 **Extensions** (bawaan, masing-masing bisa dimatikan di Settings → Extensions)

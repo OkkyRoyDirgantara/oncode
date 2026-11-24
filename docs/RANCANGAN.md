@@ -434,7 +434,8 @@ sequenceDiagram
 ```
 
 - `alacritty_terminal` menangani emulasi: urutan escape, grid, scrollback, seleksi.
-- Tampilannya elemen GPUI khusus yang menggambar sel teks dan kursor dari grid.
+- Tampilannya digambar per sel di sebuah `canvas` (`grid.rs`, `paint.rs`): latar setinggi baris penuh, tiap potongan teks diletakkan di kolomnya dengan lebar huruf dipaksa selebar sel (huruf dari font cadangan tidak menggeser kolom), dan ligatur dimatikan. Garis kotak, blok, dan pemisah powerline digambar sebagai bentuk (`glyphs.rs`) agar menyambung antar baris berapa pun tinggi barisnya, seperti `customGlyphs` di xterm.js. Font dan tinggi baris terminal bisa diatur sendiri (`terminal.fontFamily`, `terminal.lineHeight`).
+- Terminal bisa dibelah berdampingan di panel dan dipindah ke area editor sebagai tab; panel memiliki semua terminal jendela itu dan mematikan yang tidak lagi ada di mana pun (`panel.rs`).
 - PTY, ukuran, dan kendali aliran memakai `oncode-terminal` yang sudah ada.
 - Tombol aplikasi (palet, pintasan panel) tetap sampai ke aplikasi; sisanya ke shell.
 - Pencarian di keluaran dan tautan yang bisa diklik, yang dulu disediakan addon xterm.js, dibuat sendiri di atas grid.

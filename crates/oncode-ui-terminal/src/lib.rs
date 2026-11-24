@@ -3,10 +3,14 @@
 
 pub mod emulator;
 pub mod flow;
+pub mod font;
+pub mod glyphs;
+pub mod grid;
 pub mod keys;
 pub mod layout;
 pub mod links;
 pub mod mouse;
+pub mod paint;
 pub mod palette;
 pub mod panel;
 pub mod view;

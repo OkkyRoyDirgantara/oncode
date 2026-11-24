@@ -1,30 +1,29 @@
 //! Tampilan satu sesi terminal (PTY + emulator). Sesi bisa tampil di panel (lihat `panel.rs`)
 //! atau sebagai tab di area editor.
 //!
-//! Setiap baris layar digambar sebagai teks bergaya (`StyledText`) dengan font monospace, sehingga
-//! kolom tetap sejajar. Ukuran grid dihitung dari lebar dan tinggi area yang tersedia.
+//! Layar digambar per sel di sebuah `canvas` (lihat `grid.rs` dan `paint.rs`): latar setinggi
+//! baris penuh, huruf ditaruh di kolomnya masing-masing, dan karakter garis/blok/powerline
+//! digambar sebagai bentuk. Ukuran grid dihitung dari lebar dan tinggi area yang tersedia.
 
 use std::cell::Cell as StdCell;
 use std::collections::HashSet;
-use std::ops::Range;
 use std::rc::Rc;
 
 use alacritty_terminal::event::Event as TermEmuEvent;
-use alacritty_terminal::grid::{Dimensions as _, Scroll};
+use alacritty_terminal::grid::Scroll;
 use alacritty_terminal::index::{Column, Line, Point as GridPoint, Side};
 use alacritty_terminal::selection::SelectionType;
-use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::term::TermMode;
-use alacritty_terminal::vte::ansi::CursorShape;
 use gpui_kit::component::button::Button;
 use gpui_kit::component::{h_flex, v_flex, ActiveTheme as _, Sizable as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
-    canvas, div, px, relative, App, Bounds, ClipboardItem, Context, EventEmitter, FocusHandle, Focusable, FontStyle, FontWeight, HighlightStyle,
-    InteractiveElement as _, IntoElement, KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, ParentElement as _, Pixels, Render, ScrollEvent,
-    SharedString, StrikethroughStyle, Styled as _, StyledText, Subscription, Task, TestSupportExt as _, UnderlineStyle, WeakEntity, Window,
+    canvas, div, px, relative, App, Bounds, ClipboardItem, Context, EventEmitter, FocusHandle, Focusable, Font, InteractiveElement as _, IntoElement, KeyDownEvent,
+    MouseButton, MouseDownEvent, MouseMoveEvent, ParentElement as _, Pixels, Render, ScrollEvent, SharedString, Styled as _, Subscription, Task,
+    TestSupportExt as _, WeakEntity, Window,
 };
 use oncode_core::api::term::{self, TermEvent};
+use oncode_core::Settings;
 use oncode_ui::keys::KeyPress;
 use oncode_ui::overlay::{self, TextPrompt};
 use oncode_ui::{spawn_core, Env};
@@ -34,19 +33,16 @@ use crate::emulator::{Emulator, GridSize};
 use crate::keys::{self, KeyAction, KeyModes, ScrollKey};
 use crate::layout::SessionId;
 use crate::mouse::{self, MouseAction, MouseEncoding, ReportModifiers, WheelTarget};
-use crate::palette::{cell_style, to_hsla, Palette};
+use crate::paint::{self, paint_frame, CellMetrics};
+use crate::palette::{to_hsla, Palette};
+use crate::{font, grid};
 
 const IS_MAC: bool = cfg!(target_os = "macos");
 
 /// Konteks keymap sesi terminal; dipakai juga oleh binding di `init` (lihat `lib.rs`).
 pub(crate) const KEY_CONTEXT: &str = "Terminal";
 
-/// Ukuran sel dan baris untuk font terminal saat ini.
-#[derive(Debug, Clone, Copy, PartialEq)]
-struct Metrics {
-    cell_width: Pixels,
-    line_height: Pixels,
-}
+type Metrics = CellMetrics;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SessionEvent {
@@ -73,13 +69,18 @@ pub struct TerminalSession {
     metrics: Option<Metrics>,
     /// Ukuran area terakhir yang diukur, untuk menghitung ulang grid.
     bounds: Rc<StdCell<Option<Bounds<Pixels>>>>,
+    /// Ukuran sel saat grid terakhir disesuaikan; font atau tinggi baris yang berubah juga
+    /// mengubah jumlah baris dan kolom, walau ukuran area tetap.
+    fitted: Rc<StdCell<Option<Metrics>>>,
     /// Sisa gulir roda (piksel) yang belum genap satu baris.
     scroll_remainder: f32,
     selecting: bool,
     /// Ibu jari scrollbar sedang diseret.
     scrollbar_drag: bool,
-    font_family: SharedString,
+    font: Font,
     font_size: Pixels,
+    /// Tinggi baris sebagai kelipatan ukuran font.
+    line_height: f32,
     _reader: Task<()>,
     _subscriptions: Vec<Subscription>,
 }
@@ -115,7 +116,7 @@ impl TerminalSession {
             |press, window, cx| keys::classify_key(press, IS_MAC, &app_bindings(window, cx)) != KeyAction::App,
             cx,
         );
-        let (font_family, font_size) = terminal_font(&env, cx);
+        let (font, font_size, line_height) = terminal_font(&env.core.effective_settings(&env.window), cx);
         let mut this = Self {
             env,
             session_id,
@@ -128,11 +129,13 @@ impl TerminalSession {
             focus_handle,
             metrics: None,
             bounds: Rc::new(StdCell::new(None)),
+            fitted: Rc::new(StdCell::new(None)),
             scroll_remainder: 0.,
             selecting: false,
             scrollbar_drag: false,
-            font_family,
+            font,
             font_size,
+            line_height,
             _reader: Task::ready(()),
             _subscriptions: Vec::new(),
         };
@@ -141,15 +144,13 @@ impl TerminalSession {
         if let Some(workbench) = this.env.workbench.upgrade() {
             this._subscriptions.push(cx.subscribe_in(&workbench, window, |this, workbench, event: &oncode_ui::WorkbenchEvent, _, cx| {
                 if matches!(event, oncode_ui::WorkbenchEvent::SettingsChanged) {
-                    let settings = workbench.read(cx).settings();
-                    let family = family_from_setting(&settings.editor.font_family);
-                    let size = px(settings.terminal.font_size.unwrap_or(settings.editor.font_size).clamp(8, 40) as f32);
-                    if let Some(family) = family {
-                        this.font_family = family;
+                    // Aturan yang sama dengan saat terminal dibuat (font yang tidak terpasang dilewati).
+                    let (font, font_size, line_height) = terminal_font(workbench.read(cx).settings(), cx);
+                    if (&font, font_size, line_height) != (&this.font, this.font_size, this.line_height) {
+                        (this.font, this.font_size, this.line_height) = (font, font_size, line_height);
+                        this.metrics = None;
+                        cx.notify();
                     }
-                    this.font_size = size;
-                    this.metrics = None;
-                    cx.notify();
                 }
             }));
         }
@@ -159,6 +160,22 @@ impl TerminalSession {
 
     pub fn title(&self) -> &SharedString {
         &self.title
+    }
+
+    /// Lebar sel dan tinggi baris saat ini; `None` sebelum terminal pertama kali digambar.
+    pub fn cell_size(&self) -> Option<(Pixels, Pixels)> {
+        self.metrics.map(|metrics| (metrics.cell_width, metrics.line_height))
+    }
+
+    /// Jumlah kolom dan baris grid.
+    pub fn grid_size(&self) -> (usize, usize) {
+        let size = self.emulator.size();
+        (size.cols, size.rows)
+    }
+
+    /// Keluarga font yang dipakai (sudah dipastikan terpasang, atau font monospace tema).
+    pub fn font_family(&self) -> &SharedString {
+        &self.font.family
     }
 
     /// Id sesi ini (lihat [`SessionId`]); bukan id PTY.
@@ -513,13 +530,14 @@ impl TerminalSession {
     // ----- Tata letak -----
 
     fn measure(&mut self, window: &mut Window) -> Metrics {
-        if let Some(metrics) = self.metrics {
+        let scale = window.scale_factor();
+        if let Some(metrics) = self.metrics.filter(|metrics| metrics.scale == scale) {
             return metrics;
         }
-        let font = gpui_kit::font(self.font_family.clone());
-        let font_id = window.text_system().resolve_font(&font);
-        let cell_width = window.text_system().advance(font_id, self.font_size, 'm').map(|size| size.width).unwrap_or(self.font_size * 0.6);
-        let metrics = Metrics { cell_width, line_height: (self.font_size * 1.3).round() };
+        let font_id = window.text_system().resolve_font(&self.font);
+        let advance = window.text_system().advance(font_id, self.font_size, 'm').map(|size| size.width).unwrap_or(self.font_size * 0.6);
+        let (width, height) = font::cell_size(f32::from(advance), f32::from(self.font_size), self.line_height, scale);
+        let metrics = Metrics { cell_width: px(width), line_height: px(height), line: font::line_thickness(f32::from(self.font_size), scale), scale };
         self.metrics = Some(metrics);
         metrics
     }
@@ -540,67 +558,6 @@ impl TerminalSession {
         }
         cx.notify();
     }
-
-    fn render_lines(&self, palette: &Palette, focused: bool) -> Vec<(String, Vec<(Range<usize>, HighlightStyle)>)> {
-        let term = self.emulator.term();
-        let content = term.renderable_content();
-        let offset = content.display_offset as i32;
-        let rows = term.screen_lines();
-        let colors = content.colors;
-        let selection = content.selection;
-        let cursor = content.cursor;
-        let show_cursor = cursor.shape != CursorShape::Hidden && self.exited.is_none();
-        let (selection_rgb, selection_alpha) = palette.selection;
-        let selection_bg = to_hsla(selection_rgb).opacity(selection_alpha);
-
-        let mut lines: Vec<(String, Vec<(Range<usize>, HighlightStyle)>)> = (0..rows).map(|_| (String::new(), Vec::new())).collect();
-        for indexed in content.display_iter {
-            let row = indexed.point.line.0 + offset;
-            if row < 0 || row as usize >= rows {
-                continue;
-            }
-            let cell = indexed.cell;
-            if cell.flags.intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER) {
-                continue;
-            }
-            let style = cell_style(cell, palette, colors);
-            let (line, runs) = &mut lines[row as usize];
-            let start = line.len();
-            line.push(if cell.c == '\0' { ' ' } else { cell.c });
-            line.extend(cell.zerowidth().into_iter().flatten());
-            let end = line.len();
-
-            let mut highlight = HighlightStyle { color: Some(to_hsla(style.fg)), ..Default::default() };
-            if let Some(bg) = style.bg {
-                highlight.background_color = Some(to_hsla(bg));
-            }
-            if style.bold {
-                highlight.font_weight = Some(FontWeight::BOLD);
-            }
-            if style.italic {
-                highlight.font_style = Some(FontStyle::Italic);
-            }
-            if style.underline {
-                highlight.underline = Some(UnderlineStyle { thickness: px(1.), ..Default::default() });
-            }
-            if style.strikethrough {
-                highlight.strikethrough = Some(StrikethroughStyle { thickness: px(1.), ..Default::default() });
-            }
-            if selection.is_some_and(|range| range.contains(indexed.point)) {
-                highlight.background_color = Some(selection_bg);
-            }
-            if show_cursor && focused && cursor.shape == CursorShape::Block && indexed.point == cursor.point {
-                highlight.background_color = Some(to_hsla(palette.cursor));
-                highlight.color = Some(to_hsla(palette.cursor_text));
-            }
-            // Sel bergaya sama digabung menjadi satu potongan.
-            match runs.last_mut() {
-                Some((range, previous)) if range.end == start && *previous == highlight => range.end = end,
-                _ => runs.push((start..end, highlight)),
-            }
-        }
-        lines
-    }
 }
 
 impl Render for TerminalSession {
@@ -609,30 +566,11 @@ impl Render for TerminalSession {
         let palette = Palette::from_theme(cx.theme());
         let focused = self.focus_handle.is_focused(window);
         let background = to_hsla(palette.background);
-        let lines = self.render_lines(&palette, focused);
-
-        // Kursor selain blok-fokus digambar sebagai lapisan di atas teks.
-        let cursor_overlay = {
-            let content = self.emulator.term().renderable_content();
-            let cursor = content.cursor;
-            let row = cursor.point.line.0 + content.display_offset as i32;
-            let visible = cursor.shape != CursorShape::Hidden && self.exited.is_none() && row >= 0 && (row as usize) < self.emulator.size().rows;
-            visible.then(|| {
-                let left = metrics.cell_width * cursor.point.column.0 as f32;
-                let top = metrics.line_height * row as f32;
-                let color = to_hsla(palette.cursor);
-                let base = div().absolute().left(left).top(top);
-                match (cursor.shape, focused) {
-                    (CursorShape::Block, true) => None,
-                    (CursorShape::Beam, _) => Some(base.w(px(2.)).h(metrics.line_height).bg(color)),
-                    (CursorShape::Underline, _) => Some(base.top(top + metrics.line_height - px(2.)).w(metrics.cell_width).h(px(2.)).bg(color)),
-                    _ => Some(base.w(metrics.cell_width).h(metrics.line_height).border_1().border_color(color)),
-                }
-            })
-            .flatten()
-        };
+        let frame = grid::build(self.emulator.term(), &palette, focused, self.exited.is_none());
+        let (font, font_size) = (self.font.clone(), self.font_size);
 
         let bounds_cell = self.bounds.clone();
+        let fitted = self.fitted.clone();
         let entity: WeakEntity<Self> = cx.weak_entity();
         let (rows, history, offset) = (self.emulator.size().rows, self.emulator.history_size(), self.emulator.display_offset());
         let thumb = cx.theme().muted_foreground.opacity(if offset > 0 { 0.55 } else { 0.3 });
@@ -655,9 +593,6 @@ impl Render for TerminalSession {
             .pt_1()
             .bg(background)
             .text_color(to_hsla(palette.foreground))
-            .font_family(self.font_family.clone())
-            .text_size(self.font_size)
-            .line_height(metrics.line_height)
             .track_focus(&self.focus_handle)
             .key_context(KEY_CONTEXT)
             .on_key_down(cx.listener(Self::on_key_down))
@@ -676,11 +611,13 @@ impl Render for TerminalSession {
                     .size_full()
                     .relative()
                     .child(
-                        // Mengukur area teks setelah tata letak; perubahan ukuran menghitung ulang grid.
+                        // Mengukur area teks setelah tata letak (perubahan ukuran menghitung ulang
+                        // grid), lalu menggambar isi layar per sel.
                         canvas(
                             move |bounds, window, cx| {
-                                let changed = bounds_cell.get().map(|b| b.size) != Some(bounds.size);
+                                let changed = bounds_cell.get().map(|b| b.size) != Some(bounds.size) || fitted.get() != Some(metrics);
                                 bounds_cell.set(Some(bounds));
+                                fitted.set(Some(metrics));
                                 if changed {
                                     let entity = entity.clone();
                                     window.defer(cx, move |_, cx| {
@@ -688,13 +625,11 @@ impl Render for TerminalSession {
                                     });
                                 }
                             },
-                            |_, _, _, _| {},
+                            move |bounds, _, window, cx| paint_frame(&frame, bounds.origin, metrics, &font, font_size, &palette, window, cx),
                         )
                         .absolute()
                         .size_full(),
-                    )
-                    .children(lines.into_iter().map(|(text, runs)| div().h(metrics.line_height).whitespace_nowrap().child(StyledText::new(text).with_highlights(runs))))
-                    .children(cursor_overlay),
+                    ),
             )
             .when(history > 0, |el| {
                 // Scrollbar riwayat: klik untuk melompat, seret ibu jarinya untuk menggulir.
@@ -757,26 +692,10 @@ impl Render for TerminalSession {
     }
 }
 
-fn family_from_setting(setting: &str) -> Option<SharedString> {
-    setting
-        .split(',')
-        .map(|name| name.trim().trim_matches(['"', '\'']).to_string())
-        .find(|name| !name.is_empty() && !matches!(name.as_str(), "monospace" | "sans-serif" | "serif"))
-        .map(SharedString::from)
-}
-
-fn terminal_font(env: &Env, cx: &App) -> (SharedString, Pixels) {
-    // `Workbench` sedang dipinjam saat panel dibangun, jadi pengaturan dibaca dari core.
-    let settings = env.core.effective_settings(&env.window);
+/// Font, ukuran, dan tinggi baris terminal menurut pengaturan. Font yang tidak terpasang dilewati;
+/// bila tidak ada yang terpasang, font monospace tema dipakai.
+fn terminal_font(settings: &Settings, cx: &App) -> (Font, Pixels, f32) {
     let installed = cx.text_system().all_font_names();
-    let family = settings
-        .editor
-        .font_family
-        .split(',')
-        .map(|name| name.trim().trim_matches(['"', '\'']).to_string())
-        .find(|name| installed.iter().any(|font| font.eq_ignore_ascii_case(name)))
-        .map(SharedString::from)
-        .unwrap_or_else(|| cx.theme().mono_font_family.clone());
-    let size = px(settings.terminal.font_size.unwrap_or(settings.editor.font_size).clamp(8, 40) as f32);
-    (family, size)
+    let family = font::terminal_family(settings, &installed).map(SharedString::from).unwrap_or_else(|| cx.theme().mono_font_family.clone());
+    (paint::terminal_font(family), px(font::font_size(settings)), font::line_height_factor(settings))
 }

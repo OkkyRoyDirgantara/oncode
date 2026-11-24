@@ -111,7 +111,11 @@ impl Default for GitSettings {
 pub struct TerminalSettings {
     /// Kosong = shell bawaan pengguna.
     pub shell: Option<String>,
+    /// Daftar font (dipisah koma) khusus terminal; kosong = font editor.
+    pub font_family: Option<String>,
     pub font_size: Option<u32>,
+    /// Tinggi baris dalam persen ukuran font (100–200); kosong = 120.
+    pub line_height: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
