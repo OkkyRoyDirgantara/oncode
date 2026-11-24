@@ -30,6 +30,7 @@ pub const COMMANDS_TO_SKIP_SHELL: &[&str] = &[
     "search.focus",
     "terminal.toggle",
     "terminal.new",
+    "terminal.split",
     "terminal.kill",
     "terminal.clear",
     "terminal.focusNext",

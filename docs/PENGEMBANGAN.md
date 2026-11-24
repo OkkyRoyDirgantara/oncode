@@ -127,7 +127,7 @@ pub fn init(cx: &mut App) {
 ```
 
 - **Sidebar, panel, status bar:** tampilan adalah entitas tersendiri (`AnyView`) yang mengamati state yang dibutuhkannya. Urutan: `order` kecil lebih dulu. Explorer 10, Search 20, Source Control 30, Graph 40, Pull Requests 50; panel: Terminal 10, Problems 20, Git Output 30.
-- **Tab:** `workbench.open_tab(TabData::new(kind, title, json!({..})), OpenOptions::default(), window, cx)`. Isi tab dibangun `TabKind::build` dan mengimplementasikan `TabContent` (pakai `ViewTab(entity)` untuk tampilan sederhana).
+- **Tab:** `workbench.open_tab(TabData::new(kind, title, json!({..})), OpenOptions::default(), window, cx)`. Isi tab dibangun `TabKind::build` dan mengimplementasikan `TabContent` (pakai `ViewTab(entity)` untuk tampilan sederhana). Tab bisa diseret (`DraggedTab`); fitur lain boleh menyeret `DraggedTab { from: None, .. }` ke area editor untuk membukanya sebagai tab (dipakai terminal). Jenis tab yang isinya tidak boleh tampil dua kali menimpa `TabKind::split_copy` (terminal: "Split Editor" membuka terminal baru).
 - **State per jendela milik fitur:** `workbench.set_extension(entity)` dan `workbench.extension::<Entity<T>>()`.
 - **Berkas:** `oncode_ui::editor::open_file(workbench, OpenFile::new(path).at(line, column, len), window, cx)`; buffer lewat `oncode_ui::editor::buffers(workbench)`; berkas aktif lewat `active_file(workbench, cx)`.
 - **Repositori:** `oncode_ui::repos(cx)` (snapshot per akar, penanda berkas); berlangganan `ReposEvent`.

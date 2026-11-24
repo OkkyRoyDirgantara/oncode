@@ -70,6 +70,25 @@ pub enum Orientation {
     Vertical,
 }
 
+/// Sisi grup tempat grup baru dibuat saat tab dijatuhkan di tepinya.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SplitSide {
+    Left,
+    Right,
+    Up,
+    Down,
+}
+
+impl SplitSide {
+    /// Arah susunan grup yang dihasilkan sisi ini.
+    pub fn orientation(self) -> Orientation {
+        match self {
+            SplitSide::Left | SplitSide::Right => Orientation::Horizontal,
+            SplitSide::Up | SplitSide::Down => Orientation::Vertical,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct OpenOptions {
     /// Buka sebagai pratinjau (menggantikan tab pratinjau sebelumnya).
@@ -274,6 +293,111 @@ impl Model {
             Orientation::Vertical => Orientation::Horizontal,
         };
     }
+
+    /// Grup yang benar-benar memuat tab ini: `from` bila memang memuatnya, selain itu grup mana pun
+    /// yang memuatnya.
+    fn source_of(&self, id: &str, from: Option<u32>) -> Option<u32> {
+        from.filter(|g| self.group(*g).is_some_and(|g| g.contains(id))).or_else(|| self.find_tab(id))
+    }
+
+    /// Memindahkan tab ke grup `to` di posisi `index` (`None` = paling akhir), lalu mengaktifkannya.
+    /// `from` adalah grup asalnya; `None` untuk tab dari luar area editor (mis. terminal di panel),
+    /// yang diperlakukan seperti tab baru kecuali sudah terbuka di salah satu grup.
+    /// Mengembalikan grup lain tempat tab itu dicabut, bila ada.
+    pub fn move_tab(&mut self, tab: TabData, from: Option<u32>, to: u32, index: Option<usize>) -> Option<u32> {
+        let id = tab.id.clone();
+        let from = self.source_of(&id, from);
+        let target = self.group_mut(to)?;
+        match target.tabs.iter().position(|t| t.id == id) {
+            // Urutan ulang di grup yang sama (atau tab yang sudah ada di grup tujuan).
+            Some(old) => {
+                if let Some(index) = index {
+                    let moved = target.tabs.remove(old);
+                    // Posisi tujuan dihitung sebelum tab dicabut dari tempat lamanya.
+                    let at = if index > old { index - 1 } else { index };
+                    target.tabs.insert(at.min(target.tabs.len()), moved);
+                }
+            }
+            None => {
+                let at = index.unwrap_or(target.tabs.len()).min(target.tabs.len());
+                target.tabs.insert(at, TabData { preview: false, ..tab });
+            }
+        }
+        target.active = Some(id.clone());
+        let from = from.filter(|from| *from != to);
+        if let Some(from) = from {
+            self.remove(from, &[id]);
+        }
+        self.active_group = to;
+        from
+    }
+
+    /// Memindahkan tab ke grup baru di sisi `side` grup `target`. Arah susunan semua grup mengikuti
+    /// sisinya. Mengembalikan id grup baru dan grup tempat tab itu dicabut, bila ada.
+    pub fn split_tab(&mut self, tab: TabData, from: Option<u32>, target: u32, side: SplitSide) -> (u32, Option<u32>) {
+        let id = tab.id.clone();
+        let from = self.source_of(&id, from);
+        let index = self.groups.iter().position(|g| g.id == target).unwrap_or(self.groups.len().saturating_sub(1));
+        let at = match side {
+            SplitSide::Left | SplitSide::Up => index,
+            SplitSide::Right | SplitSide::Down => index + 1,
+        };
+        let group = self.next_group;
+        self.next_group += 1;
+        self.groups.insert(at.min(self.groups.len()), Group { id: group, tabs: vec![TabData { preview: false, ..tab }], active: Some(id.clone()) });
+        self.orientation = side.orientation();
+        if let Some(from) = from {
+            self.remove(from, &[id]);
+        }
+        self.active_group = group;
+        (group, from)
+    }
+
+    /// Sisi yang boleh dipakai untuk membelah grup `target` dengan tab `id` (dari grup `from`):
+    /// `(kiri/kanan, atas/bawah)`. Grup tersusun satu arah, jadi arah lain hanya boleh bila tidak
+    /// ada grup lain yang tersisa. Membelah grup yang hanya berisi tab itu sendiri tidak berarti apa-apa.
+    pub fn split_axes(&self, target: u32, id: &str, from: Option<u32>) -> (bool, bool) {
+        let from = self.source_of(id, from);
+        let alone = |group: &Group| group.tabs.len() == 1 && group.contains(id);
+        if from == Some(target) && self.group(target).is_some_and(alone) {
+            return (false, false);
+        }
+        let others = self.groups.iter().filter(|g| g.id != target && !(Some(g.id) == from && alone(g))).count();
+        if others == 0 {
+            return (true, true);
+        }
+        match self.orientation {
+            Orientation::Horizontal => (true, false),
+            Orientation::Vertical => (false, true),
+        }
+    }
+}
+
+/// Tempat tab dijatuhkan di atas isi sebuah grup.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DropZone {
+    /// Masuk ke grup itu.
+    Center,
+    /// Grup baru di sisi itu.
+    Split(SplitSide),
+}
+
+/// Zona jatuh menurut posisi relatif penunjuk di atas isi grup (`x`, `y` dalam 0..1): dekat tepi
+/// berarti membelah ke sisi itu (bila arahnya diizinkan), selain itu masuk ke grup.
+pub fn drop_zone(x: f32, y: f32, horizontal: bool, vertical: bool) -> DropZone {
+    const EDGE: f32 = 0.3;
+    let mut sides = Vec::new();
+    if horizontal {
+        sides.extend([(x, SplitSide::Left), (1. - x, SplitSide::Right)]);
+    }
+    if vertical {
+        sides.extend([(y, SplitSide::Up), (1. - y, SplitSide::Down)]);
+    }
+    sides
+        .into_iter()
+        .filter(|(distance, _)| *distance < EDGE)
+        .min_by(|a, b| a.0.total_cmp(&b.0))
+        .map_or(DropZone::Center, |(_, side)| DropZone::Split(side))
 }
 
 #[cfg(test)]
@@ -394,6 +518,110 @@ mod tests {
         m.open(file("a"), &OpenOptions::default());
         m.update_tabs(|t| (t.title == "a").then(|| file("z")));
         assert_eq!(m.active().unwrap().1.title, "z");
+    }
+
+    #[test]
+    fn move_tab_reorders_within_a_group() {
+        let mut m = Model::default();
+        for name in ["a", "b", "c"] {
+            m.open(file(name), &OpenOptions::default());
+        }
+        // "a" ke depan "c" (indeks 2 dihitung sebelum "a" dicabut).
+        m.move_tab(file("a"), Some(1), 1, Some(2));
+        assert_eq!(ids(&m, 1), ["b", "a", "c"]);
+        m.move_tab(file("c"), Some(1), 1, Some(0));
+        assert_eq!(ids(&m, 1), ["c", "b", "a"]);
+        m.move_tab(file("c"), Some(1), 1, None);
+        assert_eq!(ids(&m, 1), ["c", "b", "a"], "tanpa indeks urutan tetap");
+        assert_eq!(m.active().unwrap().1.title, "c");
+    }
+
+    #[test]
+    fn move_tab_between_groups_drops_the_emptied_group() {
+        let mut m = Model::default();
+        m.open(file("a"), &OpenOptions::default());
+        let g2 = m.open(file("b"), &OpenOptions::to_side());
+        assert_eq!(m.move_tab(file("a"), Some(1), g2, Some(0)), Some(1));
+        assert_eq!(m.groups.len(), 1);
+        assert_eq!(ids(&m, g2), ["a", "b"]);
+        assert_eq!(m.active_group, g2);
+        assert_eq!(m.active().unwrap().1.title, "a");
+    }
+
+    #[test]
+    fn move_tab_from_outside_opens_it_or_moves_the_open_one() {
+        let mut m = Model::default();
+        m.open(file("a"), &OpenOptions::default());
+        let g2 = m.open(file("b"), &OpenOptions::to_side());
+        // Tab baru dari luar area editor.
+        m.move_tab(file("x"), None, 1, Some(0));
+        assert_eq!(ids(&m, 1), ["x", "a"]);
+        // Tab yang sudah terbuka di grup lain dipindahkan, tidak digandakan.
+        m.move_tab(file("b"), None, 1, None);
+        assert_eq!(m.groups.len(), 1);
+        assert_eq!(ids(&m, 1), ["x", "a", "b"]);
+        assert!(m.group(g2).is_none());
+    }
+
+    #[test]
+    fn split_tab_creates_a_group_on_the_requested_side() {
+        let mut m = Model::default();
+        m.open(file("a"), &OpenOptions::default());
+        m.open(file("b"), &OpenOptions::default());
+        let (right, from) = m.split_tab(file("b"), Some(1), 1, SplitSide::Right);
+        assert_eq!(from, Some(1));
+        assert_eq!(m.groups.iter().map(|g| g.id).collect::<Vec<_>>(), [1, right]);
+        assert_eq!(ids(&m, 1), ["a"]);
+        assert_eq!(ids(&m, right), ["b"]);
+        assert_eq!(m.orientation, Orientation::Horizontal);
+        assert_eq!(m.active_group, right);
+
+        let (top, from) = m.split_tab(file("x"), None, 1, SplitSide::Up);
+        assert_eq!(from, None);
+        assert_eq!(m.groups.iter().map(|g| g.id).collect::<Vec<_>>(), [top, 1, right]);
+        assert_eq!(m.orientation, Orientation::Vertical);
+    }
+
+    #[test]
+    fn splitting_the_only_tab_of_a_group_moves_it() {
+        let mut m = Model::default();
+        m.open(file("a"), &OpenOptions::default());
+        let g2 = m.open(file("b"), &OpenOptions::to_side());
+        let (left, _) = m.split_tab(file("b"), Some(g2), 1, SplitSide::Left);
+        assert_eq!(m.groups.iter().map(|g| g.id).collect::<Vec<_>>(), [left, 1]);
+        assert_eq!(ids(&m, left), ["b"]);
+    }
+
+    #[test]
+    fn split_axes_follow_the_single_orientation() {
+        let mut m = Model::default();
+        m.open(file("a"), &OpenOptions::default());
+        m.open(file("b"), &OpenOptions::default());
+        // Satu grup: semua sisi; tab dari luar juga.
+        assert_eq!(m.split_axes(1, &file("b").id, Some(1)), (true, true));
+        assert_eq!(m.split_axes(1, &file("x").id, None), (true, true));
+        let (g2, _) = m.split_tab(file("b"), Some(1), 1, SplitSide::Right);
+        m.open(file("c"), &OpenOptions { group: Some(g2), ..Default::default() });
+        // Dua grup mendatar: hanya kiri/kanan.
+        assert_eq!(m.split_axes(1, &file("c").id, Some(g2)), (true, false));
+        // Grup yang hanya berisi tab yang diseret: tidak bisa dibelah dengan tab itu.
+        assert_eq!(m.split_axes(1, &file("a").id, Some(1)), (false, false));
+        // Tab satu-satunya grup lain: setelah pindah tinggal satu grup, jadi semua sisi boleh.
+        m.remove(g2, &[file("c").id]);
+        assert_eq!(m.split_axes(1, &file("b").id, Some(g2)), (true, true));
+    }
+
+    #[test]
+    fn drop_zone_prefers_the_nearest_allowed_edge() {
+        assert_eq!(drop_zone(0.5, 0.5, true, true), DropZone::Center);
+        assert_eq!(drop_zone(0.1, 0.5, true, true), DropZone::Split(SplitSide::Left));
+        assert_eq!(drop_zone(0.95, 0.2, true, true), DropZone::Split(SplitSide::Right));
+        assert_eq!(drop_zone(0.2, 0.9, true, true), DropZone::Split(SplitSide::Down));
+        assert_eq!(drop_zone(0.4, 0.05, true, true), DropZone::Split(SplitSide::Up));
+        // Arah yang tidak diizinkan diabaikan.
+        assert_eq!(drop_zone(0.5, 0.05, true, false), DropZone::Center);
+        assert_eq!(drop_zone(0.05, 0.5, false, true), DropZone::Center);
+        assert_eq!(drop_zone(0.05, 0.5, false, false), DropZone::Center);
     }
 
     #[test]

@@ -17,16 +17,16 @@ use gpui_kit::component::resizable::{h_resizable, resizable_panel, v_resizable};
 use gpui_kit::component::{h_flex, v_flex, ActiveTheme as _, Icon, Selectable as _, Sizable as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
-    div, px, AnyElement, AnyView, App, AppContext as _, Context, Entity, EventEmitter, FocusHandle, Focusable, Global, InteractiveElement as _,
-    IntoElement, MouseButton, ParentElement as _, Render, SharedString, StatefulInteractiveElement as _, Styled as _, Subscription, Task, TestSupportExt as _, WeakEntity,
-    Window,
+    div, px, relative, AnyElement, AnyView, App, AppContext as _, Context, DragMoveEvent, Entity, EventEmitter, FocusHandle, Focusable, Global,
+    InteractiveElement as _, IntoElement, MouseButton, ParentElement as _, Render, SharedString, StatefulInteractiveElement as _, Styled as _, Subscription, Task,
+    TestSupportExt as _, WeakEntity, Window,
 };
 use oncode_core::api::app::WorkspaceInfo;
 use oncode_core::settings::SidebarPosition;
 use oncode_core::{Settings, Shared};
 
 use crate::commands::{self, Command, CommandRegistry};
-use crate::model::{Model, OpenOptions, Orientation, TabData};
+use crate::model::{self, DropZone, Model, OpenOptions, Orientation, SplitSide, TabData};
 use crate::Lucide;
 
 /// Konteks sebuah jendela, diberikan ke semua pembangun tampilan. Tidak berubah selama
@@ -104,6 +104,64 @@ pub trait TabKind: 'static {
     fn image(&self, _tab: &TabData) -> Option<SharedString> {
         None
     }
+    /// Tab yang dibuka di grup sebelah oleh "Split Editor". Bawaan: tab yang sama (dua tampilan
+    /// untuk isi yang sama). Jenis yang isinya hanya boleh tampil sekali (mis. terminal) mengembalikan
+    /// tab baru, atau `None` bila tidak bisa dibelah.
+    fn split_copy(&self, tab: &TabData) -> Option<TabData> {
+        Some(tab.clone())
+    }
+}
+
+/// Tab yang sedang diseret. Fitur lain boleh membuatnya untuk menyeret sesuatu ke area editor
+/// sebagai tab (mis. terminal dari panel), dengan `from: None`; tab yang dijatuhkan dibuka di sana.
+#[derive(Debug, Clone)]
+pub struct DraggedTab {
+    pub tab: TabData,
+    /// Grup asal di area editor; `None` bila asalnya di luar area editor.
+    pub from: Option<u32>,
+}
+
+/// Gambar kecil yang mengikuti penunjuk selama tab diseret.
+pub struct TabDragPreview {
+    title: SharedString,
+    icon: Option<Lucide>,
+}
+
+impl TabDragPreview {
+    pub fn new(title: impl Into<SharedString>, icon: Option<Lucide>) -> Self {
+        Self { title: title.into(), icon }
+    }
+}
+
+impl Render for TabDragPreview {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = cx.theme();
+        h_flex()
+            .gap_1p5()
+            .px_3()
+            .py_1()
+            .text_sm()
+            .rounded(theme.radius)
+            .border_1()
+            .border_color(theme.drag_border)
+            .bg(theme.tab_active)
+            .text_color(theme.tab_active_foreground)
+            .opacity(0.9)
+            .shadow_md()
+            .when_some(self.icon, |el, icon| el.child(Icon::new(icon).small()))
+            .child(self.title.clone())
+    }
+}
+
+/// Tempat tab dijatuhkan di sebuah grup.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TabDrop {
+    /// Sebelum tab ke-n di bilah tab.
+    Before(usize),
+    /// Di ujung bilah tab, atau di tengah isi grup.
+    End,
+    /// Grup baru di sisi grup ini.
+    Split(SplitSide),
 }
 
 type BuildView = Rc<dyn Fn(&Env, &mut Window, &mut App) -> AnyView>;
@@ -285,6 +343,8 @@ pub struct Workbench {
     extensions: HashMap<std::any::TypeId, Box<dyn std::any::Any>>,
     /// Dipanggil tepat sebelum isi tab dibangun, agar `TabKind` global tahu jendela mana yang membangun.
     before_build: Vec<Rc<dyn Fn(&mut App)>>,
+    /// Zona jatuh di atas isi grup selama tab diseret: (grup, zona).
+    drop_zone: Option<(u32, DropZone)>,
 }
 
 impl EventEmitter<WorkbenchEvent> for Workbench {}
@@ -334,6 +394,7 @@ impl Workbench {
             window_id,
             extensions: HashMap::new(),
             before_build: Vec::new(),
+            drop_zone: None,
         };
         this.register_core_commands(cx);
         let features = cx.global::<Features>().0.clone();
@@ -481,8 +542,14 @@ impl Workbench {
         self.register_command(Command::new("workbench.previousTab", "Previous Editor", with(|this, window, cx| this.cycle_tab(-1, window, cx))).category("View").key("Mod+PageUp"));
         self.register_command(
             Command::new("workbench.split", "Split Editor", with(|this, window, cx| {
-                if let Some(tab) = this.model.active().map(|(_, t)| t.clone()) {
-                    this.open_tab(tab, OpenOptions::to_side(), window, cx);
+                let Some(tab) = this.model.active().map(|(_, t)| t.clone()) else { return };
+                let kind = cx.global::<TabKinds>().0.get(&tab.kind).cloned();
+                let copy = match kind {
+                    Some(kind) => kind.split_copy(&tab),
+                    None => Some(tab),
+                };
+                if let Some(copy) = copy {
+                    this.open_tab(copy, OpenOptions::to_side(), window, cx);
                 }
             }))
             .category("View")
@@ -626,6 +693,52 @@ impl Workbench {
     /// Ada tab dengan perubahan yang belum disimpan.
     pub fn has_dirty_tabs(&self, cx: &App) -> bool {
         self.slots.values().any(|slot| slot.content.is_dirty(cx))
+    }
+
+    // ----- Seret dan jatuhkan -----
+
+    /// Memindahkan tab yang dijatuhkan ke grup `group`. Isi tab yang sudah dibangun ikut pindah
+    /// (tidak dibangun ulang), sehingga keadaannya (mis. posisi gulir) tetap.
+    fn drop_tab(&mut self, dragged: &DraggedTab, group: u32, place: TabDrop, window: &mut Window, cx: &mut Context<Self>) {
+        self.drop_zone = None;
+        let tab = dragged.tab.clone();
+        let id = tab.id.clone();
+        let (target, source) = match place {
+            TabDrop::Before(index) => (group, self.model.move_tab(tab, dragged.from, group, Some(index))),
+            TabDrop::End => (group, self.model.move_tab(tab, dragged.from, group, None)),
+            TabDrop::Split(side) => self.model.split_tab(tab, dragged.from, group, side),
+        };
+        if let Some(source) = source {
+            if let Some(slot) = self.slots.remove(&(source, id.clone())) {
+                self.slots.entry((target, id)).or_insert(slot);
+            }
+        }
+        self.sync_slots(window, cx);
+        self.focus_active(window, cx);
+        cx.emit(WorkbenchEvent::TabsChanged);
+        cx.emit(WorkbenchEvent::ActiveTabChanged);
+        cx.emit(WorkbenchEvent::LayoutChanged);
+        cx.notify();
+    }
+
+    /// Menghitung zona jatuh selama tab diseret di atas isi grup `group`.
+    fn track_drop_zone(&mut self, group: u32, event: &DragMoveEvent<DraggedTab>, cx: &mut Context<Self>) {
+        let (bounds, position) = (event.bounds, event.event.position);
+        let zone = if bounds.contains(&position) {
+            let dragged = event.drag(cx);
+            let (horizontal, vertical) = self.model.split_axes(group, &dragged.tab.id, dragged.from);
+            let x = (position.x - bounds.origin.x) / bounds.size.width;
+            let y = (position.y - bounds.origin.y) / bounds.size.height;
+            Some((group, model::drop_zone(x, y, horizontal, vertical)))
+        } else if self.drop_zone.is_some_and(|(g, _)| g == group) {
+            None
+        } else {
+            return;
+        };
+        if zone != self.drop_zone {
+            self.drop_zone = zone;
+            cx.notify();
+        }
     }
 
     /// Menyamakan isi tab yang sudah dibangun dengan model.
@@ -852,7 +965,7 @@ impl Workbench {
             .min_w_0()
             .h_full()
             .overflow_x_scroll()
-            .children(model_group.tabs.iter().map(|tab| {
+            .children(model_group.tabs.iter().enumerate().map(|(index, tab)| {
                 let selected = model_group.active.as_deref() == Some(tab.id.as_str());
                 let dirty = self.slots.get(&(group, tab.id.clone())).is_some_and(|slot| slot.content.is_dirty(cx));
                 let icon = kinds.get(&tab.kind).and_then(|kind| kind.icon(tab));
@@ -864,6 +977,7 @@ impl Workbench {
                 let weak = cx.weak_entity();
                 h_flex()
                     .id(SharedString::from(format!("tab-{group}-{}", tab.id)))
+                    .test_support()
                     .group("tab")
                     .h_full()
                     .flex_none()
@@ -891,6 +1005,13 @@ impl Workbench {
                             this.close_tabs(group, vec![id.clone()], false, window, cx).detach();
                         })
                     })
+                    // Seret untuk memindah ke posisi lain, ke grup lain, atau ke tepi grup (belah).
+                    .on_drag(DraggedTab { tab: tab.clone(), from: Some(group) }, move |dragged, _, _, cx| {
+                        cx.stop_propagation();
+                        cx.new(|_| TabDragPreview::new(dragged.tab.title.clone(), icon))
+                    })
+                    .drag_over::<DraggedTab>(|style, _, _, cx| style.bg(cx.theme().drop_target))
+                    .on_drop(cx.listener(move |this, dragged: &DraggedTab, window, cx| this.drop_tab(dragged, group, TabDrop::Before(index), window, cx)))
                     .map(|el| match (image, icon) {
                         (Some(image), _) => el.child(gpui_kit::img(image).size(px(16.)).flex_none()),
                         (None, Some(icon)) => el.child(Icon::new(icon).small()),
@@ -938,7 +1059,18 @@ impl Workbench {
                             let _ = c.update(cx, |this, cx| this.close_all_tabs(false, window, cx).detach());
                         }))
                     })
-            }));
+            }))
+            // Ruang kosong setelah tab terakhir: menjatuhkan tab di sini menaruhnya paling akhir.
+            .child(
+                div()
+                    .id(SharedString::from(format!("tabs-end-{group}")))
+                    .test_support()
+                    .flex_1()
+                    .min_w(px(32.))
+                    .h_full()
+                    .drag_over::<DraggedTab>(|style, _, _, cx| style.bg(cx.theme().drop_target))
+                    .on_drop(cx.listener(move |this, dragged: &DraggedTab, window, cx| this.drop_tab(dragged, group, TabDrop::End, window, cx))),
+            );
         h_flex()
             .w_full()
             .h(px(34.))
@@ -953,23 +1085,58 @@ impl Workbench {
 
     fn render_group(&self, group: u32, cx: &mut Context<Self>) -> AnyElement {
         let content = self.model.group(group).and_then(|g| g.active.clone()).and_then(|id| self.slots.get(&(group, id))).map(|slot| slot.content.view());
+        // Sorotan tempat tab akan jatuh: separuh sisi untuk membelah, seluruhnya untuk masuk ke grup.
+        let zone = self.drop_zone.filter(|(g, _)| *g == group && cx.has_active_drag()).map(|(_, zone)| zone);
+        let overlay = zone.map(|zone| {
+            let base = div().absolute().bg(cx.theme().drop_target);
+            match zone {
+                DropZone::Center => base.top_0().left_0().size_full(),
+                DropZone::Split(SplitSide::Left) => base.top_0().left_0().h_full().w(relative(0.5)),
+                DropZone::Split(SplitSide::Right) => base.top_0().right_0().h_full().w(relative(0.5)),
+                DropZone::Split(SplitSide::Up) => base.top_0().left_0().w_full().h(relative(0.5)),
+                DropZone::Split(SplitSide::Down) => base.bottom_0().left_0().w_full().h(relative(0.5)),
+            }
+        });
         v_flex()
             .id(SharedString::from(format!("group-{group}")))
             .size_full()
             .overflow_hidden()
             .capture_any_mouse_down(cx.listener(move |this, _, _, cx| this.activate_group(group, cx)))
             .child(self.render_tab_strip(group, cx))
-            .child(div().flex_1().min_h_0().w_full().overflow_hidden().when_some(content, |el, view| el.child(view)))
+            .child(
+                div()
+                    .id(SharedString::from(format!("group-content-{group}")))
+                    .test_support()
+                    .relative()
+                    .flex_1()
+                    .min_h_0()
+                    .w_full()
+                    .overflow_hidden()
+                    .on_drag_move::<DraggedTab>(cx.listener(move |this, event: &DragMoveEvent<DraggedTab>, _, cx| this.track_drop_zone(group, event, cx)))
+                    .on_drop(cx.listener(move |this, dragged: &DraggedTab, window, cx| {
+                        let place = match this.drop_zone.filter(|(g, _)| *g == group).map(|(_, zone)| zone) {
+                            Some(DropZone::Split(side)) => TabDrop::Split(side),
+                            _ => TabDrop::End,
+                        };
+                        this.drop_tab(dragged, group, place, window, cx);
+                    }))
+                    .when_some(content, |el, view| el.child(view))
+                    .children(overlay),
+            )
             .into_any_element()
     }
 
     fn render_editor_area(&self, cx: &mut Context<Self>) -> AnyElement {
         let has_tabs = self.model.all_tabs().next().is_some();
         if !has_tabs {
+            let group = self.model.active_group;
             return div()
                 .id("editor-empty")
+                .test_support()
                 .size_full()
                 .bg(cx.theme().background)
+                .drag_over::<DraggedTab>(|style, _, _, cx| style.bg(cx.theme().drop_target))
+                .on_drop(cx.listener(move |this, dragged: &DraggedTab, window, cx| this.drop_tab(dragged, group, TabDrop::End, window, cx)))
                 .map(|el| match &self.empty_view {
                     Some(view) => el.child(view.clone()),
                     None => el.flex().items_center().justify_center().text_color(cx.theme().muted_foreground).child("No file is open"),

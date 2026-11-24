@@ -1,4 +1,5 @@
-//! Tampilan terminal: satu sesi (PTY + emulator) dan panel yang menampung beberapa sesi.
+//! Tampilan satu sesi terminal (PTY + emulator). Sesi bisa tampil di panel (lihat `panel.rs`)
+//! atau sebagai tab di area editor.
 //!
 //! Setiap baris layar digambar sebagai teks bergaya (`StyledText`) dengan font monospace, sehingga
 //! kolom tetap sejajar. Ukuran grid dihitung dari lebar dan tinggi area yang tersedia.
@@ -15,22 +16,23 @@ use alacritty_terminal::selection::SelectionType;
 use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::term::TermMode;
 use alacritty_terminal::vte::ansi::CursorShape;
-use gpui_kit::component::button::{Button, ButtonVariants as _};
-use gpui_kit::component::{h_flex, v_flex, ActiveTheme as _, Icon, Selectable as _, Sizable as _};
+use gpui_kit::component::button::Button;
+use gpui_kit::component::{h_flex, v_flex, ActiveTheme as _, Sizable as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
-    canvas, div, px, relative, App, AppContext as _, Bounds, ClipboardItem, Context, Entity, EventEmitter, FocusHandle, Focusable, FontStyle, FontWeight, HighlightStyle,
+    canvas, div, px, relative, App, Bounds, ClipboardItem, Context, EventEmitter, FocusHandle, Focusable, FontStyle, FontWeight, HighlightStyle,
     InteractiveElement as _, IntoElement, KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, ParentElement as _, Pixels, Render, ScrollEvent,
-    SharedString, StatefulInteractiveElement as _, StrikethroughStyle, Styled as _, StyledText, Subscription, Task, TestSupportExt as _, UnderlineStyle, WeakEntity, Window,
+    SharedString, StrikethroughStyle, Styled as _, StyledText, Subscription, Task, TestSupportExt as _, UnderlineStyle, WeakEntity, Window,
 };
 use oncode_core::api::term::{self, TermEvent};
 use oncode_ui::keys::KeyPress;
 use oncode_ui::overlay::{self, TextPrompt};
-use oncode_ui::{spawn_core, Env, Lucide, Workbench};
+use oncode_ui::{spawn_core, Env};
 use tokio::sync::mpsc;
 
 use crate::emulator::{Emulator, GridSize};
 use crate::keys::{self, KeyAction, KeyModes, ScrollKey};
+use crate::layout::SessionId;
 use crate::mouse::{self, MouseAction, MouseEncoding, ReportModifiers, WheelTarget};
 use crate::palette::{cell_style, to_hsla, Palette};
 
@@ -52,11 +54,14 @@ pub enum SessionEvent {
     Exited,
     /// Judul (OSC 0/2) berubah.
     TitleChanged,
+    /// Terminal ini menerima fokus keyboard.
+    Focused,
 }
 
 /// Satu terminal: proses shell di PTY dan emulator yang menampilkan keluarannya.
 pub struct TerminalSession {
     env: Env,
+    session_id: SessionId,
     pub(crate) emulator: Emulator,
     /// Id PTY dari `oncode-core`; `None` selama proses dimulai.
     id: Option<u32>,
@@ -102,7 +107,7 @@ fn press_of(event: &KeyDownEvent) -> KeyPress {
 }
 
 impl TerminalSession {
-    pub fn new(env: Env, number: usize, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new(env: Env, session_id: SessionId, number: usize, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let focus_handle = cx.focus_handle();
         // Tombol yang bukan milik aplikasi diteruskan ke shell, termasuk Ctrl+W, Ctrl+S, dan sejenisnya.
         oncode_ui::commands::capture_keys(
@@ -113,6 +118,7 @@ impl TerminalSession {
         let (font_family, font_size) = terminal_font(&env, cx);
         let mut this = Self {
             env,
+            session_id,
             emulator: Emulator::new(GridSize::new(80, 24)),
             id: None,
             title: format!("Terminal {number}").into(),
@@ -130,6 +136,8 @@ impl TerminalSession {
             _reader: Task::ready(()),
             _subscriptions: Vec::new(),
         };
+        let focus = cx.on_focus(&this.focus_handle, window, |_, _, cx| cx.emit(SessionEvent::Focused));
+        this._subscriptions.push(focus);
         if let Some(workbench) = this.env.workbench.upgrade() {
             this._subscriptions.push(cx.subscribe_in(&workbench, window, |this, workbench, event: &oncode_ui::WorkbenchEvent, _, cx| {
                 if matches!(event, oncode_ui::WorkbenchEvent::SettingsChanged) {
@@ -151,6 +159,11 @@ impl TerminalSession {
 
     pub fn title(&self) -> &SharedString {
         &self.title
+    }
+
+    /// Id sesi ini (lihat [`SessionId`]); bukan id PTY.
+    pub fn session_id(&self) -> SessionId {
+        self.session_id
     }
 
     pub fn focus_handle_is_focused(&self, window: &Window) -> bool {
@@ -630,10 +643,12 @@ impl Render for TerminalSession {
             _ => None,
         };
 
-        div()
+        let grid = div()
             .id("terminal-session")
             .test_support()
-            .size_full()
+            .w_full()
+            .flex_1()
+            .min_h_0()
             .relative()
             .overflow_hidden()
             .px_2()
@@ -718,7 +733,27 @@ impl Render for TerminalSession {
             })
             .when_some(status, |el, status| {
                 el.child(div().absolute().top_2().left_2().text_color(cx.theme().muted_foreground).font_family(cx.theme().font_family.clone()).child(status))
+            });
+
+        let theme = cx.theme();
+        v_flex()
+            .size_full()
+            .bg(background)
+            .when(self.exited.is_some(), |el| {
+                el.child(
+                    h_flex()
+                        .flex_none()
+                        .px_2()
+                        .py_1()
+                        .gap_2()
+                        .text_sm()
+                        .border_b_1()
+                        .border_color(theme.border)
+                        .child(div().flex_1().text_color(theme.muted_foreground).child("The process has exited."))
+                        .child(Button::new("terminal-restart").label("Restart").xsmall().outline().on_click(cx.listener(|this, _, window, cx| this.start(window, cx)))),
+                )
             })
+            .child(grid)
     }
 }
 
@@ -744,173 +779,4 @@ fn terminal_font(env: &Env, cx: &App) -> (SharedString, Pixels) {
         .unwrap_or_else(|| cx.theme().mono_font_family.clone());
     let size = px(settings.terminal.font_size.unwrap_or(settings.editor.font_size).clamp(8, 40) as f32);
     (family, size)
-}
-
-// ----- Panel -----
-
-/// Panel bawah "Terminal": daftar sesi dan sesi yang aktif.
-pub struct TerminalPanel {
-    env: Env,
-    sessions: Vec<Entity<TerminalSession>>,
-    active: usize,
-    next_number: usize,
-    focus_handle: FocusHandle,
-    _subscriptions: Vec<Subscription>,
-}
-
-impl Focusable for TerminalPanel {
-    fn focus_handle(&self, cx: &App) -> FocusHandle {
-        match self.sessions.get(self.active) {
-            Some(session) => session.focus_handle(cx),
-            None => self.focus_handle.clone(),
-        }
-    }
-}
-
-impl TerminalPanel {
-    pub fn new(env: Env, cx: &mut Context<Self>) -> Self {
-        Self { env, sessions: Vec::new(), active: 0, next_number: 1, focus_handle: cx.focus_handle(), _subscriptions: Vec::new() }
-    }
-
-    pub fn sessions(&self) -> &[Entity<TerminalSession>] {
-        &self.sessions
-    }
-
-    pub fn active_session(&self) -> Option<&Entity<TerminalSession>> {
-        self.sessions.get(self.active)
-    }
-
-    /// Terminal baru di folder proyek, langsung fokus.
-    pub fn new_session(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Entity<TerminalSession> {
-        let number = self.next_number;
-        self.next_number += 1;
-        let env = self.env.clone();
-        let session = cx.new(|cx| TerminalSession::new(env, number, window, cx));
-        self._subscriptions.push(cx.observe(&session, |_, _, cx| cx.notify()));
-        self.sessions.push(session.clone());
-        self.active = self.sessions.len() - 1;
-        self.focus_active(window, cx);
-        cx.notify();
-        session
-    }
-
-    /// Memastikan ada minimal satu terminal (saat panel dibuka pertama kali).
-    pub fn ensure_session(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.sessions.is_empty() {
-            self.new_session(window, cx);
-        } else {
-            self.focus_active(window, cx);
-        }
-    }
-
-    pub fn focus_active(&self, window: &mut Window, cx: &mut App) {
-        if let Some(session) = self.sessions.get(self.active) {
-            let handle = session.focus_handle(cx);
-            window.defer(cx, move |window, cx| handle.focus(window, cx));
-        }
-    }
-
-    pub fn kill_active(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.sessions.is_empty() {
-            return;
-        }
-        let session = self.sessions.remove(self.active);
-        session.update(cx, |session, cx| session.kill(cx));
-        self.active = self.active.min(self.sessions.len().saturating_sub(1));
-        self.focus_active(window, cx);
-        cx.notify();
-    }
-
-    pub fn focus_next(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.sessions.len() > 1 {
-            self.active = (self.active + 1) % self.sessions.len();
-        }
-        self.focus_active(window, cx);
-        cx.notify();
-    }
-
-    pub fn clear_active(&mut self, cx: &mut Context<Self>) {
-        if let Some(session) = self.sessions.get(self.active) {
-            session.update(cx, |session, cx| session.clear(cx));
-        }
-    }
-
-    fn select(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
-        self.active = index.min(self.sessions.len().saturating_sub(1));
-        self.focus_active(window, cx);
-        cx.notify();
-    }
-}
-
-impl Render for TerminalPanel {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.theme();
-        let active = self.sessions.get(self.active).cloned();
-        let exited = active.as_ref().is_some_and(|session| session.read(cx).has_exited());
-        h_flex()
-            .id("terminal-panel")
-            .size_full()
-            .track_focus(&self.focus_handle)
-            .child(
-                v_flex()
-                    .flex_1()
-                    .h_full()
-                    .min_w_0()
-                    .when(exited, |el| {
-                        el.child(
-                            h_flex()
-                                .flex_none()
-                                .px_2()
-                                .py_1()
-                                .gap_2()
-                                .text_sm()
-                                .border_b_1()
-                                .border_color(theme.border)
-                                .child(div().flex_1().text_color(theme.muted_foreground).child("The process has exited."))
-                                .child(Button::new("terminal-restart").label("Restart").xsmall().outline().on_click(cx.listener(|this, _, window, cx| {
-                                    if let Some(session) = this.sessions.get(this.active).cloned() {
-                                        session.update(cx, |session, cx| session.start(window, cx));
-                                    }
-                                }))),
-                        )
-                    })
-                    .child(div().flex_1().min_h_0().w_full().map(|el| match active {
-                        Some(session) => el.child(session),
-                        None => el.flex().items_center().justify_center().text_sm().text_color(theme.muted_foreground).child(
-                            Button::new("terminal-start").label("New Terminal").small().outline().on_click(cx.listener(|this, _, window, cx| {
-                                this.new_session(window, cx);
-                            })),
-                        ),
-                    })),
-            )
-            // Daftar sesi di kanan, seperti VS Code, bila ada lebih dari satu.
-            .when(self.sessions.len() > 1, |el| {
-                el.child(
-                    v_flex()
-                        .id("terminal-list")
-                        .w(px(160.))
-                        .h_full()
-                        .flex_none()
-                        .border_l_1()
-                        .border_color(theme.border)
-                        .overflow_y_scroll()
-                        .children(self.sessions.iter().enumerate().map(|(index, session)| {
-                            let title = session.read(cx).title().clone();
-                            Button::new(SharedString::from(format!("terminal-tab-{index}")))
-                                .ghost()
-                                .xsmall()
-                                .w_full()
-                                .icon(Icon::new(Lucide::SquareTerminal))
-                                .label(title)
-                                .selected(index == self.active)
-                                .on_click(cx.listener(move |this, _, window, cx| this.select(index, window, cx)))
-                        })),
-                )
-            })
-    }
-}
-
-/// Panel terminal milik jendela ini (dibuat saat panelnya pertama kali dibuka).
-pub fn panel(workbench: &Workbench) -> Option<Entity<TerminalPanel>> {
-    workbench.extension::<Entity<TerminalPanel>>()
 }
