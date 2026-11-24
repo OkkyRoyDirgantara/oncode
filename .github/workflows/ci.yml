@@ -54,7 +54,9 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential libssl-dev libcurl4-gnutls-dev libexpat1-dev gettext zlib1g-dev
-          curl -fsSL https://mirrors.edge.kernel.org/pub/software/scm/git/git-2.40.0.tar.xz | tar -xJ
+          # Diunduh ke berkas dengan retry: satu koneksi terputus tidak menggagalkan job.
+          curl -fsSL --retry 5 --retry-all-errors --retry-delay 5 -o git-2.40.0.tar.xz https://mirrors.edge.kernel.org/pub/software/scm/git/git-2.40.0.tar.xz
+          tar -xJf git-2.40.0.tar.xz
           # GCC 15 (Ubuntu 26.04) memakai C23, yang menjadikan `unreachable` macro bawaan dan
           # bentrok dengan fungsi bernama sama di Git 2.40. Kompilasi dengan C17.
           make -C git-2.40.0 -j"$(nproc)" prefix="$HOME/git-2.40" NO_TCLTK=1 CFLAGS="-g -O2 -std=gnu17" install

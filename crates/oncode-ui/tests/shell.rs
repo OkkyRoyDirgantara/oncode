@@ -22,9 +22,12 @@ async fn quick_open_finds_and_opens_a_file(cx: &mut TestAppContext) {
         window.render_frame(cx);
         window.input("lib", cx);
     });
-    // Pencarian berkas berjalan di backend; tunggu sampai hasilnya tampil lalu pilih.
+    // Pencarian berkas berjalan di backend; tekan Enter sampai hasilnya terpilih dan tab terbuka.
+    // Batasnya waktu, bukan jumlah percobaan: di runner CI Windows indeks berkas bisa butuh
+    // beberapa detik (antivirus memindai berkas baru).
     window.wait_until(cx, "hasil quick open", |_, _| true).await;
-    for _ in 0..50 {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+    while std::time::Instant::now() < deadline {
         window.update(cx, |window, cx| window.press("enter", cx));
         cx.run_until_parked();
         if !tab_titles(&workbench, cx).is_empty() {
