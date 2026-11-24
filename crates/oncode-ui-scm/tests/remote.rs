@@ -122,8 +122,12 @@ async fn stash_and_pop_then_create_a_branch(cx: &mut TestAppContext) {
     assert!(git(&project, &["stash", "list"]).contains("simpan dulu"));
 
     assert!(window.run_command(cx, "git.stashPop"));
-    window.wait_until(cx, "stash dikembalikan", |_, _| std::fs::read_to_string(project.join("a.txt")).is_ok_and(|t| t == "diubah\n")).await;
-    assert_eq!(git(&project, &["stash", "list"]).trim(), "");
+    // `git stash pop` memulihkan berkas dulu, baru menghapus entri stash: tunggu keduanya.
+    window
+        .wait_until(cx, "stash dikembalikan dan dihapus", |_, _| {
+            std::fs::read_to_string(project.join("a.txt")).is_ok_and(|t| t == "diubah\n") && git(&project, &["stash", "list"]).trim().is_empty()
+        })
+        .await;
 
     assert!(window.run_command(cx, "git.createBranch"));
     answer(&window, cx, "fitur/baru").await;
