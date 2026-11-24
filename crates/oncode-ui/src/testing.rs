@@ -76,10 +76,13 @@ impl TestApp {
     /// pemanggil lewat `cx.update(|cx| crate_fitur::init(cx))` sebelum membuka jendela.
     pub fn new(cx: &mut TestAppContext) -> Self {
         isolate_git();
-        // `oncode-helper` (kredensial dan interactive rebase) ada di samping binary, bukan di `deps/`.
+        // `oncode-helper` (kredensial dan interactive rebase) ada di `target/<profil>/`, dicari dari
+        // folder binary uji ke atas: binary uji ada di `deps/` atau, dengan layout build-dir baru
+        // Cargo, di `build/<crate>/<hash>/out/`.
         if std::env::var_os("ONCODE_HELPER").is_none() {
             let name = if cfg!(windows) { "oncode-helper.exe" } else { "oncode-helper" };
-            if let Some(helper) = std::env::current_exe().ok().and_then(|exe| Some(exe.parent()?.parent()?.join(name))).filter(|p| p.is_file()) {
+            let helper = std::env::current_exe().ok().and_then(|exe| exe.ancestors().skip(1).map(|dir| dir.join(name)).find(|path| path.is_file()));
+            if let Some(helper) = helper {
                 std::env::set_var("ONCODE_HELPER", helper);
             }
         }

@@ -609,7 +609,10 @@ impl Repo {
             ResetMode::Mixed => "--mixed",
             ResetMode::Hard => "--hard",
         };
-        self.run(Cmd::new(["reset", flag, "--end-of-options", rev]).write()).await.map(drop)
+        // Bukan `--end-of-options`: sebelum Git 2.44, `reset` membacanya sebagai revisi dan gagal
+        // ("option '--end-of-options' must come before non-option arguments"). `check_ref` sudah
+        // menolak nilai berawalan `-`, dan `--` di belakang memastikan `rev` dibaca sebagai revisi.
+        self.run(Cmd::new(["reset", flag, rev, "--"]).write()).await.map(drop)
     }
 
     // ----- Worktree -----

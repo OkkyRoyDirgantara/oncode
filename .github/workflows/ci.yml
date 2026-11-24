@@ -59,4 +59,5 @@ jobs:
           make -C git-2.40.0 -j"$(nproc)" prefix="$HOME/git-2.40" NO_TCLTK=1 CFLAGS="-g -O2 -std=gnu17" install
           echo "$HOME/git-2.40/bin" >> "$GITHUB_PATH"
       - run: git --version
-      - run: cargo test -p oncode-git -p oncode-helper
+      # Semua berkas uji dijalankan walau ada yang gagal, supaya semua ketidakcocokan versi terlihat sekaligus.
+      - run: cargo test -p oncode-git -p oncode-helper --no-fail-fast

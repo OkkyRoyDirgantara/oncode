@@ -13,19 +13,22 @@ use oncode_ui::Workbench;
 use oncode_ui_lsp::hub::ServerStatus;
 
 /// Program server tiruan; dibangun dengan `cargo build -p oncode-lsp --features mock --example mock_lsp_server`.
+/// Dicari di `examples/` dari folder binary uji ke atas, karena letak binary uji berbeda antar
+/// versi Cargo (`target/<profil>/deps/` atau `target/<profil>/build/<crate>/<hash>/out/`).
 fn mock_server() -> PathBuf {
     let exe = std::env::current_exe().unwrap();
-    let debug = exe.parent().unwrap().parent().unwrap();
-    let path = debug.join("examples").join(if cfg!(windows) { "mock_lsp_server.exe" } else { "mock_lsp_server" });
-    if !path.is_file() {
-        let status = std::process::Command::new(env!("CARGO"))
-            .args(["build", "-q", "-p", "oncode-lsp", "--features", "mock", "--example", "mock_lsp_server"])
-            .env("CARGO_TARGET_DIR", debug.parent().unwrap())
-            .status()
-            .expect("cargo tersedia");
-        assert!(status.success(), "server tiruan gagal dibangun");
+    let relative = std::path::Path::new("examples").join(if cfg!(windows) { "mock_lsp_server.exe" } else { "mock_lsp_server" });
+    let find = || exe.ancestors().skip(1).map(|dir| dir.join(&relative)).find(|path| path.is_file());
+    if let Some(path) = find() {
+        return path;
     }
-    path
+    // Belum dibangun (mis. `cargo test -p oncode-ui-lsp` saja): bangun ke direktori target yang sama.
+    let status = std::process::Command::new(env!("CARGO"))
+        .args(["build", "-q", "-p", "oncode-lsp", "--features", "mock", "--example", "mock_lsp_server"])
+        .status()
+        .expect("cargo tersedia");
+    assert!(status.success(), "server tiruan gagal dibangun");
+    find().unwrap_or_else(|| panic!("server tiruan tidak ditemukan di atas {}", exe.display()))
 }
 
 fn configure(app: &TestApp) {

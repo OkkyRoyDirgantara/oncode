@@ -15,13 +15,18 @@ use tokio::time::timeout;
 
 const TIMEOUT: Duration = Duration::from_secs(20);
 
-/// Binary contoh dibangun `cargo test` ke `target/<profil>/examples/`.
+/// Binary contoh dibangun `cargo test` ke `target/<profil>/examples/`. Dicari dari folder binary
+/// uji ke atas, karena letak binary uji berbeda antar versi Cargo: `target/<profil>/deps/` atau
+/// `target/<profil>/build/<crate>/<hash>/out/` (layout build-dir baru).
 fn mock_server() -> PathBuf {
     let exe = std::env::current_exe().expect("path uji");
     let name = if cfg!(windows) { "mock_lsp_server.exe" } else { "mock_lsp_server" };
-    let path = exe.parent().and_then(Path::parent).expect("direktori target").join("examples").join(name);
-    assert!(path.is_file(), "server tiruan belum dibangun: {}", path.display());
-    path
+    let relative = Path::new("examples").join(name);
+    exe.ancestors()
+        .skip(1)
+        .map(|dir| dir.join(&relative))
+        .find(|path| path.is_file())
+        .unwrap_or_else(|| panic!("server tiruan belum dibangun (cargo test -p oncode-lsp): {} tidak ada di atas {}", relative.display(), exe.display()))
 }
 
 struct Forward(UnboundedSender<(String, Value)>);

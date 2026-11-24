@@ -49,11 +49,12 @@ pub fn git(cwd: &Path, args: &[&str]) -> String {
     String::from_utf8_lossy(&out.stdout).into_owned()
 }
 
-/// Binary `oncode-helper` hasil `cargo build -p oncode-helper`: satu folder di atas `deps/` tempat binary uji berada.
+/// Binary `oncode-helper` hasil `cargo build -p oncode-helper` (di `target/<profil>/`), dicari dari
+/// folder binary uji ke atas: binary uji ada di `target/<profil>/deps/` atau, dengan layout
+/// build-dir baru Cargo, di `target/<profil>/build/<crate>/<hash>/out/`.
 pub fn built_helper() -> Option<PathBuf> {
     let name = if cfg!(windows) { "oncode-helper.exe" } else { "oncode-helper" };
-    let path = std::env::current_exe().ok()?.parent()?.parent()?.join(name);
-    path.is_file().then_some(path)
+    std::env::current_exe().ok()?.ancestors().skip(1).map(|dir| dir.join(name)).find(|path| path.is_file())
 }
 
 /// Core di atas runtime uji, dengan direktori konfigurasi/data sementara dan token di memori.

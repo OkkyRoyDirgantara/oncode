@@ -93,9 +93,24 @@ pub fn marks_for(snapshot: &RepoSnapshot) -> HashMap<String, FileMark> {
     marks
 }
 
+/// Bentuk pembanding root: pemisah `/`, tanpa `/` di akhir, dan di Windows tanpa membedakan huruf
+/// besar-kecil. Git melaporkan root sebagai `C:/proyek`, sedangkan path Windows `C:\proyek`.
+fn root_key(root: &str) -> String {
+    let key = root.replace('\\', "/").trim_end_matches('/').to_string();
+    if cfg!(windows) {
+        key.to_lowercase()
+    } else {
+        key
+    }
+}
+
 impl Repos {
+    /// Snapshot repositori dengan root ini; `C:\proyek` dan `C:/proyek` dianggap sama.
     pub fn snapshot(&self, root: &str) -> Option<&RepoSnapshot> {
-        self.snapshots.get(root)
+        self.snapshots.get(root).or_else(|| {
+            let key = root_key(root);
+            self.snapshots.iter().find(|(candidate, _)| root_key(candidate) == key).map(|(_, snapshot)| snapshot)
+        })
     }
 
     pub fn roots(&self) -> Vec<String> {
@@ -129,7 +144,7 @@ impl Repos {
 
     /// Jumlah berkas yang berubah (untuk lencana di activity bar).
     pub fn change_count(&self, root: &str) -> usize {
-        self.snapshots.get(root).map_or(0, |s| s.staged.len() + s.unstaged.len() + s.untracked.len() + s.conflicted.len())
+        self.snapshot(root).map_or(0, |s| s.staged.len() + s.unstaged.len() + s.untracked.len() + s.conflicted.len())
     }
 
     fn set(&mut self, root: String, snapshot: RepoSnapshot, cx: &mut Context<Self>) {
@@ -168,4 +183,18 @@ fn setup(workbench: &mut Workbench, _: &mut Window, cx: &mut Context<Workbench>)
         }
     })
     .detach();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::root_key;
+
+    #[test]
+    fn roots_match_across_separators_and_trailing_slashes() {
+        assert_eq!(root_key("/home/ana/proyek/"), "/home/ana/proyek");
+        assert_eq!(root_key(r"C:\Users\ana\proyek"), root_key("C:/Users/ana/proyek"));
+        assert_ne!(root_key("/a/b"), root_key("/a/bc"));
+        // Di Windows huruf drive dan nama folder tidak membedakan besar-kecil.
+        assert_eq!(root_key(r"c:\Proyek") == root_key("C:/proyek"), cfg!(windows));
+    }
 }
