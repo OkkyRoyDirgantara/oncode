@@ -10,12 +10,12 @@ use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use gpui_kit::component::input::{DefinitionProvider, EditorState, Rope, RopeExt as _};
-use gpui_kit::{App, Entity, Result as GpuiResult, Task, Window};
+use gpui_kit::{App, Entity, Result as GpuiResult, Task, WeakEntity, Window};
 use lsp_types::{LocationLink, Position, Range};
 use oncode_core::api::symbols::{self as symbols_api, SymbolLocation};
 
 use super::{is_untitled, open_file, OpenFile};
-use crate::workbench::Env;
+use crate::workbench::{Env, Workbench};
 
 /// Hasil pencarian dipakai ulang sebentar: Ctrl+arahkan kursor memanggil penyedia berulang kali.
 const CACHE_FOR: Duration = Duration::from_secs(3);
@@ -88,20 +88,50 @@ fn links(locations: &[SymbolLocation], origin: Range) -> Vec<LocationLink> {
 /// definisi di berkas lain. Hub LSP boleh menimpanya sesudah ini.
 pub(crate) fn attach(state: &Entity<EditorState>, env: &Env, path: &str, cx: &mut App) {
     let provider = Rc::new(SymbolSearchProvider::new(env.clone(), path.to_string()));
-    let workbench = env.workbench.clone();
+    let show_document = show_document_handler(env.workbench.clone(), path.to_string());
     state.update(cx, |state, cx| {
         let lsp = state.lsp_mut();
         lsp.definition_provider = Some(provider);
-        lsp.show_document = Some(Rc::new(move |params: &lsp_types::ShowDocumentParams, window: &mut Window, cx: &mut App| {
-            if params.external == Some(true) {
-                return false;
-            }
-            let target = oncode_lsp::uri::uri_to_path(params.uri.as_str());
-            let selection = params.selection.unwrap_or_default();
-            let options = OpenFile::new(target).at(selection.start.line + 1, selection.start.character, None);
-            let _ = workbench.update(cx, |workbench, cx| open_file(workbench, options, window, cx));
-            true
-        }));
+        lsp.show_document = Some(show_document);
         cx.notify();
     });
+}
+
+/// `true` bila kedua path menunjuk berkas yang sama. Di Windows tidak peka huruf besar-kecil dan
+/// pemisah path (server bahasa bisa menulis `c:/…` untuk `C:\…`).
+pub fn same_path(a: &str, b: &str) -> bool {
+    let normalize = |path: &str| {
+        let path = path.replace('\\', "/");
+        let path = path.trim_end_matches('/');
+        if cfg!(windows) {
+            path.to_lowercase()
+        } else {
+            path.to_string()
+        }
+    };
+    normalize(a) == normalize(b)
+}
+
+/// Handler `show_document` untuk editor berkas `own_path` (Ctrl+klik / F12 ke definisi).
+///
+/// Editor memanggilnya selagi dirinya sendiri sedang diperbarui, jadi handler ini tidak boleh
+/// menyentuh editor itu: definisi di berkas yang sama dikembalikan ke editor (`false`, kursor
+/// dipindah editor sendiri), dan berkas lain dibuka setelah pembaruan itu selesai.
+pub fn show_document_handler(workbench: WeakEntity<Workbench>, own_path: String) -> Rc<dyn Fn(&lsp_types::ShowDocumentParams, &mut Window, &mut App) -> bool> {
+    Rc::new(move |params: &lsp_types::ShowDocumentParams, window: &mut Window, cx: &mut App| {
+        if params.external == Some(true) {
+            return false;
+        }
+        let target = oncode_lsp::uri::uri_to_path(params.uri.as_str());
+        if same_path(&target, &own_path) {
+            return false;
+        }
+        let selection = params.selection.unwrap_or_default();
+        let options = OpenFile::new(target).at(selection.start.line + 1, selection.start.character, None);
+        let workbench = workbench.clone();
+        window.defer(cx, move |window, cx| {
+            let _ = workbench.update(cx, |workbench, cx| open_file(workbench, options, window, cx));
+        });
+        true
+    })
 }

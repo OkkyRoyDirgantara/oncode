@@ -18,7 +18,7 @@ use serde_json::Value;
 pub use buffer::{is_untitled, Buffer, BufferEvent, BufferStatus, Buffers, BuffersEvent, ExternalChange, Reveal, LARGE_FILE_BYTES, UNTITLED_PREFIX};
 pub use format::{format_buffer, register_format_provider, save_with_format, FormatOutcome, EXTERNAL_PRIORITY, LSP_PRIORITY};
 pub use language::{language_for_path, LanguageInfo};
-pub use symbols::{symbol_definition_links, SymbolSearchProvider};
+pub use symbols::{same_path, show_document_handler, symbol_definition_links, SymbolSearchProvider};
 pub use view::{FileTab, FileView};
 
 use crate::commands::Command;

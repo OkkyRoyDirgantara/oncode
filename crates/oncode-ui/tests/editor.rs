@@ -239,3 +239,29 @@ async fn f12_without_a_language_server_jumps_to_the_definition_in_another_file(c
     let (view, _, _) = cx.update(|cx| active_file(workbench.read(cx), cx).unwrap());
     assert_eq!(cx.update(|cx| view.read(cx).cursor_info(cx)).1, 5, "kursor di awal nama fungsi (kolom 5)");
 }
+
+/// Definisi di berkas yang sama (Ctrl+klik/F12 pada fungsi di berkas itu sendiri) tidak boleh
+/// membuat aplikasi crash: kursor pindah ke definisinya di editor yang sama.
+#[gpui_kit::test]
+async fn going_to_a_definition_in_the_same_file_moves_the_cursor(cx: &mut TestAppContext) {
+    let app = TestApp::new(cx);
+    let project = app.project(&[("main.py", "def hitung(x):\n    return x * 2\n\nhasil = hitung(3)\n")]);
+    let window = app.open(Some(&project), cx).await;
+    let workbench = window.workbench(cx);
+    let main = project.join("main.py").to_string_lossy().into_owned();
+    // Kursor di "hitung" pada baris 4.
+    window.update(cx, |window, cx| workbench.update(cx, |workbench, cx| open_file(workbench, OpenFile::new(&main).at(4, 9, None), window, cx)));
+    window.wait_until(cx, "main.py dimuat", |_, cx| active_file(workbench.read(cx), cx).is_some_and(|(_, buffer, _)| buffer.read(cx).is_ready())).await;
+    cx.run_until_parked();
+
+    window.update(cx, |window, cx| {
+        window.render_frame(cx);
+        window.press("f12", cx);
+    });
+    window.wait_until(cx, "kursor di definisi", |_, cx| active_file(workbench.read(cx), cx).is_some_and(|(view, _, _)| view.read(cx).cursor_info(cx).0 == 1)).await;
+    let (view, buffer, _) = cx.update(|cx| active_file(workbench.read(cx), cx).unwrap());
+    assert!(cx.update(|cx| buffer.read(cx).path().ends_with("main.py")));
+    // Nama fungsinya dipilih (kolom 5–10), kursor di akhir pilihan.
+    assert_eq!(cx.update(|cx| view.read(cx).cursor_info(cx)), (1, 11, 6), "\"hitung\" di baris 1 terpilih");
+    assert_eq!(cx.update(|cx| workbench.read(cx).model().all_tabs().count()), 1, "tidak membuka tab baru");
+}

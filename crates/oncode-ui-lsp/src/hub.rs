@@ -21,9 +21,9 @@ use lsp_types::{
 use oncode_core::api::lsp as lsp_api;
 use oncode_core::api::lsp::LspEvent;
 use oncode_lsp::position::{position_at, PositionEncoding};
-use oncode_lsp::uri::{path_to_lsp_uri, uri_to_path};
+use oncode_lsp::uri::path_to_lsp_uri;
 use oncode_lsp::{Client, ClientConfig, ClientHandler, Feature};
-use oncode_ui::editor::{language_for_path, open_file, Buffer, BufferEvent, BuffersEvent, OpenFile};
+use oncode_ui::editor::{language_for_path, Buffer, BufferEvent, BuffersEvent};
 use oncode_ui::{overlay, spawn_core, Env, Workbench};
 use serde_json::Value;
 use tokio::sync::mpsc;
@@ -166,17 +166,9 @@ impl LspHub {
             lsp.definition_provider = Some(provider.clone());
             lsp.code_action_providers = vec![provider.clone()];
             // Definisi di berkas lain dibuka di tab editor.
-            lsp.show_document = Some(Rc::new(move |params: &lsp_types::ShowDocumentParams, window: &mut Window, cx: &mut App| {
-                let target = uri_to_path(params.uri.as_str());
-                if params.external == Some(true) {
-                    return false;
-                }
-                let selection = params.selection.unwrap_or_default();
-                let options = OpenFile::new(target.clone()).at(selection.start.line + 1, selection.start.character, None);
-                let _ = workbench.update(cx, |workbench, cx| open_file(workbench, options, window, cx));
-                let _ = &open_path;
-                true
-            }));
+            // Definisi di berkas yang sama ditangani editor itu sendiri; berkas lain dibuka sesudahnya
+            // (editor sedang diperbarui saat handler ini dipanggil).
+            lsp.show_document = Some(oncode_ui::editor::show_document_handler(workbench.clone(), open_path.clone()));
             cx.notify();
         });
         self.show_diagnostics(&path, cx);
