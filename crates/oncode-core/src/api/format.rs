@@ -38,7 +38,7 @@ pub async fn format_text(core: &Shared, window: &str, path: String, language: St
     let name = formatter.name;
     let failed = |detail: String| AppError::new("formatFailed", format!("{name} could not format this file: {detail}"));
 
-    let mut child = tokio::process::Command::new(&formatter.program)
+    let mut child = super::hidden_command(&formatter.program)
         .args(&formatter.args)
         .current_dir(&root)
         .stdin(Stdio::piped())

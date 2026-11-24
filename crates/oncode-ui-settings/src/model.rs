@@ -2,7 +2,7 @@
 //! validasi. Formulir dirender dari daftar ini, sehingga pencarian, penanda "ditimpa proyek",
 //! dan pengujian memakai satu sumber. Logika murni: tidak bergantung pada GPUI.
 
-use oncode_core::settings::{AutoSave, StartupView, Theme};
+use oncode_core::settings::{AiProvider, ApiFormat, AutoSave, StartupView, Theme};
 use oncode_core::Settings;
 use oncode_git::PullStrategy;
 use oncode_lsp::ServerSpec;
@@ -233,7 +233,44 @@ const STARTUP_VIEW: &[ChoiceOption] = &[ChoiceOption { value: "scm", label: "Sou
 const PULL_STRATEGY: &[ChoiceOption] =
     &[ChoiceOption { value: "ffOnly", label: "Fast-forward only" }, ChoiceOption { value: "merge", label: "Merge" }, ChoiceOption { value: "rebase", label: "Rebase" }];
 
-pub static FIELDS: [Field; 25] = [
+const AI_PROVIDER: &[ChoiceOption] = &[
+    ChoiceOption { value: "auto", label: "Automatic" },
+    ChoiceOption { value: "claudeCode", label: "Claude Code CLI" },
+    ChoiceOption { value: "api", label: "Anthropic API" },
+    ChoiceOption { value: "custom", label: "Custom endpoint" },
+];
+
+const API_FORMAT: &[ChoiceOption] = &[ChoiceOption { value: "openai", label: "OpenAI-compatible" }, ChoiceOption { value: "anthropic", label: "Anthropic Messages" }];
+
+fn validate_endpoint(text: &str) -> Option<&'static str> {
+    let value = text.trim();
+    if value.is_empty() {
+        return None;
+    }
+    if value.chars().any(|c| c.is_whitespace() || c.is_control()) {
+        return Some("An address cannot contain spaces");
+    }
+    if !(value.starts_with("https://") || value.starts_with("http://")) {
+        return Some("Start the address with https:// or http://");
+    }
+    if value.len() > 2048 {
+        return Some("This address is too long");
+    }
+    None
+}
+
+fn validate_custom_model(text: &str) -> Option<&'static str> {
+    let value = text.trim();
+    if value.chars().any(|c| c.is_whitespace() || c.is_control()) {
+        return Some("A model name cannot contain spaces");
+    }
+    if value.chars().count() > 200 {
+        return Some("This is too long for a model name");
+    }
+    None
+}
+
+pub static FIELDS: [Field; 29] = [
     Field {
         id: "editor.fontFamily",
         section: SectionId::Editor,
@@ -515,10 +552,35 @@ pub static FIELDS: [Field; 25] = [
         }),
     },
     Field {
+        id: "ai.provider",
+        section: SectionId::Ai,
+        label: "Provider",
+        description: "How \"Generate Commit Message\" reaches an AI model. Claude Code CLI uses your Claude Code sign-in (including a Claude subscription) and needs no API key; Anthropic API needs a key, set with \"AI: Set Anthropic API Key…\". Automatic uses the API when a key is set, otherwise Claude Code when it is installed. Custom endpoint sends to the address below (another provider, a gateway, or a local model). The staged diff is sent to the chosen service.",
+        keywords: "ai claude code cli anthropic api key subscription login",
+        kind: FieldKind::Select(SelectSpec {
+            options: AI_PROVIDER,
+            get: |s| match s.ai.provider {
+                AiProvider::Auto => "auto",
+                AiProvider::ClaudeCode => "claudeCode",
+                AiProvider::Api => "api",
+                AiProvider::Custom => "custom",
+            },
+            set: |s, value| {
+                s.ai.provider = match value {
+                    "auto" => AiProvider::Auto,
+                    "claudeCode" => AiProvider::ClaudeCode,
+                    "api" => AiProvider::Api,
+                    "custom" => AiProvider::Custom,
+                    _ => return,
+                }
+            },
+        }),
+    },
+    Field {
         id: "ai.model",
         section: SectionId::Ai,
         label: "Claude model",
-        description: "Model used by \"Generate Commit Message\" in Source Control. The staged diff is sent to Anthropic when you use it. Set the API key with the command \"AI: Set Anthropic API Key…\".",
+        description: "Model used by \"Generate Commit Message\" in Source Control, e.g. claude-opus-5-5. With Claude Code CLI, aliases such as opus or sonnet work too.",
         keywords: "ai claude anthropic commit message generate llm",
         kind: FieldKind::Text(TextSpec {
             placeholder: "claude-opus-5-5",
@@ -526,6 +588,55 @@ pub static FIELDS: [Field; 25] = [
             get: |s| s.ai.model.clone(),
             validate: validate_model,
             set: |s, text| s.ai.model = text.trim().to_string(),
+        }),
+    },
+    Field {
+        id: "ai.customFormat",
+        section: SectionId::Ai,
+        label: "Custom endpoint format",
+        description: "API format of the custom endpoint. OpenAI-compatible fits OpenAI, OpenRouter, Groq, DeepSeek, Ollama, LM Studio and LiteLLM; Anthropic Messages fits gateways in front of Claude.",
+        keywords: "ai provider openai openrouter ollama lm studio groq deepseek gateway",
+        kind: FieldKind::Select(SelectSpec {
+            options: API_FORMAT,
+            get: |s| match s.ai.custom_format {
+                ApiFormat::OpenAi => "openai",
+                ApiFormat::Anthropic => "anthropic",
+            },
+            set: |s, value| {
+                s.ai.custom_format = match value {
+                    "openai" => ApiFormat::OpenAi,
+                    "anthropic" => ApiFormat::Anthropic,
+                    _ => return,
+                }
+            },
+        }),
+    },
+    Field {
+        id: "ai.customBaseUrl",
+        section: SectionId::Ai,
+        label: "Custom endpoint address",
+        description: "Base URL of the custom endpoint, up to /v1 for OpenAI-compatible ones, e.g. https://openrouter.ai/api/v1 or http://localhost:11434/v1 (Ollama). Its API key, if it needs one, is set with \"AI: Set Custom Endpoint API Key…\".",
+        keywords: "ai provider domain url host openai openrouter ollama lm studio gateway",
+        kind: FieldKind::Text(TextSpec {
+            placeholder: "https://openrouter.ai/api/v1",
+            monospace: true,
+            get: |s| s.ai.custom_base_url.clone().unwrap_or_default(),
+            validate: validate_endpoint,
+            set: |s, text| s.ai.custom_base_url = nullable(text),
+        }),
+    },
+    Field {
+        id: "ai.customModel",
+        section: SectionId::Ai,
+        label: "Custom endpoint model",
+        description: "Model name at the custom endpoint, e.g. gpt-4.1-mini, deepseek-chat, or qwen2.5-coder for Ollama.",
+        keywords: "ai provider model openai ollama",
+        kind: FieldKind::Text(TextSpec {
+            placeholder: "Not set",
+            monospace: true,
+            get: |s| s.ai.custom_model.clone().unwrap_or_default(),
+            validate: validate_custom_model,
+            set: |s, text| s.ai.custom_model = nullable(text),
         }),
     },
     Field {
@@ -824,7 +935,11 @@ mod tests {
                 "lsp.enabled",
                 "forge.githubClientId",
                 "forge.gitlabClientId",
+                "ai.provider",
                 "ai.model",
+                "ai.customFormat",
+                "ai.customBaseUrl",
+                "ai.customModel",
                 "extensions.markdownPreview",
                 "extensions.formatters",
                 "extensions.extraLanguages",
@@ -881,6 +996,8 @@ mod tests {
         assert_eq!(values("workbench.theme"), ["system=System", "dark=Dark", "light=Light"]);
         assert_eq!(values("workbench.startupView"), ["scm=Source Control", "explorer=Explorer"]);
         assert_eq!(values("git.pullStrategy"), ["ffOnly=Fast-forward only", "merge=Merge", "rebase=Rebase"]);
+        assert_eq!(values("ai.provider"), ["auto=Automatic", "claudeCode=Claude Code CLI", "api=Anthropic API", "custom=Custom endpoint"]);
+        assert_eq!(values("ai.customFormat"), ["openai=OpenAI-compatible", "anthropic=Anthropic Messages"]);
 
         // Setiap opsi tersimpan dengan ejaan yang sama seperti serde di backend, dan terbaca kembali.
         for f in &FIELDS {
@@ -932,6 +1049,10 @@ mod tests {
         assert_eq!(check("ai.model", "claude-opus-5-5"), None);
         assert!(check("ai.model", "  ").unwrap().contains("Enter a model"));
         assert!(check("ai.model", "claude opus").unwrap().contains("cannot contain spaces"));
+        assert_eq!(check("ai.customBaseUrl", "http://localhost:11434/v1"), None);
+        assert_eq!(check("ai.customBaseUrl", ""), None);
+        assert!(check("ai.customBaseUrl", "openrouter.ai/api/v1").unwrap().contains("https://"));
+        assert!(check("ai.customModel", "gpt 4").unwrap().contains("cannot contain spaces"));
         assert_eq!(validate_server_command("rust-analyzer"), None);
         assert_eq!(validate_server_command("  "), Some("Enter a command"));
         assert!(validate_server_command("a\tb").unwrap().contains("control characters"));

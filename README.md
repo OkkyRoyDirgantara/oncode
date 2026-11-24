@@ -18,7 +18,7 @@ Rancangan lengkap ada di [docs/RANCANGAN.md](docs/RANCANGAN.md); panduan pengemb
 - Stash, tag, cherry-pick, revert, reset, blame, riwayat berkas, reflog
 - Worktree dan submodule
 - Semua perintah Git yang dijalankan tercatat di panel **Git Output**
-- **Generate commit message** dengan Claude (opsional): menulis pesan dari perubahan yang di-stage, mengikuti gaya commit repositori. Butuh API key Anthropic; diff yang di-stage dikirim ke Anthropic hanya saat tombolnya ditekan
+- **Generate commit message** dengan AI (opsional): menulis pesan dari perubahan yang di-stage, mengikuti gaya commit repositori. Provider (Settings → AI): Claude Code CLI (login Claude Code, termasuk langganan Claude; tanpa API key), Anthropic API, atau endpoint kustom (OpenAI-compatible seperti OpenAI, OpenRouter, Groq, Ollama, LM Studio, atau gateway berformat Anthropic). Diff yang di-stage dikirim hanya saat tombolnya ditekan
 
 **Editor dan workspace**
 

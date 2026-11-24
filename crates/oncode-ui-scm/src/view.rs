@@ -281,12 +281,13 @@ impl ScmPanel {
         // Gagal: kotak commit kembali seperti sebelum dimulai.
         self.message.update(cx, |state, cx| state.set_value(generation.draft, window, cx));
         match error.code.as_str() {
-            // Belum ada key, atau key ditolak: minta key lalu coba sekali lagi.
-            "noApiKey" | "unauthorized" => {
-                let reason = (error.code == "unauthorized").then(|| error.message.clone());
+            // Belum ada key, atau key ditolak: minta key yang sesuai lalu coba sekali lagi.
+            "noApiKey" | "unauthorized" | "customUnauthorized" => {
+                let kind = if error.code == "customUnauthorized" { crate::ai::KeyKind::Custom } else { crate::ai::KeyKind::Anthropic };
+                let reason = (error.code != "noApiKey").then(|| error.message.clone());
                 let core = self.env.core.clone();
                 cx.spawn_in(window, async move |this, cx| {
-                    if crate::ai::ask_api_key(core, reason, cx).await {
+                    if crate::ai::ask_api_key(core, kind, reason, cx).await {
                         let _ = this.update_in(cx, |this, window, cx| this.generate_message(window, cx));
                     }
                 })

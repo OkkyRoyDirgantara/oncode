@@ -37,6 +37,8 @@ async fn claude() -> MockServer {
 fn staged_project(app: &TestApp, server: &MockServer) -> std::path::PathBuf {
     let mut settings = app.core.user_settings();
     settings.ai.base_url = Some(server.uri());
+    // Selalu lewat API tiruan: dengan "Otomatis", Claude Code yang terpasang di mesin uji akan dipakai.
+    settings.ai.provider = oncode_core::settings::AiProvider::Api;
     app.core.set_user_settings(settings).unwrap();
     let project = app.git_project(&[("a.txt", "satu\n")]);
     std::fs::write(project.join("a.txt"), "dua\n").unwrap();
@@ -132,4 +134,53 @@ async fn missing_api_key_is_asked_for_then_generation_continues(cx: &mut TestApp
     window.wait_until(cx, "pesan dari Claude", |_, cx| !panel.read(cx).is_generating() && panel.read(cx).message(cx) == SUBJECT).await;
     let core = app.core.clone();
     assert!(app.runtime.block_on(async move { ai_api::ai_has_api_key(&core).await }).unwrap(), "key tersimpan");
+}
+
+/// Endpoint kustom OpenAI-compatible (mis. OpenRouter): key yang ditolak meminta key endpoint itu,
+/// lalu pesan dibuat ulang.
+#[gpui_kit::test]
+async fn custom_endpoint_asks_for_its_own_key_when_rejected(cx: &mut TestAppContext) {
+    let app = TestApp::new(cx);
+    cx.update(oncode_ui_scm::init);
+    let server = app.runtime.block_on(async {
+        let server = MockServer::start().await;
+        let chunk = |text: &str| format!("data: {}\n\n", json!({"choices": [{"index": 0, "delta": {"content": text}}]}));
+        Mock::given(method("POST"))
+            .and(path("/v1/chat/completions"))
+            .and(header("authorization", "Bearer kunci-kustom"))
+            .respond_with(ResponseTemplate::new(200).insert_header("content-type", "text/event-stream").set_body_string(format!("{}{}data: [DONE]\n\n", chunk("fix: ubah "), chunk("isi a.txt"))))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST")).and(path("/v1/chat/completions")).respond_with(ResponseTemplate::new(401).set_body_json(json!({"error": {"message": "missing key"}}))).mount(&server).await;
+        server
+    });
+    let project = staged_project(&app, &server);
+    let mut settings = app.core.user_settings();
+    settings.ai.provider = oncode_core::settings::AiProvider::Custom;
+    settings.ai.custom_base_url = Some(format!("{}/v1", server.uri()));
+    settings.ai.custom_model = Some("model-kustom".into());
+    app.core.set_user_settings(settings).unwrap();
+    let (window, panel) = open_scm(&app, &project, cx).await;
+
+    click(&window, cx, "scm-ai-generate");
+    for _ in 0..300 {
+        let open = window.update(cx, |window, cx| {
+            use gpui_kit::component::WindowExt as _;
+            window.has_active_dialog(cx)
+        });
+        if open {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        cx.run_until_parked();
+    }
+    window.update(cx, |window, cx| {
+        window.render_frame(cx);
+        window.input("kunci-kustom", cx);
+        window.press("enter", cx);
+    });
+    cx.run_until_parked();
+    window.wait_until(cx, "pesan dari endpoint kustom", |_, cx| !panel.read(cx).is_generating() && panel.read(cx).message(cx) == SUBJECT).await;
+    let core = app.core.clone();
+    assert!(!app.runtime.block_on(async move { ai_api::ai_has_api_key(&core).await }).unwrap() || std::env::var_os("ANTHROPIC_API_KEY").is_some(), "key Anthropic tidak tersentuh");
 }

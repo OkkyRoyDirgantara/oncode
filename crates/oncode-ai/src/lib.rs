@@ -8,6 +8,11 @@
 //! - [`stream_commit_message`]: mengirim permintaan dan mengalirkan teks jawabannya.
 //!
 //! API key tidak pernah muncul di keluaran `Debug` maupun pesan galat.
+//!
+//! [`claude_code`] menyediakan jalan lain tanpa API key: Claude Code CLI milik pengguna.
+
+pub mod claude_code;
+pub mod openai;
 
 use std::fmt;
 use std::time::Duration;
@@ -25,7 +30,7 @@ const FALLBACK_BETA: &str = "server-side-fallback-2026-07-01";
 /// batasnya longgar walaupun pesan commit pendek.
 const MAX_TOKENS: u32 = 16_000;
 
-const SYSTEM_PROMPT: &str = "You write Git commit messages for staged changes.
+pub(crate) const SYSTEM_PROMPT: &str = "You write Git commit messages for staged changes.
 
 Reply with the commit message only: no code fences, quotes, or commentary before or after it.
 
@@ -84,6 +89,8 @@ pub enum AiErrorCode {
     InvalidRequest,
     /// Jawaban API tidak berbentuk seperti yang diharapkan.
     InvalidResponse,
+    /// Claude Code CLI gagal (belum login, kuota habis, opsi tidak dikenal, …).
+    ClaudeCodeFailed,
 }
 
 /// Galat lapisan AI. `message` aman ditampilkan ke pengguna.
@@ -109,7 +116,7 @@ pub fn supports_server_fallbacks(model: &str) -> bool {
 }
 
 /// Isi pesan pengguna: contoh subjek, stat, diff, dan draf.
-fn user_message(prompt: &CommitPrompt) -> String {
+pub(crate) fn user_message(prompt: &CommitPrompt) -> String {
     let mut text = String::new();
     if !prompt.recent_subjects.is_empty() {
         text.push_str("Recent commit subjects in this repository, newest first:\n");
@@ -240,7 +247,7 @@ fn apply_event(state: &mut StreamState, event: &SseEvent) -> Result<Option<Strin
 }
 
 /// Membuang pagar kode dan spasi di tepi, bila model tetap menambahkannya.
-fn clean_message(text: &str) -> String {
+pub(crate) fn clean_message(text: &str) -> String {
     let trimmed = text.trim();
     let unfenced = trimmed
         .strip_prefix("```")

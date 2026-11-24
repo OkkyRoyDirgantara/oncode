@@ -144,18 +144,53 @@ impl Default for ExtensionSettings {
     }
 }
 
+/// Jalur ke Claude untuk "Generate Commit Message".
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum AiProvider {
+    /// API bila ada API key; tanpa key, Claude Code CLI bila terpasang.
+    #[default]
+    Auto,
+    /// Claude Code CLI (`claude -p`) dengan login Claude Code pengguna; tanpa API key.
+    ClaudeCode,
+    /// Claude API dengan API key Anthropic.
+    Api,
+    /// Endpoint kustom (`ai.customBaseUrl`): penyedia lain, gateway, atau model lokal.
+    Custom,
+}
+
+/// Format API endpoint kustom.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum ApiFormat {
+    /// Chat Completions ala OpenAI: OpenAI, OpenRouter, Groq, DeepSeek, Ollama, LM Studio, LiteLLM, …
+    #[default]
+    #[serde(rename = "openai")]
+    OpenAi,
+    /// Messages API ala Anthropic: gateway atau proxy yang meneruskan ke Claude.
+    #[serde(rename = "anthropic")]
+    Anthropic,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AiSettings {
-    /// Model Claude untuk "Generate Commit Message".
+    pub provider: AiProvider,
+    /// Model Claude untuk "Generate Commit Message". Untuk Claude Code CLI boleh juga alias
+    /// seperti `opus` atau `sonnet`.
     pub model: String,
     /// Origin Claude API, mis. gateway/proxy organisasi. Kosong = `https://api.anthropic.com`.
     pub base_url: Option<String>,
+    /// Format API endpoint kustom (provider `custom`).
+    pub custom_format: ApiFormat,
+    /// Alamat endpoint kustom, mis. `https://openrouter.ai/api/v1` atau `http://localhost:11434/v1`.
+    pub custom_base_url: Option<String>,
+    /// Model di endpoint kustom, mis. `gpt-4.1-mini` atau `qwen2.5-coder`.
+    pub custom_model: Option<String>,
 }
 
 impl Default for AiSettings {
     fn default() -> Self {
-        Self { model: oncode_ai::DEFAULT_MODEL.to_string(), base_url: None }
+        Self { provider: AiProvider::Auto, model: oncode_ai::DEFAULT_MODEL.to_string(), base_url: None, custom_format: ApiFormat::OpenAi, custom_base_url: None, custom_model: None }
     }
 }
 

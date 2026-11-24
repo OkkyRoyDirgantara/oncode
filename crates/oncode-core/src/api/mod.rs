@@ -18,6 +18,16 @@ pub mod term;
 /// Pengganti `Channel<T>` v0.2: dipanggil untuk tiap kiriman, dari thread mana pun.
 pub type Callback<T> = Arc<dyn Fn(T) + Send + Sync>;
 
+/// Program bantu (formatter, Claude Code) tanpa jendela konsol: di Windows aplikasi GUI yang
+/// menjalankan program konsol memunculkan jendela hitam sekilas.
+pub(crate) fn hidden_command(program: &std::path::Path) -> tokio::process::Command {
+    #[allow(unused_mut)]
+    let mut command = tokio::process::Command::new(program);
+    #[cfg(windows)]
+    command.creation_flags(0x0800_0000);
+    command
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
