@@ -24,6 +24,6 @@ pub use dirs::{Dirs, APP_IDENTIFIER};
 pub use error::{AppError, AppResult};
 pub use events::{CoreEvent, EventSink, NoticeKind, PromptKind, PromptRequest};
 pub use settings::Settings;
-pub use state::{Core, Shared, Workspace};
+pub use state::{root_key, Core, Shared, Workspace};
 pub use store::Store;
 pub use tokens::FallbackStore;

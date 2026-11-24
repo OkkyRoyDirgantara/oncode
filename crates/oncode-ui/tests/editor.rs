@@ -36,6 +36,25 @@ async fn opens_edits_and_saves_a_file(cx: &mut TestAppContext) {
     assert_eq!(std::fs::read_to_string(project.join("src/main.rs")).unwrap(), "// catatan\nfn main() {}\n");
 }
 
+/// SCM/diff/graph membangun path dari root Git (`C:/x/a.txt` di Windows), explorer dari folder
+/// (`C:\x\a.txt`). Keduanya harus membuka tab dan buffer yang sama.
+#[gpui_kit::test]
+async fn the_same_file_opened_with_either_separator_shares_one_tab(cx: &mut TestAppContext) {
+    let app = TestApp::new(cx);
+    let project = app.project(&[("src/a.txt", "a\n")]);
+    let window = app.open(Some(&project), cx).await;
+    let workbench = window.workbench(cx);
+    let native = project.join("src").join("a.txt").to_string_lossy().into_owned();
+    let slashed = native.replace('\\', "/");
+    for path in [native.clone(), slashed] {
+        window.update(cx, |window, cx| workbench.update(cx, |w, cx| open_file(w, OpenFile::new(path), window, cx)));
+        cx.run_until_parked();
+    }
+    assert_eq!(cx.update(|cx| workbench.read(cx).model().all_tabs().count()), 1, "satu tab untuk satu berkas");
+    let (_, buffer, _) = cx.update(|cx| active_file(workbench.read(cx), cx).unwrap());
+    assert_eq!(cx.update(|cx| buffer.read(cx).path().to_string()), native);
+}
+
 #[gpui_kit::test]
 async fn same_file_in_two_groups_stays_in_sync(cx: &mut TestAppContext) {
     let app = TestApp::new(cx);
@@ -112,7 +131,7 @@ async fn ctrl_or_alt_arrows_move_lines_and_undo_restores_them(cx: &mut TestAppCo
     assert_eq!(text(cx), "dua\nsatu\ntiga\n");
     assert!(cx.update(|cx| buffer.read(cx).is_dirty()));
 
-    press(cx, "ctrl-z");
+    press(cx, "secondary-z");
     assert_eq!(text(cx), "dua\ntiga\nsatu\n", "undo membatalkan satu pemindahan");
 }
 
@@ -125,7 +144,7 @@ async fn ctrl_n_opens_an_untitled_file_that_save_as_moves_into_the_project(cx: &
 
     window.update(cx, |window, cx| {
         window.render_frame(cx);
-        window.press("ctrl-n", cx);
+        window.press("secondary-n", cx);
     });
     cx.run_until_parked();
     let (_, buffer, state) = cx.update(|cx| active_file(workbench.read(cx), cx).expect("tab berkas baru aktif"));

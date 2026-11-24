@@ -198,8 +198,9 @@ impl TestWindow {
     }
 }
 
-/// Path kanonik seperti yang dipakai `workspace_open`: di Windows tanpa awalan `\\?\`.
-fn canonical(path: &std::path::Path) -> PathBuf {
+/// Path kanonik seperti yang dipakai `workspace_open`: di Windows tanpa awalan `\\?\`, yang tidak
+/// dipahami Git (mis. `git http-backend`) dan banyak program lain.
+pub fn canonical(path: &std::path::Path) -> PathBuf {
     let path = std::fs::canonicalize(path).unwrap();
     let text = path.to_string_lossy();
     match text.strip_prefix(r"\\?\") {

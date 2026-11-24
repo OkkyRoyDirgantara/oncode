@@ -301,8 +301,9 @@ impl Worker {
         if matches!(event.kind, EventKind::Access(_)) {
             return;
         }
-        // Entri dibuat, dihapus, atau berganti nama (bukan sekadar isinya berubah).
-        let structural = !matches!(event.kind, EventKind::Modify(ModifyKind::Data(_) | ModifyKind::Metadata(_)));
+        // Entri dibuat, dihapus, atau berganti nama (bukan sekadar isinya berubah). Di Windows
+        // perubahan isi datang sebagai `Modify(Any)`, juga untuk folder yang isinya berubah.
+        let structural = !matches!(event.kind, EventKind::Modify(ModifyKind::Data(_) | ModifyKind::Metadata(_) | ModifyKind::Any));
         for path in &event.paths {
             self.on_path(path, structural);
         }
@@ -335,6 +336,10 @@ impl Worker {
             }
         }
         let is_dir = std::fs::symlink_metadata(path).is_ok_and(|m| m.is_dir());
+        // "Isi folder berubah" (Windows) tidak membawa informasi: berkas di dalamnya dilaporkan sendiri.
+        if is_dir && !structural {
+            return;
+        }
         if self.rules.is_ignored(path, is_dir) {
             return;
         }
@@ -636,14 +641,22 @@ mod tests {
     fn temp_root() -> (tempfile::TempDir, PathBuf) {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().canonicalize().unwrap();
+        // Seperti root dari `workspace_open`: tanpa awalan `\\?\` Windows, yang ditolak Git.
+        let root = match root.to_string_lossy().strip_prefix(r"\\?\") {
+            Some(rest) if !rest.starts_with("UNC") => PathBuf::from(rest),
+            _ => root,
+        };
         (tmp, root)
     }
 
-    const MODES: [TreeMode; 2] = [TreeMode::PerDirectory, TreeMode::Native];
+    /// Di Windows hanya mode yang dipakai di sana (`Native`, lihat [`TreeMode::for_platform`]):
+    /// pemantauan per folder dengan ReadDirectoryChangesW mengunci folder (tidak bisa diganti
+    /// nama) dan melaporkan perubahan isi folder sebagai event folder itu sendiri.
+    const MODES: &[TreeMode] = if cfg!(windows) { &[TreeMode::Native] } else { &[TreeMode::PerDirectory, TreeMode::Native] };
 
     #[test]
     fn reports_created_and_modified_files() {
-        for mode in MODES {
+        for &mode in MODES {
             let (_tmp, root) = temp_root();
             write(&root.join("src/existing.rs"), "v1");
             let (_watcher, events) = start(&root, &[], mode);
@@ -689,7 +702,7 @@ mod tests {
 
     #[test]
     fn ignored_paths_produce_no_events() {
-        for mode in MODES {
+        for &mode in MODES {
             let (_tmp, root) = temp_root();
             write(&root.join(".gitignore"), "target/\n*.log\n");
             write(&root.join("target/debug/old"), "");
@@ -702,7 +715,7 @@ mod tests {
             write(&root.join("debug.log"), "x");
             write(&root.join("src/trace.log"), "x");
             write(&root.join("src/generated/out.rs"), "x");
-            let visible = root.join("src/visible.rs");
+            let visible = root.join("src").join("visible.rs");
             write(&visible, "x");
             events.wait_path(&visible);
             thread::sleep(SETTLE);
@@ -744,7 +757,7 @@ mod tests {
 
     #[test]
     fn new_directories_are_watched_and_their_contents_reported() {
-        for mode in MODES {
+        for &mode in MODES {
             let (_tmp, root) = temp_root();
             let (_watcher, events) = start(&root, &[], mode);
 
@@ -790,7 +803,7 @@ mod tests {
 
     #[test]
     fn git_index_refs_and_state_changes() {
-        for mode in MODES {
+        for &mode in MODES {
             let (_tmp, root) = temp_root();
             git(&root, &["init", "-q"]);
             let git_dir = root.join(".git");
@@ -837,7 +850,7 @@ mod tests {
 
     #[test]
     fn git_lock_files_and_objects_are_ignored() {
-        for mode in MODES {
+        for &mode in MODES {
             let (_tmp, root) = temp_root();
             git(&root, &["init", "-q"]);
             let git_dir = root.join(".git");

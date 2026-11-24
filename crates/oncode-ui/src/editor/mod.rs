@@ -15,7 +15,7 @@ use oncode_core::settings::AutoSave;
 use oncode_workspace::Eol;
 use serde_json::Value;
 
-pub use buffer::{is_untitled, Buffer, BufferEvent, BufferStatus, Buffers, BuffersEvent, ExternalChange, LineHintProvider, Reveal, LARGE_FILE_BYTES, UNTITLED_PREFIX};
+pub use buffer::{file_path, is_untitled, Buffer, BufferEvent, BufferStatus, Buffers, BuffersEvent, ExternalChange, LineHintProvider, Reveal, LARGE_FILE_BYTES, UNTITLED_PREFIX};
 pub use format::{format_buffer, register_format_provider, save_with_format, FormatOutcome, EXTERNAL_PRIORITY, LSP_PRIORITY};
 pub use language::{language_for_path, LanguageInfo};
 pub use symbols::{same_path, show_document_handler, symbol_definition_links, SymbolSearchProvider};
@@ -62,7 +62,8 @@ impl OpenFile {
 }
 
 /// Membuka berkas di editor, opsional langsung melompat ke sebuah posisi.
-pub fn open_file(workbench: &mut Workbench, options: OpenFile, window: &mut Window, cx: &mut Context<Workbench>) {
+pub fn open_file(workbench: &mut Workbench, mut options: OpenFile, window: &mut Window, cx: &mut Context<Workbench>) {
+    options.path = file_path(&options.path);
     if let (Some(reveal), Some(buffers)) = (options.reveal.clone(), workbench.extension::<Entity<Buffers>>()) {
         let path = options.path.clone();
         buffers.update(cx, |buffers, cx| buffers.set_reveal(&path, reveal, cx));

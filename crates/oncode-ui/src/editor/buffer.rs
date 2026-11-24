@@ -23,6 +23,17 @@ pub const LARGE_FILE_BYTES: u32 = 5 * 1024 * 1024;
 /// Awalan path berkas baru yang belum pernah disimpan (`untitled:Untitled-1`).
 pub const UNTITLED_PREFIX: &str = "untitled:";
 
+/// Bentuk path berkas yang dipakai tab dan buffer. Di Windows pemisahnya diseragamkan menjadi
+/// `\`, sehingga `C:/x/a.rs` (root dari Git, dipakai SCM/diff/graph) dan `C:\x\a.rs` (explorer)
+/// membuka tab dan buffer yang sama. Path `untitled:` dan path di OS lain tidak diubah.
+pub fn file_path(path: &str) -> String {
+    if cfg!(windows) && !is_untitled(path) {
+        path.replace('/', "\\")
+    } else {
+        path.to_string()
+    }
+}
+
 /// `true` untuk berkas baru yang belum punya tempat di disk.
 pub fn is_untitled(path: &str) -> bool {
     path.starts_with(UNTITLED_PREFIX)
@@ -537,7 +548,7 @@ impl Buffers {
     }
 
     pub fn get(&self, path: &str) -> Option<Entity<Buffer>> {
-        self.buffers.get(path)?.upgrade()
+        self.buffers.get(&file_path(path))?.upgrade()
     }
 
     pub fn open(&mut self, path: &str, window: &mut Window, cx: &mut Context<Self>) -> Entity<Buffer> {
@@ -546,9 +557,10 @@ impl Buffers {
         }
         self.buffers.retain(|_, buffer| buffer.upgrade().is_some());
         let env = self.env.clone();
-        let path_owned = path.to_string();
+        let path = file_path(path);
+        let path_owned = path.clone();
         let buffer = cx.new(|cx| Buffer::open(path_owned, env, window, cx));
-        self.buffers.insert(path.to_string(), buffer.downgrade());
+        self.buffers.insert(path, buffer.downgrade());
         cx.emit(BuffersEvent::Opened(buffer.clone()));
         buffer
     }
@@ -558,6 +570,8 @@ impl Buffers {
     /// (`Workbench::update_tabs`); tampilan baru memakai buffer ini selama pemanggil memegangnya.
     pub fn rename(&mut self, from: &str, to: &str, cx: &mut Context<Self>) -> bool {
         let Some(buffer) = self.get(from) else { return false };
+        let (from, to) = (file_path(from), file_path(to));
+        let (from, to) = (from.as_str(), to.as_str());
         self.buffers.remove(from);
         buffer.update(cx, |buffer, cx| buffer.set_path(to.to_string(), cx));
         self.buffers.insert(to.to_string(), buffer.downgrade());
@@ -581,11 +595,12 @@ impl Buffers {
     }
 
     pub fn set_reveal(&mut self, path: &str, reveal: Reveal, cx: &mut Context<Self>) {
-        self.reveals.insert(path.to_string(), reveal);
-        cx.emit(BuffersEvent::Reveal(path.to_string()));
+        let path = file_path(path);
+        self.reveals.insert(path.clone(), reveal);
+        cx.emit(BuffersEvent::Reveal(path));
     }
 
     pub fn take_reveal(&mut self, path: &str) -> Option<Reveal> {
-        self.reveals.remove(path)
+        self.reveals.remove(&file_path(path))
     }
 }

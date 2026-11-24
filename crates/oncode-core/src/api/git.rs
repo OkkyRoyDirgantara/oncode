@@ -522,7 +522,8 @@ mod tests {
         let mut t = TestCore::new();
         let project = t.trusted_repo("proyek");
         let root = open(&mut t, &project).await;
-        assert_eq!(root, text(&project));
+        // Root berasal dari Git (`C:/...` di Windows); dibandingkan sebagai path.
+        assert_eq!(Path::new(&root), project);
         std::fs::write(project.join("baru.txt"), "isi\n").unwrap();
 
         git_stage(&t.core, root.clone(), vec!["baru.txt".into()]).await.unwrap();
@@ -597,7 +598,7 @@ mod tests {
         let fresh = t.project("baru");
         git_init(&t.core, text(&fresh)).await.unwrap();
         assert!(t.core.store.is_trusted(&fresh));
-        assert_eq!(git_open(&t.core, "w1", text(&fresh)).await.unwrap(), text(&fresh));
+        assert_eq!(Path::new(&git_open(&t.core, "w1", text(&fresh)).await.unwrap()), fresh);
     }
 
     #[tokio::test]

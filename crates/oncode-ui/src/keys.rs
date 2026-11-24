@@ -304,7 +304,10 @@ mod tests {
     #[test]
     fn parses_keybindings_file() {
         let parsed = parse_keybindings("// komentar\n{ \"file.save\": \"ctrl+alt+s\", \"view.toggleTerminal\": [], \"a.b\": [\"F5\", \"shift+f5\"] }").unwrap();
-        assert_eq!(parsed["file.save"], vec![canonical_keybinding("Mod+Alt+S")]);
+        // `ctrl` adalah `Mod` di Windows/Linux, tetapi tombol Control tersendiri di macOS (`Mod` = Cmd).
+        assert_eq!(parsed["file.save"], vec![canonical_keybinding("Ctrl+Alt+S")]);
+        assert_eq!(canonical_for("ctrl+alt+s", false), "Mod+Alt+S");
+        assert_eq!(canonical_for("ctrl+alt+s", true), "Ctrl+Alt+S");
         assert!(parsed["view.toggleTerminal"].is_empty());
         assert_eq!(parsed["a.b"], vec!["F5".to_string(), "Shift+F5".to_string()]);
         assert!(parse_keybindings("").unwrap().is_empty());

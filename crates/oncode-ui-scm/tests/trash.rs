@@ -7,7 +7,10 @@ use gpui_kit::TestAppContext;
 use oncode_ui::repos;
 use oncode_ui::testing::TestApp;
 
+/// Hanya di OS dengan tempat sampah freedesktop (Linux/BSD), yang bisa diarahkan ke folder
+/// sementara. Di Windows dan macOS berkasnya akan masuk ke Recycle Bin/Trash asli pengguna.
 #[gpui_kit::test]
+#[cfg_attr(any(windows, target_os = "macos"), ignore = "tempat sampah asli pengguna tidak bisa dialihkan di OS ini")]
 async fn untracked_file_goes_to_the_trash_after_confirming(cx: &mut TestAppContext) {
     let data = tempfile::tempdir().unwrap();
     std::env::set_var("XDG_DATA_HOME", data.path());

@@ -36,8 +36,9 @@ jobs:
         run: cargo build -p oncode-helper
 
       # Uji tampilan berjalan tanpa layar (platform uji GPUI), jadi tidak perlu Xvfb.
+      # `--no-fail-fast`: semua kegagalan terlihat dalam satu run, tidak berhenti di berkas uji pertama.
       - name: Uji
-        run: cargo test --workspace
+        run: cargo test --workspace --no-fail-fast
 
       - name: Build aplikasi
         run: cargo build -p oncode

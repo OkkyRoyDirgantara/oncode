@@ -11,8 +11,10 @@ use oncode_ui::{Command, OpenOptions, SidebarView, TabContent, TabData, TabKind,
 use oncode_ui_explorer::tree::Row;
 use oncode_ui_explorer::Explorer;
 
+/// Path sebagai teks dalam bentuk yang dipakai tab dan buffer (`\` di Windows), sehingga
+/// `project.join("src/app")` sama dengan path yang dibuat explorer.
 fn text(path: &Path) -> String {
-    path.to_string_lossy().into_owned()
+    oncode_ui::editor::file_path(&path.to_string_lossy())
 }
 
 /// Baris pohon sebagai teks: path relatif, `/` untuk folder, lekukan per tingkat.
@@ -24,7 +26,8 @@ fn shape(explorer: &Entity<Explorer>, root: &Path, cx: &App) -> Vec<String> {
         .iter()
         .map(|row| match row {
             Row::Entry { entry, depth, .. } => {
-                let relative = entry.path.strip_prefix(&root).unwrap_or(&entry.path).trim_start_matches('/');
+                // Path entri memakai pemisah sistem (`\` di Windows); bentuk teksnya selalu `/`.
+                let relative = entry.path.strip_prefix(&root).unwrap_or(&entry.path).trim_start_matches(['/', '\\']).replace('\\', "/");
                 format!("{}{relative}{}", "  ".repeat(*depth), if entry.is_dir { "/" } else { "" })
             }
             Row::Note { depth, text, .. } => format!("{}({text})", "  ".repeat(*depth)),

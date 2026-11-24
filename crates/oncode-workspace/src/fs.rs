@@ -411,6 +411,10 @@ fn is_same_entry(from: &Path, to: &Path) -> bool {
 
 /// Memindahkan berkas atau folder ke tempat sampah sistem operasi.
 pub async fn trash(paths: &[PathBuf]) -> Result<()> {
+    // Tidak ada yang dibuang: berhasil di semua OS (pustaka `trash` menolak daftar kosong di Windows).
+    if paths.is_empty() {
+        return Ok(());
+    }
     let paths = paths.to_vec();
     blocking(move || {
         for path in &paths {

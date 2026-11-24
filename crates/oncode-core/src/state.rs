@@ -29,6 +29,27 @@ pub type Shared = Arc<Core>;
 /// Variabel lingkungan berisi path absolut ke `oncode-helper`; diperiksa sebelum folder binary aplikasi.
 pub const HELPER_ENV: &str = "ONCODE_HELPER";
 
+/// Bentuk pembanding root repositori: pemisah `/`, tanpa `/` di akhir, dan di Windows tanpa
+/// membedakan huruf besar-kecil. Git melaporkan root sebagai `C:/proyek`, sedangkan path Windows
+/// ditulis `C:\proyek`; keduanya menunjuk repositori yang sama.
+pub fn root_key(root: &str) -> String {
+    // Di Linux/macOS `\` adalah karakter nama yang sah, jadi hanya disamakan dengan `/` di Windows.
+    if cfg!(windows) {
+        root.replace('\\', "/").trim_end_matches('/').to_lowercase()
+    } else {
+        root.trim_end_matches('/').to_string()
+    }
+}
+
+/// Entri registry untuk `root`: dicocokkan persis, atau lewat [`root_key`].
+fn find_repo(repos: &HashMap<String, Arc<RepoEntry>>, root: &str) -> Option<(String, Arc<RepoEntry>)> {
+    if let Some(entry) = repos.get(root) {
+        return Some((root.to_string(), entry.clone()));
+    }
+    let key = root_key(root);
+    repos.iter().find(|(candidate, _)| root_key(candidate) == key).map(|(candidate, entry)| (candidate.clone(), entry.clone()))
+}
+
 pub struct RepoEntry {
     pub repo: Repo,
     scheduled: AtomicBool,
@@ -215,11 +236,8 @@ impl Core {
 
     /// Repositori yang sudah dibuka untuk `root`.
     pub fn repo(&self, root: &str) -> AppResult<Repo> {
-        self.repos
-            .lock()
-            .unwrap()
-            .get(root)
-            .map(|e| e.repo.clone())
+        find_repo(&self.repos.lock().unwrap(), root)
+            .map(|(_, entry)| entry.repo.clone())
             .ok_or_else(|| AppError::new("notARepo", format!("Repository is not open: {root}")))
     }
 
@@ -268,13 +286,13 @@ impl Core {
 
     /// Menjadwalkan penyiaran snapshot baru untuk `root`. Permintaan beruntun digabung.
     pub fn refresh(self: &Arc<Self>, root: &str) {
-        let Some(entry) = self.repos.lock().unwrap().get(root).cloned() else { return };
+        // Disiarkan dengan root seperti terdaftar (dari Git), apa pun bentuk yang diberikan pemanggil.
+        let Some((root, entry)) = find_repo(&self.repos.lock().unwrap(), root) else { return };
         entry.dirty.store(true, Ordering::SeqCst);
         if entry.scheduled.swap(true, Ordering::SeqCst) {
             return;
         }
         let state = self.clone();
-        let root = root.to_string();
         self.spawn(async move {
             loop {
                 tokio::time::sleep(Duration::from_millis(60)).await;

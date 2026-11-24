@@ -4,6 +4,16 @@ use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::TestAppContext;
 use oncode_ui::testing::TestApp;
 
+/// Isi berkas yang ditulis redireksi shell: PowerShell 5 menulis UTF-16 ber-BOM, PowerShell dan cmd
+/// memakai CRLF, shell Unix UTF-8 dengan LF.
+fn shell_text(bytes: &[u8]) -> String {
+    match bytes {
+        [0xFF, 0xFE, rest @ ..] => String::from_utf16_lossy(&rest.chunks_exact(2).map(|pair| u16::from_le_bytes([pair[0], pair[1]])).collect::<Vec<_>>()),
+        [0xEF, 0xBB, 0xBF, rest @ ..] => String::from_utf8_lossy(rest).into_owned(),
+        _ => String::from_utf8_lossy(bytes).into_owned(),
+    }
+}
+
 #[gpui_kit::test]
 async fn terminal_runs_a_command_in_the_project_folder(cx: &mut TestAppContext) {
     let app = TestApp::new(cx);
@@ -25,11 +35,12 @@ async fn terminal_runs_a_command_in_the_project_folder(cx: &mut TestAppContext) 
         window.press("enter", cx);
     });
     let out = project.join("out.txt");
-    window.wait_until(cx, "berkas ditulis shell", |_, _| std::fs::read_to_string(&out).is_ok_and(|text| text == "ok\n")).await;
+    window.wait_until(cx, "berkas ditulis shell", |_, _| std::fs::read(&out).is_ok_and(|bytes| shell_text(&bytes).trim_end() == "ok")).await;
 
-    // Keluaran program tampil di emulator, termasuk warna ANSI yang diurai.
+    // Keluaran program tampil di emulator. `echo` ada di sh, cmd, dan PowerShell; baris perintah
+    // yang diketik (`echo tanda-selesai`) tidak sama persis dengan baris keluarannya.
     window.update(cx, |window, cx| {
-        window.input("printf 'tanda-%s\\n' selesai", cx);
+        window.input("echo tanda-selesai", cx);
         window.press("enter", cx);
     });
     let session = cx.update(|cx| panel.read(cx).active_session().unwrap().clone());
@@ -58,7 +69,7 @@ async fn shell_keys_are_not_taken_by_app_shortcuts(cx: &mut TestAppContext) {
     assert_eq!(cx.update(|cx| workbench.read(cx).model().all_tabs().count()), 1, "tab editor tidak tertutup");
 
     // Pintasan yang diizinkan (Toggle Panel) tetap sampai ke aplikasi.
-    window.update(cx, |window, cx| window.press("ctrl-j", cx));
+    window.update(cx, |window, cx| window.press("secondary-j", cx));
     cx.run_until_parked();
     assert!(cx.update(|cx| !workbench.read(cx).is_panel_visible()));
 }
@@ -97,10 +108,10 @@ async fn more_terminals_open_from_the_shortcut_and_the_panel_button(cx: &mut Tes
     let panel = cx.update(|cx| oncode_ui_terminal::panel(workbench.read(cx)).unwrap());
     window.wait_until(cx, "terminal pertama berjalan", |_, cx| panel.read(cx).active_session().is_some_and(|s| s.read(cx).is_running())).await;
 
-    // Ctrl+Shift+` seperti yang dikirim GPUI di Windows: Ctrl + "~", Shift sudah menjadi karakter.
+    // Ctrl+Shift+` (Cmd di macOS) seperti yang dikirim GPUI di Windows: Ctrl + "~", Shift sudah menjadi karakter.
     window.update(cx, |window, cx| {
         window.render_frame(cx);
-        window.press("ctrl-~", cx);
+        window.press("secondary-~", cx);
     });
     cx.run_until_parked();
     window.wait_until(cx, "terminal kedua dari pintasan", |_, cx| panel.read(cx).sessions().len() == 2).await;

@@ -433,13 +433,15 @@ pub fn check_ref(value: &str) -> Result<&str> {
     Ok(value)
 }
 
-/// Menolak path yang keluar dari repositori.
+/// Menolak path yang keluar dari repositori: absolut, berakar (`/x` atau `\x`, yang di Windows
+/// tidak dihitung `is_absolute` karena tanpa drive), berawalan drive (`C:x`), atau memakai `..`.
 pub fn check_path(value: &str) -> Result<&str> {
+    use std::path::Component;
     let path = Path::new(value);
     if value.is_empty()
         || value.contains('\0')
         || path.is_absolute()
-        || path.components().any(|c| matches!(c, std::path::Component::ParentDir))
+        || path.components().any(|c| matches!(c, Component::ParentDir | Component::RootDir | Component::Prefix(_)))
     {
         return Err(GitError::invalid(format!("Invalid path: {value:?}")));
     }
@@ -483,5 +485,12 @@ mod tests {
         assert!(check_path("../etc/passwd").is_err());
         assert!(check_path("/abs").is_err());
         assert!(check_path("src/a b.rs").is_ok());
+        assert!(check_path("src/../../luar").is_err());
+        if cfg!(windows) {
+            assert!(check_path(r"\Windows\System32").is_err());
+            assert!(check_path("C:luar.txt").is_err());
+            assert!(check_path(r"C:\luar.txt").is_err());
+            assert!(check_path(r"src\a.rs").is_ok());
+        }
     }
 }

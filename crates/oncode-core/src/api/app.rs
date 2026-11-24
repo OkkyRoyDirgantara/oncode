@@ -244,7 +244,8 @@ mod tests {
 
         let info = workspace_set_trusted(&t.core, "w1", true).await.unwrap();
         assert!(info.trusted);
-        assert_eq!(info.repo_root.as_deref(), Some(path.as_str()));
+        // Root repositori berasal dari Git (`C:/...` di Windows); dibandingkan sebagai path.
+        assert_eq!(info.repo_root.as_deref().map(std::path::Path::new), Some(project.as_path()));
 
         let info = workspace_set_trusted(&t.core, "w1", false).await.unwrap();
         assert_eq!((info.trusted, info.repo_root), (false, None));

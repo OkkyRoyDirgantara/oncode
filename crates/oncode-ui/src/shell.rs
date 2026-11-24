@@ -65,6 +65,7 @@ impl SessionData {
 
 /// Tab berkas untuk sebuah path absolut, atau berkas baru (`untitled:Untitled-1`).
 pub fn file_tab(path: &str) -> TabData {
+    let path = &crate::editor::file_path(path);
     if let Some(name) = path.strip_prefix(crate::editor::UNTITLED_PREFIX) {
         return TabData::new("file", name.to_string(), json!({ "path": path })).with_id(format!("file:{path}")).with_description("New file, not saved yet".to_string());
     }

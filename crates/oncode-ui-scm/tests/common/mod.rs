@@ -38,7 +38,7 @@ impl GitHttpServer {
     /// Server dengan satu repositori bare kosong `proyek.git` (branch bawaan `main`).
     pub fn start(user: &str, password: &str) -> Self {
         let dir = tempfile::tempdir().unwrap();
-        let root = std::fs::canonicalize(dir.path()).unwrap();
+        let root = oncode_ui::testing::canonical(dir.path());
         let bare = root.join("proyek.git");
         std::fs::create_dir_all(&bare).unwrap();
         oncode_ui::testing::git(&bare, &["init", "-q", "--bare", "-b", "main"]);

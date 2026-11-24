@@ -9,7 +9,7 @@ use oncode_ui::testing::{git, TestApp, TestWindow};
 
 fn bare_remote() -> (tempfile::TempDir, PathBuf) {
     let dir = tempfile::tempdir().unwrap();
-    let path = std::fs::canonicalize(dir.path()).unwrap();
+    let path = oncode_ui::testing::canonical(dir.path());
     git(&path, &["init", "-q", "--bare", "-b", "main"]);
     (dir, path)
 }

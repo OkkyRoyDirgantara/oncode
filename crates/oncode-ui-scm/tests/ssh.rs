@@ -34,7 +34,7 @@ fn start_sshd() -> Option<Sshd> {
         return None;
     }
     let dir = tempfile::tempdir().unwrap();
-    let base = std::fs::canonicalize(dir.path()).unwrap();
+    let base = oncode_ui::testing::canonical(dir.path());
     let (server, ssh_dir) = (base.join("sshd"), base.join("ssh"));
     std::fs::create_dir_all(&server).unwrap();
     std::fs::create_dir_all(&ssh_dir).unwrap();

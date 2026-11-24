@@ -5,7 +5,7 @@ use std::collections::HashMap;
 
 use gpui_kit::{App, AppContext as _, Context, Entity, EventEmitter, Global, Subscription, Window};
 use oncode_core::api::git;
-use oncode_core::CoreEvent;
+use oncode_core::{root_key, CoreEvent};
 use oncode_git::RepoSnapshot;
 
 use crate::workbench::{register_feature, Workbench};
@@ -93,17 +93,6 @@ pub fn marks_for(snapshot: &RepoSnapshot) -> HashMap<String, FileMark> {
     marks
 }
 
-/// Bentuk pembanding root: pemisah `/`, tanpa `/` di akhir, dan di Windows tanpa membedakan huruf
-/// besar-kecil. Git melaporkan root sebagai `C:/proyek`, sedangkan path Windows `C:\proyek`.
-fn root_key(root: &str) -> String {
-    let key = root.replace('\\', "/").trim_end_matches('/').to_string();
-    if cfg!(windows) {
-        key.to_lowercase()
-    } else {
-        key
-    }
-}
-
 impl Repos {
     /// Snapshot repositori dengan root ini; `C:\proyek` dan `C:/proyek` dianggap sama.
     pub fn snapshot(&self, root: &str) -> Option<&RepoSnapshot> {
@@ -187,14 +176,14 @@ fn setup(workbench: &mut Workbench, _: &mut Window, cx: &mut Context<Workbench>)
 
 #[cfg(test)]
 mod tests {
-    use super::root_key;
+    use oncode_core::root_key;
 
     #[test]
     fn roots_match_across_separators_and_trailing_slashes() {
         assert_eq!(root_key("/home/ana/proyek/"), "/home/ana/proyek");
-        assert_eq!(root_key(r"C:\Users\ana\proyek"), root_key("C:/Users/ana/proyek"));
         assert_ne!(root_key("/a/b"), root_key("/a/bc"));
-        // Di Windows huruf drive dan nama folder tidak membedakan besar-kecil.
+        // Di Windows `\` sama dengan `/`, dan huruf besar-kecil tidak dibedakan.
+        assert_eq!(root_key(r"C:\Users\ana\proyek") == root_key("C:/Users/ana/proyek"), cfg!(windows));
         assert_eq!(root_key(r"c:\Proyek") == root_key("C:/proyek"), cfg!(windows));
     }
 }

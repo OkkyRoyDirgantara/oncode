@@ -34,7 +34,7 @@ async fn ctrl_shift_v_previews_beside_the_editor_and_follows_edits(cx: &mut Test
 
     window.update(cx, |window, cx| {
         window.render_frame(cx);
-        window.press("ctrl-shift-v", cx);
+        window.press("secondary-shift-v", cx);
     });
     cx.run_until_parked();
     let preview = preview(&window, cx).expect("tab pratinjau aktif");
@@ -75,7 +75,7 @@ async fn preview_paints_the_rendered_markdown(cx: &mut TestAppContext) {
     let (window, _project) = open_readme(&app, cx).await;
     window.update(cx, |window, cx| {
         window.render_frame(cx);
-        window.press("ctrl-shift-v", cx);
+        window.press("secondary-shift-v", cx);
     });
     cx.run_until_parked();
     let preview = preview(&window, cx).expect("tab pratinjau aktif");
