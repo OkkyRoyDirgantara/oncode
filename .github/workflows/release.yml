@@ -19,10 +19,11 @@ jobs:
             formats: deb,appimage
           - os: windows-latest
             formats: nsis
-          # Apple Silicon dan Intel dibangun terpisah di runner masing-masing.
+          # Apple Silicon dan Intel dibangun terpisah di runner masing-masing. `macos-13` sudah
+          # dipensiunkan GitHub; `macos-15-intel` adalah runner Intel terakhir (sampai Agustus 2027).
           - os: macos-latest
             formats: dmg
-          - os: macos-13
+          - os: macos-15-intel
             formats: dmg
     runs-on: ${{ matrix.os }}
     steps:
