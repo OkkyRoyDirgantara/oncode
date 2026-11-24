@@ -86,9 +86,20 @@ pub async fn ai_has_api_key(core: &Shared) -> AppResult<bool> {
     Ok(api_key(core).await?.is_some())
 }
 
-/// Program `claude` (Claude Code CLI) di PATH, bila terpasang.
+/// Program `claude` (Claude Code CLI), bila terpasang: di PATH, lalu di lokasi pemasangan
+/// bawaannya. Cadangan itu perlu bila PATH shell login tidak terbaca (aplikasi dibuka dari
+/// Finder/Dock hanya mendapat PATH minimal).
 pub fn claude_code_program() -> Option<PathBuf> {
-    oncode_lsp::find_on_path("claude")
+    oncode_lsp::find_on_path("claude").or_else(|| {
+        let home = crate::dirs::home_dir()?;
+        claude_code_install_paths(&home).iter().find_map(|path| oncode_lsp::find_on_path(&path.to_string_lossy()))
+    })
+}
+
+/// Lokasi pemasangan Claude Code: installer native (`~/.local/bin`) dan pemasangan lokal lama
+/// (`~/.claude/local`). Di Windows ekstensi `.exe`/`.cmd` dicoba oleh `find_on_path`.
+fn claude_code_install_paths(home: &Path) -> [PathBuf; 2] {
+    [home.join(".local").join("bin").join("claude"), home.join(".claude").join("local").join("claude")]
 }
 
 /// Endpoint kustom yang sudah lengkap (alamat dan model terisi).

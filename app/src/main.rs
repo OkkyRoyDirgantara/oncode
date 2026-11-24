@@ -5,6 +5,7 @@
 
 #[cfg(debug_assertions)]
 mod dev;
+mod shell_env;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -13,6 +14,8 @@ use oncode_core::{api, Core, Dirs, FallbackStore};
 use oncode_ui::OnCode;
 
 fn main() {
+    // Paling awal, sebelum thread mana pun dibuat (lihat `shell_env`).
+    shell_env::import_login_path();
     let args: Vec<String> = std::env::args().collect();
     let cwd = std::env::current_dir().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default();
     let folder = api::app::folder_argument(&args, &cwd).map(PathBuf::from);
