@@ -20,11 +20,13 @@ pub struct PickItem {
     pub hint: Option<SharedString>,
     /// Nilai yang dikembalikan saat dipilih.
     pub value: String,
+    /// Gambar berwarna di depan label (path aset, mis. logo bahasa berkas).
+    pub image: Option<SharedString>,
 }
 
 impl PickItem {
     pub fn new(label: impl Into<SharedString>, value: impl Into<String>) -> Self {
-        Self { label: label.into(), description: None, hint: None, value: value.into() }
+        Self { label: label.into(), description: None, hint: None, value: value.into(), image: None }
     }
 
     pub fn description(mut self, description: impl Into<SharedString>) -> Self {
@@ -34,6 +36,11 @@ impl PickItem {
 
     pub fn hint(mut self, hint: impl Into<SharedString>) -> Self {
         self.hint = Some(hint.into());
+        self
+    }
+
+    pub fn image(mut self, image: impl Into<SharedString>) -> Self {
+        self.image = Some(image.into());
         self
     }
 }
@@ -283,6 +290,7 @@ impl Render for QuickPick {
                             .when(selected, |el| el.bg(theme.list_active))
                             .when(!selected, |el| el.hover(|s| s.bg(theme.list_hover)))
                             .on_click(cx.listener(move |this, _, window, cx| this.finish(Some(picked.clone()), window, cx)))
+                            .when_some(item.image.clone(), |el, image| el.child(gpui_kit::img(image).size(gpui_kit::px(16.)).flex_none()))
                             .child(div().flex_none().child(item.label.clone()))
                             .when_some(item.description.clone(), |el, description| {
                                 el.child(div().flex_1().min_w_0().truncate().text_color(theme.muted_foreground).text_xs().child(description))

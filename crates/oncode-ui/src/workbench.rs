@@ -100,6 +100,10 @@ pub trait TabKind: 'static {
     fn icon(&self, _tab: &TabData) -> Option<Lucide> {
         None
     }
+    /// Gambar berwarna (path aset, mis. logo bahasa) sebagai ikon tab; didahulukan dari [`TabKind::icon`].
+    fn image(&self, _tab: &TabData) -> Option<SharedString> {
+        None
+    }
 }
 
 type BuildView = Rc<dyn Fn(&Env, &mut Window, &mut App) -> AnyView>;
@@ -811,6 +815,7 @@ impl Workbench {
                 let selected = model_group.active.as_deref() == Some(tab.id.as_str());
                 let dirty = self.slots.get(&(group, tab.id.clone())).is_some_and(|slot| slot.content.is_dirty(cx));
                 let icon = kinds.get(&tab.kind).and_then(|kind| kind.icon(tab));
+                let image = kinds.get(&tab.kind).and_then(|kind| kind.image(tab));
                 let id = tab.id.clone();
                 let close_id = tab.id.clone();
                 let pin_id = tab.id.clone();
@@ -845,7 +850,11 @@ impl Workbench {
                             this.close_tabs(group, vec![id.clone()], false, window, cx).detach();
                         })
                     })
-                    .when_some(icon, |el, icon| el.child(Icon::new(icon).small()))
+                    .map(|el| match (image, icon) {
+                        (Some(image), _) => el.child(gpui_kit::img(image).size(px(16.)).flex_none()),
+                        (None, Some(icon)) => el.child(Icon::new(icon).small()),
+                        (None, None) => el,
+                    })
                     .child(div().when(tab.preview, |el| el.italic()).child(SharedString::from(tab.title.clone())))
                     .child(
                         div()

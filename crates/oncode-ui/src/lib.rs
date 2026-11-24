@@ -7,6 +7,7 @@
 pub mod app;
 pub mod commands;
 pub mod editor;
+pub mod file_icons;
 pub mod keys;
 pub mod menubar;
 pub mod model;

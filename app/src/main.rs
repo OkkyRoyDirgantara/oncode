@@ -39,7 +39,7 @@ fn main() {
     );
 
     // Set ikon lengkap: aset bawaan hanya memuat ± 100 ikon Lucide, sedangkan fitur memakai lebih banyak.
-    gpui_kit::application().with_assets(gpui_kit::assets::AllAssets).run(move |cx| {
+    gpui_kit::application().with_assets(oncode_ui::file_icons::Assets).run(move |cx| {
         gpui_kit::init(cx);
         // Jendela terakhir ditutup: aplikasi selesai (macOS tetap hidup seperti aplikasi lain di sana).
         cx.on_window_closed(|cx, _| {

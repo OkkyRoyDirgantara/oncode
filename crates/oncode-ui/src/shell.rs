@@ -618,7 +618,8 @@ fn show_quick_open(core: Shared, label: SharedString, workbench: WeakEntity<Work
                         Some((folder, name)) => (folder.to_string(), name.to_string()),
                         None => (String::new(), result.path.clone()),
                     };
-                    PickItem::new(name, result.path).description(folder)
+                    let image = crate::file_icons::file_icon_path(&name);
+                    PickItem::new(name, result.path).description(folder).image(image)
                 })
                 .collect()
         })

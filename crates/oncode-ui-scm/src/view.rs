@@ -690,6 +690,7 @@ impl ScmPanel {
                     .flex_1()
                     .min_w_0()
                     .gap_1p5()
+                    .child(oncode_ui::file_icons::file_icon(path).when(deleted, |el| el.opacity(0.5)))
                     .child(div().flex_none().max_w_full().truncate().when(deleted, |el| el.line_through()).child(SharedString::from(name.to_string())))
                     .when(!dir.is_empty(), |el| el.child(div().flex_1().min_w_0().truncate().text_xs().text_color(theme.muted_foreground).child(SharedString::from(dir.to_string())))),
             )

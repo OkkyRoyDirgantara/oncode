@@ -10,7 +10,7 @@ mod view;
 
 use gpui_kit::component::input::{EditorState, RopeExt as _};
 use gpui_kit::component::{h_flex, ActiveTheme as _};
-use gpui_kit::{div, App, AppContext as _, ClipboardItem, Context, Entity, Focusable as _, IntoElement, ParentElement as _, Render, Styled as _, Subscription, WeakEntity, Window};
+use gpui_kit::{div, App, AppContext as _, ClipboardItem, Context, Entity, Focusable as _, IntoElement, ParentElement as _, Render, SharedString, Styled as _, Subscription, WeakEntity, Window};
 use oncode_core::settings::AutoSave;
 use oncode_workspace::Eol;
 use serde_json::Value;
@@ -97,6 +97,10 @@ impl TabKind for FileKind {
 
     fn icon(&self, _tab: &TabData) -> Option<Lucide> {
         Some(Lucide::FileText)
+    }
+
+    fn image(&self, tab: &TabData) -> Option<SharedString> {
+        Some(crate::file_icons::file_icon_path(tab.param_str("path").unwrap_or_default()))
     }
 }
 

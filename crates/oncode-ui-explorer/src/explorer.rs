@@ -23,6 +23,7 @@ use gpui_kit::{
 use oncode_core::api::fs;
 use oncode_core::AppError;
 use oncode_ui::editor::{buffers, open_file, OpenFile};
+use oncode_ui::file_icons::{file_icon, folder_icon};
 use oncode_ui::overlay::{self, Confirm};
 use oncode_ui::{repos, spawn_core, Env, FileMark, Lucide, WorkbenchEvent};
 use oncode_workspace::DirEntry;
@@ -917,11 +918,9 @@ impl Explorer {
         }
         let title = SharedString::from(title.join(" • "));
 
-        let icon = match (entry.is_dir, expanded) {
-            (true, true) => Lucide::FolderOpen,
-            (true, false) => Lucide::Folder,
-            (false, _) => Lucide::File,
-        };
+        // Logo bahasa / jenis berkas, dan ikon folder khusus (src, tests, node_modules, …).
+        let icon = if entry.is_dir { folder_icon(&entry.path) } else { file_icon(&entry.path) };
+        let ignored = entry.ignored;
         let (path, is_dir) = (entry.path.clone(), entry.is_dir);
         let menu_path = entry.path.clone();
         h_flex()
@@ -950,7 +949,7 @@ impl Explorer {
             .child(div().flex_none().w(px(14.)).text_color(theme.muted_foreground).when(entry.is_dir, |el| {
                 el.child(Icon::new(if expanded { Lucide::ChevronDown } else { Lucide::ChevronRight }).xsmall())
             }))
-            .child(Icon::new(icon).small().flex_none().text_color(tint.unwrap_or(theme.muted_foreground)))
+            .child(icon.when(ignored, |el| el.opacity(0.5)))
             .child(div().flex_1().min_w_0().truncate().when_some(tint, |el, tint| el.text_color(tint)).child(SharedString::from(entry.name.clone())))
             .when_some(decoration, |el, decoration| {
                 let color = mark_color(decoration.status, theme.is_dark());
