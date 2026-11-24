@@ -18,10 +18,11 @@ use gpui_kit::component::{h_flex, v_flex, ActiveTheme as _, Icon, Selectable as 
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     div, px, AnyElement, AnyView, App, AppContext as _, Context, Entity, EventEmitter, FocusHandle, Focusable, Global, InteractiveElement as _,
-    IntoElement, MouseButton, ParentElement as _, Render, SharedString, StatefulInteractiveElement as _, Styled as _, Subscription, Task, WeakEntity,
+    IntoElement, MouseButton, ParentElement as _, Render, SharedString, StatefulInteractiveElement as _, Styled as _, Subscription, Task, TestSupportExt as _, WeakEntity,
     Window,
 };
 use oncode_core::api::app::WorkspaceInfo;
+use oncode_core::settings::SidebarPosition;
 use oncode_core::{Settings, Shared};
 
 use crate::commands::{self, Command, CommandRegistry};
@@ -410,6 +411,19 @@ impl Workbench {
             }
         };
         self.register_command(Command::new("workbench.toggleSidebar", "Toggle Sidebar", with(|this, _, cx| this.toggle_sidebar(cx))).category("View").key("Mod+B"));
+        self.register_command(
+            Command::new("workbench.toggleSidebarPosition", "Move Sidebar Left/Right", |_, _, cx| {
+                // Disimpan ke pengaturan pengguna; semua jendela mengikuti lewat `SettingsChanged`.
+                let core = crate::core(cx);
+                let mut settings = core.user_settings();
+                settings.workbench.sidebar_position = match settings.workbench.sidebar_position {
+                    SidebarPosition::Left => SidebarPosition::Right,
+                    SidebarPosition::Right => SidebarPosition::Left,
+                };
+                crate::spawn_core(cx, async move { oncode_core::api::app::settings_set(&core, settings).await }).detach();
+            })
+            .category("View"),
+        );
         self.register_command(Command::new("workbench.togglePanel", "Toggle Panel", with(|this, window, cx| this.toggle_panel(window, cx))).category("View").key("Mod+J"));
         self.register_command(
             Command::new("workbench.closeTab", "Close Editor", with(|this, window, cx| {
@@ -708,11 +722,18 @@ impl Workbench {
 
     // ----- Tampilan -----
 
+    /// Activity bar dan sidebar berada di kanan jendela.
+    pub fn sidebar_on_right(&self) -> bool {
+        self.settings.workbench.sidebar_position == SidebarPosition::Right
+    }
+
     fn render_activity_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
         let active = self.active_sidebar().cloned();
+        let on_right = self.sidebar_on_right();
         v_flex()
             .id("activity-bar")
+            .test_support()
             .w(px(44.))
             .h_full()
             .flex_none()
@@ -720,7 +741,8 @@ impl Workbench {
             .py_1()
             .gap_1()
             .bg(theme.sidebar)
-            .border_r_1()
+            // Garis pemisah selalu di sisi yang menghadap editor.
+            .map(|el| if on_right { el.border_l_1() } else { el.border_r_1() })
             .border_color(theme.border)
             .children(self.sorted_sidebar().into_iter().map(|view| {
                 let selected = active.as_ref() == Some(&view.id);
@@ -991,12 +1013,13 @@ impl Render for Workbench {
             .child(resizable_panel().child(editor_area))
             .child(resizable_panel().size(px(260.)).visible(panel_visible).child(panel.unwrap_or_else(|| div().into_any_element())));
 
+        let on_right = self.sidebar_on_right();
         let sidebar_el = v_flex()
             .id("sidebar")
             .size_full()
             .bg(theme.sidebar)
             .text_color(theme.sidebar_foreground)
-            .border_r_1()
+            .map(|el| if on_right { el.border_l_1() } else { el.border_r_1() })
             .border_color(theme.border)
             .when_some(sidebar_title, |el, title| {
                 el.child(h_flex().h(px(34.)).flex_none().px_3().text_xs().text_color(theme.muted_foreground).child(SharedString::from(title)))
@@ -1009,15 +1032,23 @@ impl Render for Workbench {
             .track_focus(&self.focus_handle)
             .bg(theme.background)
             .text_color(theme.foreground)
-            .child(
-                h_flex().flex_1().min_h_0().w_full().items_start().child(self.render_activity_bar(cx)).child(
-                    div().flex_1().h_full().min_w_0().child(
-                        h_resizable("workbench-main")
-                            .child(resizable_panel().size(px(280.)).visible(sidebar.is_some()).child(sidebar_el))
-                            .child(resizable_panel().child(center)),
-                    ),
-                ),
-            )
+            .child({
+                // Kiri: activity bar | sidebar | editor. Kanan: editor | sidebar | activity bar.
+                // Id berbeda per sisi agar ukuran yang tersimpan tidak tertukar antar panel.
+                let sidebar_panel = resizable_panel().size(px(280.)).visible(sidebar.is_some()).child(sidebar_el);
+                let main = if on_right {
+                    h_resizable("workbench-main-right").child(resizable_panel().child(center)).child(sidebar_panel)
+                } else {
+                    h_resizable("workbench-main").child(sidebar_panel).child(resizable_panel().child(center))
+                };
+                let main = div().flex_1().h_full().min_w_0().child(main);
+                let row = h_flex().flex_1().min_h_0().w_full().items_start();
+                if on_right {
+                    row.child(main).child(self.render_activity_bar(cx))
+                } else {
+                    row.child(self.render_activity_bar(cx)).child(main)
+                }
+            })
             .child(self.render_status_bar(cx))
     }
 }

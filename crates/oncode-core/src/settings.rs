@@ -72,11 +72,21 @@ pub enum StartupView {
     Explorer,
 }
 
+/// Sisi jendela tempat activity bar dan sidebar berada.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum SidebarPosition {
+    #[default]
+    Left,
+    Right,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkbenchSettings {
     pub theme: Theme,
     pub startup_view: StartupView,
+    pub sidebar_position: SidebarPosition,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

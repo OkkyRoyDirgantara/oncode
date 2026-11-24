@@ -58,6 +58,7 @@ pub const MENUS: &[(&str, &[Option<&str>])] = &[
             Some("git.showGraph"),
             None,
             Some("workbench.toggleSidebar"),
+            Some("workbench.toggleSidebarPosition"),
             Some("workbench.togglePanel"),
             Some("terminal.toggle"),
             None,

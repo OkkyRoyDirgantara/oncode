@@ -2,7 +2,7 @@
 //! validasi. Formulir dirender dari daftar ini, sehingga pencarian, penanda "ditimpa proyek",
 //! dan pengujian memakai satu sumber. Logika murni: tidak bergantung pada GPUI.
 
-use oncode_core::settings::{AiProvider, ApiFormat, AutoSave, StartupView, Theme};
+use oncode_core::settings::{AiProvider, ApiFormat, AutoSave, SidebarPosition, StartupView, Theme};
 use oncode_core::Settings;
 use oncode_git::PullStrategy;
 use oncode_lsp::ServerSpec;
@@ -230,6 +230,7 @@ const AUTO_SAVE: &[ChoiceOption] =
     &[ChoiceOption { value: "off", label: "Off" }, ChoiceOption { value: "onFocusChange", label: "On focus change" }, ChoiceOption { value: "afterDelay", label: "After delay" }];
 const THEME: &[ChoiceOption] = &[ChoiceOption { value: "system", label: "System" }, ChoiceOption { value: "dark", label: "Dark" }, ChoiceOption { value: "light", label: "Light" }];
 const STARTUP_VIEW: &[ChoiceOption] = &[ChoiceOption { value: "scm", label: "Source Control" }, ChoiceOption { value: "explorer", label: "Explorer" }];
+const SIDEBAR_POSITION: &[ChoiceOption] = &[ChoiceOption { value: "left", label: "Left" }, ChoiceOption { value: "right", label: "Right" }];
 const PULL_STRATEGY: &[ChoiceOption] =
     &[ChoiceOption { value: "ffOnly", label: "Fast-forward only" }, ChoiceOption { value: "merge", label: "Merge" }, ChoiceOption { value: "rebase", label: "Rebase" }];
 
@@ -270,7 +271,7 @@ fn validate_custom_model(text: &str) -> Option<&'static str> {
     None
 }
 
-pub static FIELDS: [Field; 29] = [
+pub static FIELDS: [Field; 30] = [
     Field {
         id: "editor.fontFamily",
         section: SectionId::Editor,
@@ -419,6 +420,27 @@ pub static FIELDS: [Field; 29] = [
                 s.workbench.startup_view = match value {
                     "scm" => StartupView::Scm,
                     "explorer" => StartupView::Explorer,
+                    _ => return,
+                }
+            },
+        }),
+    },
+    Field {
+        id: "workbench.sidebarPosition",
+        section: SectionId::Appearance,
+        label: "Sidebar position",
+        description: "Side of the window for the activity bar and sidebar (Explorer, Source Control, Search, …). Also available as \"View: Move Sidebar Left/Right\".",
+        keywords: "sidebar left right activity bar layout side",
+        kind: FieldKind::Select(SelectSpec {
+            options: SIDEBAR_POSITION,
+            get: |s| match s.workbench.sidebar_position {
+                SidebarPosition::Left => "left",
+                SidebarPosition::Right => "right",
+            },
+            set: |s, value| {
+                s.workbench.sidebar_position = match value {
+                    "left" => SidebarPosition::Left,
+                    "right" => SidebarPosition::Right,
                     _ => return,
                 }
             },
@@ -926,6 +948,7 @@ mod tests {
                 "files.autoSave",
                 "workbench.theme",
                 "workbench.startupView",
+                "workbench.sidebarPosition",
                 "git.path",
                 "git.autoFetchMinutes",
                 "git.pullStrategy",
@@ -995,6 +1018,7 @@ mod tests {
         assert_eq!(values("files.autoSave"), ["off=Off", "onFocusChange=On focus change", "afterDelay=After delay"]);
         assert_eq!(values("workbench.theme"), ["system=System", "dark=Dark", "light=Light"]);
         assert_eq!(values("workbench.startupView"), ["scm=Source Control", "explorer=Explorer"]);
+        assert_eq!(values("workbench.sidebarPosition"), ["left=Left", "right=Right"]);
         assert_eq!(values("git.pullStrategy"), ["ffOnly=Fast-forward only", "merge=Merge", "rebase=Rebase"]);
         assert_eq!(values("ai.provider"), ["auto=Automatic", "claudeCode=Claude Code CLI", "api=Anthropic API", "custom=Custom endpoint"]);
         assert_eq!(values("ai.customFormat"), ["openai=OpenAI-compatible", "anthropic=Anthropic Messages"]);
