@@ -6,6 +6,7 @@ use std::rc::Rc;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::{h_flex, v_flex, ActiveTheme as _, WindowExt as _};
 use gpui_kit::prelude::FluentBuilder as _;
+use gpui_kit::TestSupportExt as _;
 use gpui_kit::{
     div, px, App, AppContext as _, Context, Entity, InteractiveElement as _, IntoElement, KeyDownEvent, ParentElement as _, Render, ScrollHandle, SharedString,
     StatefulInteractiveElement as _, Styled as _, Subscription, Task, Window,
@@ -137,6 +138,8 @@ pub struct QuickPick {
     items: Vec<PickItem>,
     selected: usize,
     loading: bool,
+    /// Enter ditekan selagi pencarian berjalan: dipilih begitu hasil kueri terakhir tiba.
+    confirm_pending: bool,
     scroll: ScrollHandle,
     on_pick: Rc<dyn Fn(Option<PickItem>, &mut Window, &mut App)>,
     done: bool,
@@ -149,7 +152,7 @@ impl QuickPick {
     fn new(options: QuickPickOptions, on_pick: Rc<dyn Fn(Option<PickItem>, &mut Window, &mut App)>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let input = cx.new(|cx| InputState::new(window, cx).placeholder(options.placeholder.clone()));
         let subscription = cx.subscribe_in(&input, window, |this: &mut Self, _, event: &InputEvent, window, cx| match event {
-            InputEvent::Change => this.refresh(cx),
+            InputEvent::Change => this.refresh(window, cx),
             InputEvent::PressEnter { .. } => this.confirm(window, cx),
             _ => {}
         });
@@ -159,6 +162,7 @@ impl QuickPick {
             items: Vec::new(),
             selected: 0,
             loading: false,
+            confirm_pending: false,
             scroll: ScrollHandle::new(),
             on_pick,
             done: false,
@@ -166,7 +170,7 @@ impl QuickPick {
             _search: Task::ready(()),
             _subscriptions: vec![subscription],
         };
-        this.refresh(cx);
+        this.refresh(window, cx);
         this
     }
 
@@ -182,7 +186,7 @@ impl QuickPick {
         items
     }
 
-    fn refresh(&mut self, cx: &mut Context<Self>) {
+    fn refresh(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let query = self.input.read(cx).value().to_string();
         self.revision += 1;
         let revision = self.revision;
@@ -195,17 +199,24 @@ impl QuickPick {
             PickSource::Async(search) => {
                 self.loading = true;
                 let task = search(query.clone(), cx);
+                let window_handle = window.window_handle();
                 self._search = cx.spawn(async move |this, cx| {
                     let items = task.await;
-                    let _ = this.update(cx, |this, cx| {
+                    let confirm = this.update(cx, |this, cx| {
                         if this.revision != revision {
-                            return;
+                            return false;
                         }
                         this.items = this.with_custom(items, &query);
                         this.selected = 0;
                         this.loading = false;
                         cx.notify();
+                        std::mem::take(&mut this.confirm_pending)
                     });
+                    if confirm.unwrap_or(false) {
+                        let _ = cx.update_window(window_handle, |_, window, cx| {
+                            let _ = this.update(cx, |this, cx| this.confirm(window, cx));
+                        });
+                    }
                 });
             }
         }
@@ -234,7 +245,10 @@ impl QuickPick {
     }
 
     fn confirm(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // Hasil yang tampil masih untuk kueri sebelumnya: pilih setelah hasil kueri ini tiba,
+        // agar Enter yang ditekan cepat setelah mengetik tidak hilang.
         if self.loading {
+            self.confirm_pending = true;
             return;
         }
         let item = self.items.get(self.selected).cloned();
@@ -273,13 +287,25 @@ impl Render for QuickPick {
                     .overflow_y_scroll()
                     .track_scroll(&self.scroll)
                     .when(self.items.is_empty(), |el| {
-                        el.child(div().px_2().py_3().text_sm().text_color(theme.muted_foreground).child(if self.loading { SharedString::from("Searching…") } else { self.options.empty_text.clone() }))
+                        // Id berbeda untuk "sedang mencari" dan "tidak ada hasil", agar uji bisa membedakannya.
+                        let id = if self.loading { "quick-pick-searching" } else { "quick-pick-empty" };
+                        el.child(
+                            div()
+                                .id(id)
+                                .test_support()
+                                .px_2()
+                                .py_3()
+                                .text_sm()
+                                .text_color(theme.muted_foreground)
+                                .child(if self.loading { SharedString::from("Searching…") } else { self.options.empty_text.clone() }),
+                        )
                     })
                     .children(self.items.iter().enumerate().map(|(index, item)| {
                         let selected = index == self.selected;
                         let picked = item.clone();
                         h_flex()
                             .id(("quick-pick-item", index))
+                            .test_support()
                             .w_full()
                             .flex_none()
                             .px_2()
@@ -307,7 +333,9 @@ pub fn quick_pick(options: QuickPickOptions, on_pick: impl Fn(Option<PickItem>, 
     let on_pick: Rc<dyn Fn(Option<PickItem>, &mut Window, &mut App)> = Rc::new(on_pick);
     let picker = cx.new(|cx| QuickPick::new(options, on_pick, window, cx));
     let focus = picker.read(cx).input.clone();
-    window.open_dialog(cx, move |dialog, _, _| dialog.close_button(false).margin_top(px(80.)).w(px(620.)).child(picker.clone()));
+    // Enter tidak menutup dialog lewat aksi Confirm bawaannya: quick pick menutupnya sendiri saat
+    // memilih. Tanpa ini Enter selagi pencarian berjalan menutup dialog tanpa memilih apa pun.
+    window.open_dialog(cx, move |dialog, _, _| dialog.close_button(false).on_ok(|_, _, _| false).margin_top(px(80.)).w(px(620.)).child(picker.clone()));
     window.defer(cx, move |window, cx| focus.update(cx, |state, cx| state.focus(window, cx)));
 }
 

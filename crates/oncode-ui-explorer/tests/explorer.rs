@@ -381,6 +381,10 @@ async fn renaming_a_folder_rewrites_open_tabs_and_keeps_it_expanded(cx: &mut Tes
         let path = text(&project.join(file));
         f.window.update(cx, |window, cx| f.workbench.update(cx, |workbench, cx| open_file(workbench, OpenFile::new(&path), window, cx)));
         f.wait_for_active_file(cx, &project.join(file)).await;
+        // Tunggu reveal selesai (folder leluhur dimuat dan dibuka) sebelum berkas berikutnya:
+        // reveal yang belum selesai digantikan oleh berkas aktif yang baru.
+        let explorer = f.explorer.clone();
+        f.window.wait_until(cx, "berkas terpilih di pohon", move |_, cx| explorer.read(cx).selected() == Some(path.as_str())).await;
     }
     f.wait_for_rows(cx, "pohon terbuka", &project, |rows| rows == ["src/", "  src/deep/", "    src/deep/a.ts", "  src/b.ts", "other.ts"]).await;
 
