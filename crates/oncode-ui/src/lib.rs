@@ -25,7 +25,7 @@ pub use model::{OpenOptions, Orientation, TabData};
 pub use repos::{repos, FileMark, Repos, ReposEvent};
 pub use shell::{file_tab, Shell};
 pub use workbench::{
-    register_feature, register_tab_kind, Env, PanelView, SidebarView, StatusAlign, StatusItem, TabContent, TabKind, ViewTab, Workbench, WorkbenchEvent,
+    register_feature, register_tab_kind, EditorAction, Env, PanelView, SidebarView, StatusAlign, StatusItem, TabContent, TabKind, ViewTab, Workbench, WorkbenchEvent,
 };
 
 /// Ikon Lucide lengkap (± 1.800 ikon) dari paket aset bawaan.

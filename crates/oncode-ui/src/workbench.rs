@@ -160,6 +160,31 @@ impl PanelView {
     }
 }
 
+/// Tombol di ujung kanan bilah tab, untuk tab aktif grup itu (mis. "Open Preview" pada Markdown).
+#[derive(Clone)]
+pub struct EditorAction {
+    pub id: SharedString,
+    pub icon: Lucide,
+    pub tooltip: SharedString,
+    /// Command yang dijalankan; grup tombol itu sudah aktif saat command berjalan.
+    pub command: SharedString,
+    /// Tampil bila mengembalikan true untuk tab aktif grup itu. Menerima pengaturan efektif
+    /// jendela; jangan membaca entitas `Workbench` di sini (dipanggil saat render-nya).
+    pub when: Rc<dyn Fn(&TabData, &Settings) -> bool>,
+}
+
+impl EditorAction {
+    pub fn new(
+        id: impl Into<SharedString>,
+        icon: Lucide,
+        tooltip: impl Into<SharedString>,
+        command: impl Into<SharedString>,
+        when: impl Fn(&TabData, &Settings) -> bool + 'static,
+    ) -> Self {
+        Self { id: id.into(), icon, tooltip: tooltip.into(), command: command.into(), when: Rc::new(when) }
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum StatusAlign {
     Left,
@@ -247,6 +272,7 @@ pub struct Workbench {
     active_sidebar: Option<SharedString>,
     sidebar_visible: bool,
     panel_views: Vec<PanelView>,
+    editor_actions: Vec<EditorAction>,
     panel_built: HashMap<SharedString, AnyView>,
     active_panel: Option<SharedString>,
     panel_visible: bool,
@@ -298,6 +324,7 @@ impl Workbench {
             active_sidebar: None,
             sidebar_visible: true,
             panel_views: Vec::new(),
+            editor_actions: Vec::new(),
             panel_built: HashMap::new(),
             active_panel: None,
             panel_visible: false,
@@ -388,6 +415,12 @@ impl Workbench {
     pub fn register_sidebar(&mut self, view: SidebarView) {
         self.sidebar_views.retain(|v| v.id != view.id);
         self.sidebar_views.push(view);
+    }
+
+    /// Menambah tombol aksi editor (lihat [`EditorAction`]); id yang sama menggantikan yang lama.
+    pub fn register_editor_action(&mut self, action: EditorAction) {
+        self.editor_actions.retain(|existing| existing.id != action.id);
+        self.editor_actions.push(action);
     }
 
     pub fn register_panel(&mut self, view: PanelView) {
@@ -802,14 +835,22 @@ impl Workbench {
         let Some(model_group) = self.model.group(group) else { return div().into_any_element() };
         let active_group = self.model.active_group == group;
         let kinds = &cx.global::<TabKinds>().0;
-        h_flex()
+        // Tombol aksi untuk tab aktif grup ini, di luar area tab yang bisa digulir.
+        let active_tab = model_group.active.as_deref().and_then(|id| model_group.tabs.iter().find(|tab| tab.id == id));
+        let actions: Vec<EditorAction> = active_tab.map(|tab| self.editor_actions.iter().filter(|action| (action.when)(tab, &self.settings)).cloned().collect()).unwrap_or_default();
+        let action_bar = h_flex().flex_none().h_full().px_1().gap_0p5().children(actions.into_iter().map(|action| {
+            let command = action.command.clone();
+            Button::new(SharedString::from(format!("editor-action-{}", action.id))).ghost().xsmall().icon(Icon::new(action.icon)).tooltip(action.tooltip.clone()).on_click(
+                move |_, window, cx| {
+                    commands::execute(command.clone(), serde_json::Value::Null, window, cx);
+                },
+            )
+        }));
+        let tabs = h_flex()
             .id(SharedString::from(format!("tabs-{group}")))
-            .w_full()
-            .h(px(34.))
-            .flex_none()
-            .bg(theme.tab_bar)
-            .border_b_1()
-            .border_color(theme.border)
+            .flex_1()
+            .min_w_0()
+            .h_full()
             .overflow_x_scroll()
             .children(model_group.tabs.iter().map(|tab| {
                 let selected = model_group.active.as_deref() == Some(tab.id.as_str());
@@ -897,7 +938,16 @@ impl Workbench {
                             let _ = c.update(cx, |this, cx| this.close_all_tabs(false, window, cx).detach());
                         }))
                     })
-            }))
+            }));
+        h_flex()
+            .w_full()
+            .h(px(34.))
+            .flex_none()
+            .bg(theme.tab_bar)
+            .border_b_1()
+            .border_color(theme.border)
+            .child(tabs)
+            .child(action_bar)
             .into_any_element()
     }
 

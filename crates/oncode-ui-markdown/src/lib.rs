@@ -12,7 +12,8 @@ use gpui_kit::{
 };
 use oncode_ui::commands::Command;
 use oncode_ui::editor::{active_file, buffers, language_for_path, Buffer, BufferEvent};
-use oncode_ui::{register_feature, register_tab_kind, Env, Lucide, OpenOptions, TabContent, TabData, TabKind, ViewTab, Workbench};
+use oncode_ui::editor::{open_file, OpenFile};
+use oncode_ui::{register_feature, register_tab_kind, EditorAction, Env, Lucide, OpenOptions, TabContent, TabData, TabKind, ViewTab, Workbench};
 use serde_json::{json, Value};
 
 /// Jenis tab pratinjau.
@@ -62,7 +63,34 @@ fn setup(workbench: &mut Workbench, _: &mut Window, cx: &mut Context<Workbench>)
             .key("Mod+Shift+V")
             .when(markdown_active.clone()),
     );
-    workbench.register_command(Command::new("markdown.showPreview", "Open Preview", open(false, weak)).category("Markdown").when(markdown_active));
+    workbench.register_command(Command::new("markdown.showPreview", "Open Preview", open(false, weak.clone())).category("Markdown").when(markdown_active));
+
+    // Dari pratinjau kembali ke berkas Markdown-nya.
+    let preview_active = {
+        let weak = weak.clone();
+        move |_: &Window, cx: &App| weak.upgrade().is_some_and(|workbench| workbench.read(cx).model().active().is_some_and(|(_, tab)| tab.kind == KIND))
+    };
+    workbench.register_command(
+        Command::new("markdown.showSource", "Open Source", move |_: &Value, window: &mut Window, cx: &mut App| {
+            let _ = weak.update(cx, |workbench, cx| {
+                let Some(path) = workbench.model().active().filter(|(_, tab)| tab.kind == KIND).and_then(|(_, tab)| tab.param_str("path").map(String::from)) else { return };
+                // Tab berkas yang sudah terbuka di grup lain diaktifkan, tidak dibuka lagi.
+                open_file(workbench, OpenFile::new(path), window, cx);
+            });
+        })
+        .category("Markdown")
+        .when(preview_active),
+    );
+
+    // Tombol di bilah tab, seperti VS Code.
+    workbench.register_editor_action(EditorAction::new(
+        "markdown-preview",
+        Lucide::Eye,
+        "Open Preview to the Side (Ctrl+Shift+V)",
+        "markdown.showPreviewToSide",
+        |tab, settings| settings.extensions.markdown_preview && tab.kind == "file" && tab.param_str("path").is_some_and(is_markdown),
+    ));
+    workbench.register_editor_action(EditorAction::new("markdown-source", Lucide::FileText, "Open Source", "markdown.showSource", |tab, _| tab.kind == KIND));
 }
 
 struct PreviewKind;
