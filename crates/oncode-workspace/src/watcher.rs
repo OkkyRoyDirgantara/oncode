@@ -549,6 +549,8 @@ mod tests {
     const TIMEOUT: Duration = Duration::from_secs(3);
     /// Cukup lama untuk memastikan sebuah event memang tidak datang (di atas masa tenang).
     const SETTLE: Duration = Duration::from_millis(700);
+    /// Backend yang bisa mengirim event terlambat (lihat [`Events::settle`]).
+    const DELAYED_EVENTS: bool = !cfg!(target_os = "linux");
 
     #[derive(Clone, Default)]
     struct Events(Arc<Mutex<Vec<WatchEvent>>>);
@@ -565,6 +567,17 @@ mod tests {
 
         fn clear(&self) {
             self.0.lock().unwrap().clear();
+        }
+
+        /// Membuang event langkah sebelumnya, termasuk yang masih akan datang. FSEvents (macOS) dan
+        /// ReadDirectoryChangesW (Windows, saat sibuk) bisa mengirim event dengan jeda, juga untuk
+        /// perubahan sesaat sebelum pemantauan dimulai (mis. `git init` saat persiapan uji).
+        /// inotify (Linux) tidak, jadi di sana cukup dikosongkan.
+        fn settle(&self) {
+            if DELAYED_EVENTS {
+                thread::sleep(SETTLE);
+            }
+            self.clear();
         }
 
         /// Semua path yang pernah dilaporkan lewat `Files`.
@@ -615,6 +628,10 @@ mod tests {
     fn start(root: &Path, git_dirs: &[PathBuf], mode: TreeMode) -> (Watcher, Events) {
         let events = Events::default();
         let watcher = Watcher::start_with(root, git_dirs, events.sink(), mode).unwrap();
+        // Event susulan dari persiapan uji (berkas dan `git init` sebelum pemantauan) dibuang.
+        if DELAYED_EVENTS {
+            events.settle();
+        }
         (watcher, events)
     }
 
@@ -649,10 +666,10 @@ mod tests {
         (tmp, root)
     }
 
-    /// Di Windows hanya mode yang dipakai di sana (`Native`, lihat [`TreeMode::for_platform`]):
-    /// pemantauan per folder dengan ReadDirectoryChangesW mengunci folder (tidak bisa diganti
-    /// nama) dan melaporkan perubahan isi folder sebagai event folder itu sendiri.
-    const MODES: &[TreeMode] = if cfg!(windows) { &[TreeMode::Native] } else { &[TreeMode::PerDirectory, TreeMode::Native] };
+    /// Mode yang dipakai di platform ini (lihat [`TreeMode::for_platform`]), plus `Native` di Linux.
+    /// `PerDirectory` hanya dipakai di Linux; di Windows ReadDirectoryChangesW per folder mengunci
+    /// folder (tidak bisa diganti nama), dan di macOS FSEvents per folder melaporkan isi lama.
+    const MODES: &[TreeMode] = if cfg!(target_os = "linux") { &[TreeMode::PerDirectory, TreeMode::Native] } else { &[TreeMode::Native] };
 
     #[test]
     fn reports_created_and_modified_files() {
@@ -812,33 +829,33 @@ mod tests {
             write(&git_dir.join("index"), "indeks palsu");
             events.wait("Git{index}", |e| e.git(&git_dir) == Some((false, true, false)));
 
-            events.clear();
+            events.settle();
             write(&git_dir.join("refs/heads/x"), "0000000000000000000000000000000000000000\n");
             events.wait("Git{refs} dari refs/heads/x", |e| e.git(&git_dir) == Some((true, false, false)));
 
             // Folder ref baru (branch bernama `fitur/a`) ikut terpantau.
-            events.clear();
+            events.settle();
             write(&git_dir.join("refs/heads/fitur/a"), "0000000000000000000000000000000000000000\n");
             events.wait("Git{refs} dari refs/heads/fitur/a", |e| e.git(&git_dir) == Some((true, false, false)));
 
-            events.clear();
+            events.settle();
             write(&git_dir.join("packed-refs"), "# pack-refs\n");
             events.wait("Git{refs} dari packed-refs", |e| e.git(&git_dir) == Some((true, false, false)));
 
-            events.clear();
+            events.settle();
             write(&git_dir.join("HEAD"), "ref: refs/heads/lain\n");
             events.wait("Git{refs} dari HEAD", |e| e.git(&git_dir) == Some((true, false, false)));
 
-            events.clear();
+            events.settle();
             write(&git_dir.join("MERGE_HEAD"), "0000000000000000000000000000000000000000\n");
             events.wait("Git{state} dari MERGE_HEAD", |e| e.git(&git_dir) == Some((false, false, true)));
 
-            events.clear();
+            events.settle();
             fs::create_dir(git_dir.join("rebase-merge")).unwrap();
             events.wait("Git{state} dari rebase-merge", |e| e.git(&git_dir) == Some((false, false, true)));
 
             // Berkas lain di direktori Git: event tanpa flag.
-            events.clear();
+            events.settle();
             write(&git_dir.join("FETCH_HEAD"), "x\n");
             events.wait("Git tanpa flag", |e| e.git(&git_dir) == Some((false, false, false)));
 
@@ -910,7 +927,8 @@ mod tests {
         assert_eq!(events.all().len(), 1, "{:#?}", events.all());
 
         watcher.set_git_dirs(std::slice::from_ref(&git_dir)).unwrap();
-        events.clear();
+        // Event susulan dari `git init` kini ikut tergolong sebagai event Git; buang dulu.
+        events.settle();
         write(&git_dir.join("index"), "2");
         events.wait("Git{index} setelah set_git_dirs", |e| e.git(&git_dir) == Some((false, true, false)));
 

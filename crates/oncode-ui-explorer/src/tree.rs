@@ -126,7 +126,9 @@ pub fn rewrite_file_tab(tab: &TabData, from: &str, to: &str) -> Option<TabData> 
     if tab.kind != "file" {
         return None;
     }
-    let moved = moved_path(tab.param_str("path")?, from, to)?;
+    // Path tab sudah dalam bentuk `file_path` (`\` di Windows); `from`/`to` disamakan dulu.
+    let (from, to) = (oncode_ui::editor::file_path(from), oncode_ui::editor::file_path(to));
+    let moved = moved_path(tab.param_str("path")?, &from, &to)?;
     let mut next = file_tab(&moved);
     next.preview = tab.preview;
     let mut params = tab.params.clone();
@@ -809,24 +811,31 @@ mod tests {
         assert_eq!(moved_path("/ws/a.ts.bak", "/ws/a.ts", "/ws/b.ts"), None);
     }
 
+    /// Path dalam bentuk yang dipakai tab (`\` di Windows).
+    fn tab_path(path: &str) -> String {
+        oncode_ui::editor::file_path(path)
+    }
+
     #[test]
     fn rewrites_id_title_description_and_path_of_a_renamed_file_tab() {
         let mut tab = file_tab("/ws/a.ts");
         tab.preview = true;
         let next = rewrite_file_tab(&tab, "/ws/a.ts", "/ws/b.ts").unwrap();
-        assert_eq!(next.id, "file:/ws/b.ts");
+        let moved = tab_path("/ws/b.ts");
+        assert_eq!(next.id, format!("file:{moved}"));
         assert_eq!(next.kind, "file");
         assert_eq!(next.title, "b.ts");
-        assert_eq!(next.description.as_deref(), Some("/ws/b.ts"));
-        assert_eq!(next.params, json!({ "path": "/ws/b.ts" }));
+        assert_eq!(next.description.as_deref(), Some(moved.as_str()));
+        assert_eq!(next.params, json!({ "path": moved }));
         assert!(next.preview);
     }
 
     #[test]
     fn rewrites_tabs_of_files_under_a_renamed_folder_and_keeps_their_file_names() {
         let next = rewrite_file_tab(&file_tab("/ws/src/deep/a.ts"), "/ws/src", "/ws/lib").unwrap();
-        assert_eq!((next.id.as_str(), next.title.as_str()), ("file:/ws/lib/deep/a.ts", "a.ts"));
-        assert_eq!(next.param_str("path"), Some("/ws/lib/deep/a.ts"));
+        let moved = tab_path("/ws/lib/deep/a.ts");
+        assert_eq!((next.id.as_str(), next.title.as_str()), (format!("file:{moved}").as_str(), "a.ts"));
+        assert_eq!(next.param_str("path"), Some(moved.as_str()));
     }
 
     #[test]
