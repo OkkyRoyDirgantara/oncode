@@ -1,4 +1,5 @@
-//! Menu di bilah judul (File, Edit, View, Go, Git, Terminal, Help). Setiap item menjalankan
+//! Menu di bilah judul (File, Edit, View, Go, Git, Terminal, Help) untuk Windows dan Linux; macOS
+//! memakai isi [`MENUS`] yang sama di menu bar sistem (lihat [`crate::app_menu`]). Setiap item menjalankan
 //! command dari registry jendela, jadi label dan pintasannya selalu sama dengan command palette.
 //! Item yang command-nya tidak terdaftar di jendela ini disembunyikan (mis. Git di folder tanpa
 //! repositori); item yang belum bisa dipakai sekarang ditampilkan nonaktif.
@@ -108,7 +109,7 @@ pub const MENUS: &[(&str, &[Option<&str>])] = &[
 ];
 
 /// Command terdaftar dari sebuah menu, dengan pemisah di antara kelompok yang tidak kosong.
-fn entries(items: &[Option<&str>], window: &Window, cx: &App) -> Vec<Option<Command>> {
+pub(crate) fn entries(items: &[Option<&str>], window: &Window, cx: &App) -> Vec<Option<Command>> {
     let mut out: Vec<Option<Command>> = Vec::new();
     let mut separator = false;
     for item in items {

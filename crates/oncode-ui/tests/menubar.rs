@@ -1,5 +1,7 @@
 //! Uji menu di bilah judul: item menjalankan command, termasuk command editor yang pintasannya
-//! hanya berlaku saat editor fokus (menu memindahkan fokus ke dirinya sendiri).
+//! hanya berlaku saat editor fokus (menu memindahkan fokus ke dirinya sendiri). macOS memakai menu
+//! bar sistem sebagai gantinya (lihat `app_menu.rs`).
+#![cfg(not(target_os = "macos"))]
 
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::TestAppContext;

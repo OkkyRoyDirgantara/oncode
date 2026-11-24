@@ -105,7 +105,11 @@ impl Shell {
         cx.default_global::<Shells>().0.insert(window.window_handle().window_id(), weak);
 
         let bus = core_bus(cx);
-        let subscriptions = vec![cx.subscribe_in(&bus, window, Self::on_core_event)];
+        let subscriptions = vec![
+            cx.subscribe_in(&bus, window, Self::on_core_event),
+            // Menu bar macOS mengikuti jendela yang aktif; digambar ulang agar `app_menu::sync` berjalan.
+            cx.observe_window_activation(window, |_, _, cx| cx.notify()),
+        ];
         window.on_window_should_close(cx, {
             let weak = cx.weak_entity();
             move |window, cx| {
@@ -261,24 +265,35 @@ impl Shell {
     }
 
     fn should_close(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
-        self.save_session_now(cx);
-        if !self.workbench.read(cx).has_dirty_tabs(cx) {
-            let (core, label) = (self.core.clone(), self.label.to_string());
-            spawn_core(cx, async move { app::workspace_close(&core, &label).await }).detach();
+        let Some(closed) = self.confirm_close(window, cx) else {
+            self.release_workspace(cx);
             return true;
-        }
-        let closed = self.workbench.update(cx, |workbench, cx| workbench.close_all_tabs(false, window, cx));
+        };
         cx.spawn_in(window, async move |this, cx| {
             if closed.await {
                 let _ = this.update_in(cx, |this, window, cx| {
-                    let (core, label) = (this.core.clone(), this.label.to_string());
-                    spawn_core(cx, async move { app::workspace_close(&core, &label).await }).detach();
+                    this.release_workspace(cx);
                     window.remove_window();
                 });
             }
         })
         .detach();
         false
+    }
+
+    /// Menyimpan sesi. `None` bila jendela boleh langsung ditutup; selain itu semua tab ditutup
+    /// dengan pertanyaan untuk tab yang belum disimpan, dan hasilnya `true` bila pengguna tidak membatalkan.
+    fn confirm_close(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Option<Task<bool>> {
+        self.save_session_now(cx);
+        if !self.workbench.read(cx).has_dirty_tabs(cx) {
+            return None;
+        }
+        Some(self.workbench.update(cx, |workbench, cx| workbench.close_all_tabs(false, window, cx)))
+    }
+
+    fn release_workspace(&self, cx: &mut Context<Self>) {
+        let (core, label) = (self.core.clone(), self.label.to_string());
+        spawn_core(cx, async move { app::workspace_close(&core, &label).await }).detach();
     }
 
     // ----- Sesi -----
@@ -436,6 +451,11 @@ impl Render for Shell {
         };
         // Bilah judul digambar sendiri: di Wayland (GNOME) tidak ada dekorasi dari server, dan
         // tampilannya jadi seragam di tiga OS. Tombol tutup melewati pemeriksaan tab belum disimpan.
+        // Menu File, Edit, dst. ada di bilah judul, kecuali di macOS: di sana menu bar sistem.
+        let menu_in_title_bar = !cfg!(target_os = "macos");
+        if !menu_in_title_bar {
+            crate::app_menu::sync(window, cx);
+        }
         let weak = cx.weak_entity();
         v_flex()
             .size_full()
@@ -450,12 +470,36 @@ impl Render for Shell {
                     .child(
                         gpui_kit::component::h_flex()
                             .gap_3()
-                            .child(crate::menubar::menu_bar(window, cx))
+                            .children(menu_in_title_bar.then(|| crate::menubar::menu_bar(window, cx)))
                             .child(div().id("window-title").text_sm().text_color(cx.theme().muted_foreground).child(title)),
                     ),
             )
             .child(div().flex_1().min_h_0().w_full().child(self.workbench.clone()))
     }
+}
+
+/// Menutup semua jendela seperti tombol tutup (bertanya bila ada tab belum disimpan), lalu keluar.
+/// Dibatalkan, dengan jendela tersisa tetap terbuka, bila pengguna membatalkan salah satu pertanyaan.
+pub(crate) fn quit(cx: &mut App) {
+    let windows = cx.windows();
+    cx.spawn(async move |cx| {
+        for handle in windows {
+            let closing = handle.update(cx, |_, window, cx| {
+                let shell = cx.try_global::<Shells>()?.0.get(&window.window_handle().window_id())?.upgrade()?;
+                window.activate_window();
+                Some(shell.update(cx, |shell, cx| (shell.confirm_close(window, cx), cx.weak_entity())))
+            });
+            let Ok(Some((confirm, shell))) = closing else { continue };
+            if let Some(confirm) = confirm {
+                if !confirm.await {
+                    return;
+                }
+            }
+            let _ = shell.update(cx, |shell, cx| shell.release_workspace(cx));
+        }
+        cx.update(|cx| cx.quit());
+    })
+    .detach();
 }
 
 fn apply_theme(settings: &Settings, window: &mut Window, cx: &mut App) {

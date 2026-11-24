@@ -140,20 +140,61 @@ pub(crate) fn install(cx: &mut App) {
             platform: keystroke.modifiers.platform,
             key: keystroke.key.clone(),
         };
-        // Elemen yang fokus (mis. terminal) boleh menahan tombol untuk dirinya sendiri.
-        if key_captured(&press, window, cx) {
-            return;
-        }
         let Some(binding) = keys::keybinding_from_press(&press) else { return };
-        let Some(command) = command_for_keybinding(&binding, window, cx) else { return };
-        let shields = cx.try_global::<Shields>().map(|shields| shields.0.clone()).unwrap_or_default();
-        if shields.iter().any(|shield| shield(&press, &command, window, cx)) {
+        // Elemen yang fokus (mis. terminal) boleh menahan tombol untuk dirinya sendiri.
+        let (command, bound) = match_keybinding(&binding, window, cx);
+        let command = command.filter(|command| {
+            if key_captured(&press, window, cx) {
+                return false;
+            }
+            let shields = cx.try_global::<Shields>().map(|shields| shields.0.clone()).unwrap_or_default();
+            !shields.iter().any(|shield| shield(&press, command, window, cx))
+        });
+        let Some(command) = command else {
+            if bound {
+                decline(binding, cx);
+            }
             return;
-        }
+        };
         cx.stop_propagation();
         (command.run)(&Value::Null, window, cx);
     })
     .detach();
+}
+
+/// Pintasan yang baru saja ditolak keyboard padahal terikat ke sebuah command (mis. `keys_when`
+/// tidak terpenuhi, atau tombolnya ditahan terminal). Di macOS, AppKit lalu menawarkan tombol yang
+/// sama ke menu bar; menu memeriksa ini lewat [`declined_by_keyboard`] agar keputusan keyboard
+/// tetap berlaku. Dihapus begitu event yang sedang diproses selesai.
+#[derive(Default)]
+struct Declined {
+    binding: Option<String>,
+    serial: u64,
+}
+
+impl Global for Declined {}
+
+fn decline(binding: String, cx: &mut App) {
+    let declined = cx.default_global::<Declined>();
+    declined.serial += 1;
+    declined.binding = Some(binding);
+    let serial = declined.serial;
+    // Tugas foreground baru berjalan setelah event ini selesai diproses, termasuk oleh menu bar.
+    cx.spawn(async move |cx| {
+        cx.update(|cx| {
+            let declined = cx.default_global::<Declined>();
+            if declined.serial == serial {
+                declined.binding = None;
+            }
+        })
+    })
+    .detach();
+}
+
+/// Apakah salah satu pintasan `command` baru saja ditolak keyboard (lihat [`Declined`]).
+pub fn declined_by_keyboard(command: &Command, cx: &App) -> bool {
+    let Some(binding) = cx.try_global::<Declined>().and_then(|declined| declined.binding.as_ref()) else { return false };
+    keybindings_for(command, cx).iter().any(|b| b == binding)
 }
 
 /// Penahan tombol: bila elemen dengan `FocusHandle` ini fokus dan fungsinya mengembalikan `true`,
@@ -217,17 +258,24 @@ pub fn set_keybinding_overrides(overrides: BTreeMap<String, Vec<String>>, cx: &m
 
 /// Command aktif yang terikat pada pintasan ini; yang didaftarkan terakhir menang.
 pub fn command_for_keybinding(binding: &str, window: &Window, cx: &App) -> Option<Command> {
-    let mut found = None;
+    match_keybinding(binding, window, cx).0
+}
+
+/// Seperti [`command_for_keybinding`], ditambah apakah pintasan ini terikat ke command mana pun
+/// (juga yang sedang tidak aktif).
+fn match_keybinding(binding: &str, window: &Window, cx: &App) -> (Option<Command>, bool) {
+    let (mut found, mut bound) = (None, false);
     for command in all(window, cx) {
         if !keybindings_for(&command, cx).iter().any(|b| b == binding) {
             continue;
         }
+        bound = true;
         if command.when.as_ref().is_some_and(|when| !when(window, cx)) || command.keys_when.as_ref().is_some_and(|when| !when(window, cx)) {
             continue;
         }
         found = Some(command);
     }
-    found
+    (found, bound)
 }
 
 /// Menjalankan command sekarang juga. Jangan dipanggil selagi entitas `Workbench` dipinjam

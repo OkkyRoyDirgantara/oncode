@@ -5,6 +5,7 @@
 //! lihat `docs/PENGEMBANGAN.md` bagian "Aturan entitas".
 
 pub mod app;
+pub mod app_menu;
 pub mod commands;
 pub mod editor;
 pub mod file_icons;
@@ -38,6 +39,7 @@ pub fn init(app: OnCode, cx: &mut gpui_kit::App) {
     workbench::install(cx);
     repos::install(cx);
     editor::install(cx);
+    app_menu::install(cx);
 }
 
 /// Membuka jendela baru, opsional langsung dengan sebuah folder.
