@@ -6,6 +6,7 @@
 #[cfg(debug_assertions)]
 mod dev;
 mod shell_env;
+mod single_instance;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -14,15 +15,22 @@ use oncode_core::{api, Core, Dirs, FallbackStore};
 use oncode_ui::OnCode;
 
 fn main() {
-    // Paling awal, sebelum thread mana pun dibuat (lihat `shell_env`).
-    shell_env::import_login_path();
     let args: Vec<String> = std::env::args().collect();
     let cwd = std::env::current_dir().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default();
+    // OnCode sudah berjalan (mis. `oncode .` dari terminal): serahkan folder ke proses itu dan
+    // selesai sebelum memuat apa pun.
+    let endpoint = single_instance::enabled().then(single_instance::endpoint);
+    if endpoint.as_deref().is_some_and(|endpoint| single_instance::forward(endpoint, &single_instance::Request { cwd: cwd.clone(), args: args.clone() })) {
+        return;
+    }
+    // Sebelum runtime atau thread lain dibuat (lihat `shell_env`).
+    shell_env::import_login_path();
     let folder = api::app::folder_argument(&args, &cwd).map(PathBuf::from);
 
     // Crate backend memakai tokio; GPUI punya eksekutornya sendiri (lihat `oncode_ui::app`).
     // Empat thread cukup: pekerjaan backend kebanyakan menunggu proses git, disk, atau jaringan.
     let runtime = Arc::new(tokio::runtime::Builder::new_multi_thread().worker_threads(4).enable_all().thread_name("oncode-backend").build().expect("runtime tokio gagal dibuat"));
+    let open_requests = endpoint.as_deref().and_then(|endpoint| single_instance::listen(endpoint, &runtime));
 
     let Some(dirs) = Dirs::default_for_app() else {
         eprintln!("oncode: could not determine the configuration directory");
@@ -83,6 +91,15 @@ fn main() {
             eprintln!("oncode: failed to open a window: {error:#}");
             cx.quit();
             return;
+        }
+        if let Some(mut requests) = open_requests {
+            cx.spawn(async move |cx| {
+                while let Some(request) = requests.recv().await {
+                    let folder = api::app::folder_argument(&request.args, &request.cwd).map(PathBuf::from);
+                    let _ = cx.update(|cx| oncode_ui::open_from_command_line(folder, cx));
+                }
+            })
+            .detach();
         }
         #[cfg(debug_assertions)]
         dev::run_script(cx);

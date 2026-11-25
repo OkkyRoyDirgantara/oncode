@@ -220,3 +220,51 @@ async fn enter_during_a_pending_search_picks_the_first_result_when_it_arrives(cx
     window.wait_until(cx, "item pertama dipilih", move |_, _| picked_for_wait.borrow().is_some()).await;
     assert_eq!(picked.borrow().clone(), Some(Some("1".to_string())));
 }
+
+/// Folder yang dibuka tiap jendela, sesuai urutan `cx.windows()`.
+fn window_folders(cx: &mut TestAppContext) -> Vec<Option<String>> {
+    use gpui_kit::AppContext as _;
+    let windows = cx.update(|cx| cx.windows());
+    windows
+        .into_iter()
+        .map(|handle| {
+            cx.update_window(handle, |_, window, cx| oncode_ui::Shell::for_window(window, cx).and_then(|shell| shell.read(cx).workspace().map(|w| w.root.clone())))
+                .ok()
+                .flatten()
+        })
+        .collect()
+}
+
+/// `oncode <folder>` saat OnCode sudah berjalan: jendela yang sudah membuka folder itu dipakai lagi,
+/// folder lain mendapat jendela baru.
+#[gpui_kit::test]
+async fn command_line_folder_reuses_its_window_or_opens_a_new_one(cx: &mut TestAppContext) {
+    let app = TestApp::new(cx);
+    let first = app.project(&[("a.txt", "a\n")]);
+    let second = app.project(&[("b.txt", "b\n")]);
+    app.open(Some(&first), cx).await;
+
+    // Path lain untuk folder yang sama (`<folder>/.`, seperti `oncode .`) tetap dikenali.
+    cx.update(|cx| oncode_ui::open_from_command_line(Some(first.join(".")), cx));
+    cx.run_until_parked();
+    assert_eq!(window_folders(cx).len(), 1);
+
+    cx.update(|cx| oncode_ui::open_from_command_line(Some(second.clone()), cx));
+    let wanted = second.to_string_lossy().into_owned();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while !window_folders(cx).contains(&Some(wanted.clone())) {
+        assert!(std::time::Instant::now() < deadline, "folder kedua tidak terbuka: {:?}", window_folders(cx));
+        cx.run_until_parked();
+        cx.executor().timer(std::time::Duration::from_millis(20)).await;
+    }
+    assert_eq!(window_folders(cx).len(), 2);
+
+    cx.update(|cx| oncode_ui::open_from_command_line(Some(second.clone()), cx));
+    cx.run_until_parked();
+    assert_eq!(window_folders(cx).len(), 2);
+
+    // Tanpa folder: jendela kosong baru.
+    cx.update(|cx| oncode_ui::open_from_command_line(None, cx));
+    cx.run_until_parked();
+    assert_eq!(window_folders(cx).len(), 3);
+}

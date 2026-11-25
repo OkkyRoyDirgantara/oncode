@@ -529,7 +529,7 @@ impl Core {
 
 /// `oncode-helper`: path dari `ONCODE_HELPER` bila diisi, selain itu di samping binary aplikasi
 /// (baik saat pengembangan maupun setelah dibundel).
-fn helper_path() -> Option<PathBuf> {
+pub(crate) fn helper_path() -> Option<PathBuf> {
     resolve_helper(std::env::var_os(HELPER_ENV).map(PathBuf::from), std::env::current_exe().ok())
 }
 

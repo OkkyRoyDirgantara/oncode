@@ -28,6 +28,7 @@ Rancangan lengkap ada di [docs/RANCANGAN.md](docs/RANCANGAN.md); panduan pengemb
 - Highlight sintaks (tree-sitter) termasuk Kotlin, Dart/Flutter, C#, PHP, Lua, Swift, GraphQL; cari/ganti, multi-kursor, lipat kode
 - Pencarian dan penggantian teks di seluruh proyek (menghormati `.gitignore`)
 - Deteksi encoding dan akhir baris, deteksi perubahan dari luar, pemulihan tab saat folder dibuka lagi
+- Perintah **`oncode .`** di terminal, seperti `code .` di VS Code: membuka folder saat ini. Bila OnCode sudah berjalan, folder dibuka di proses yang sama (jendela baru, atau jendela yang sudah membuka folder itu difokuskan), jadi tidak ada proses kedua yang memakan memori. Dipasang otomatis oleh installer Windows (`bin\oncode.cmd` + PATH pengguna) dan paket `.deb` (`/usr/bin/oncode`); di macOS, AppImage, atau build sendiri pakai command palette → **Shell Command: Install 'oncode' Command in PATH**
 - Terminal terintegrasi, bisa lebih dari satu sesi: split berdampingan di panel (`Cmd+\` di macOS, `Ctrl+Shift+5` di Linux/Windows), terminal sebagai tab di area editor (bisa di samping kode), dan seret-lepas terminal antara daftar panel dan area editor. Digambar per sel: kolom tetap lurus, garis kotak dan prompt powerline menyambung, tanpa ligatur; font dan tinggi baris terminal bisa diatur di Settings → Terminal
 - LSP: completion, hover, diagnostics, go to definition, references, rename, format (language server dipasang sendiri)
 
@@ -50,6 +51,8 @@ cargo build -p oncode-helper        # binary pendamping untuk dialog kredensial 
 cargo run -p oncode                 # mode pengembangan
 cargo run -p oncode -- /path/proyek # langsung membuka sebuah folder
 ```
+
+Untuk mencoba `oncode .` dari build sendiri: jalankan aplikasinya, lalu command palette → **Shell Command: Install 'oncode' Command in PATH** (memakai `oncode-helper`, jadi bangun keduanya). Di Windows, buka terminal baru setelahnya.
 
 ## Pengujian
 

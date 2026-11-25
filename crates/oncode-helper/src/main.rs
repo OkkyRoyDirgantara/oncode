@@ -7,6 +7,12 @@
 //! Permintaan diteruskan ke aplikasi lewat socket lokal (`ONCODE_IPC_ENDPOINT`)
 //! dengan token sekali pakai (`ONCODE_IPC_TOKEN`). Kode keluar 0 berarti dijawab,
 //! selain itu git menganggap pengguna membatalkan.
+//!
+//! Di luar git, helper juga memasang dan melepas perintah `oncode` di terminal
+//! (`install-shell-command` / `uninstall-shell-command <folder aplikasi>`, lihat [`shell_command`]);
+//! dipanggil installer Windows dan command palette.
+
+mod shell_command;
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::process::ExitCode;
@@ -62,6 +68,11 @@ fn request(kind: &str, text: &str) -> Option<String> {
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    match args.first().map(String::as_str) {
+        Some("install-shell-command") => return shell_command::main(true, args.get(1).map(String::as_str)),
+        Some("uninstall-shell-command") => return shell_command::main(false, args.get(1).map(String::as_str)),
+        _ => {}
+    }
     let (kind, text) = match args.first().map(String::as_str) {
         Some("editor") => ("editor", args.get(1).map(|p| absolute(p))),
         Some("sequence") => ("sequence", args.get(1).map(|p| absolute(p))),

@@ -133,6 +133,27 @@ pub fn folder_argument(args: &[String], cwd: &str) -> Option<String> {
     })
 }
 
+/// Memasang (`install`) atau melepas perintah `oncode` di terminal, mengembalikan pesan untuk
+/// pengguna. Dikerjakan `oncode-helper` karena installer Windows memakai langkah yang sama sebelum
+/// aplikasinya sendiri tersalin.
+pub async fn shell_command_set(install: bool) -> AppResult<String> {
+    let helper = crate::state::helper_path().ok_or_else(|| {
+        AppError::new("notFound", "oncode-helper was not found next to the application. Reinstall OnCode or run `cargo build -p oncode-helper` when building from source.")
+    })?;
+    let app_dir = std::env::current_exe().ok().and_then(|exe| exe.parent().map(Path::to_path_buf)).ok_or_else(|| AppError::new("io", "Cannot find the application folder"))?;
+    let output = super::hidden_command(&helper)
+        .arg(if install { "install-shell-command" } else { "uninstall-shell-command" })
+        .arg(&app_dir)
+        .output()
+        .await
+        .map_err(|e| AppError::new("io", format!("Cannot run oncode-helper: {e}")))?;
+    if output.status.success() {
+        return Ok(String::from_utf8_lossy(&output.stdout).trim().to_string());
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    Err(AppError::new("shellCommand", if stderr.is_empty() { "Changing the 'oncode' command failed".to_string() } else { stderr }))
+}
+
 pub async fn recent_remove(core: &Shared, path: String) -> AppResult<()> {
     core.store.remove_recent(&path);
     Ok(())

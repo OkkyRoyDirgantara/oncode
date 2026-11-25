@@ -1,0 +1,5 @@
+#!/bin/sh
+# Created by OnCode: opens a folder in OnCode, e.g. `oncode .`
+# OnCode runs in the background, so the terminal stays free. If OnCode is already running, the
+# folder opens there (see app/src/single_instance.rs).
+nohup /usr/bin/oncode-app "$@" >/dev/null 2>&1 &

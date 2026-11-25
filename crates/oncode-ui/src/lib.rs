@@ -50,6 +50,19 @@ pub fn open_window(folder: Option<std::path::PathBuf>, cx: &mut gpui_kit::App) {
     }
 }
 
+/// Folder dari proses OnCode lain (`oncode .` di terminal, lihat `app/src/single_instance.rs`):
+/// jendela yang sudah membuka folder itu difokuskan, selain itu dibuka jendela baru (tanpa folder
+/// bila tidak ada), seperti `code` milik VS Code.
+pub fn open_from_command_line(folder: Option<std::path::PathBuf>, cx: &mut gpui_kit::App) {
+    cx.activate(true);
+    match folder.as_deref().and_then(|folder| shell::window_with_folder(folder, cx)) {
+        Some(handle) => {
+            let _ = handle.update(cx, |_, window, _| window.activate_window());
+        }
+        None => open_window(folder, cx),
+    }
+}
+
 /// Seperti [`open_window`], tetapi kegagalannya dikembalikan ke pemanggil (mis. untuk dicatat ke log
 /// saat jendela pertama gagal dibuka, karena aplikasi GUI di Windows tidak punya konsol).
 pub fn try_open_window(folder: Option<std::path::PathBuf>, cx: &mut gpui_kit::App) -> gpui_kit::Result<()> {

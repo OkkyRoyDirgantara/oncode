@@ -34,6 +34,10 @@ gpui-kit = "=0.10.0"
 tokio.workspace = true
 serde_json.workspace = true
 
+# uid pengguna untuk nama socket satu-proses (src/single_instance.rs).
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 # Ikon aplikasi untuk Windows (dipakai Explorer, taskbar, dan shortcut installer).
 [build-dependencies]
 embed-resource = "3"
@@ -58,6 +62,25 @@ out-dir = "../target/packages"
 
 [package.metadata.packager.deb]
 depends = ["git", "libxkbcommon-x11-0", "libvulkan1"]
+# Perintah `oncode .` di terminal. Harus executable di git (`git add --chmod=+x`).
+files = { "packaging/linux/oncode" = "usr/bin/oncode" }
 
 [package.metadata.packager.nsis]
 installer-icon = "icons/icon.ico"
+# Perintah `oncode .` di terminal: `bin\oncode.cmd` dan PATH pengguna, dikerjakan oncode-helper
+# (lihat crates/oncode-helper/src/shell_command.rs). Bagian ini berjalan sebelum berkas aplikasi
+# disalin, jadi helper diekstrak dulu ke folder sementara installer. Saat uninstall, bagian `un.`
+# berjalan sebelum berkas dihapus.
+preinstall-section = '''
+!searchreplace ONCODE_HELPER_SRC "${MAINBINARYSRCPATH}" "${MAINBINARYNAME}.exe" "oncode-helper.exe"
+Section ShellCommand
+  InitPluginsDir
+  File "/oname=$PLUGINSDIR\oncode-helper.exe" "${ONCODE_HELPER_SRC}"
+  nsExec::Exec '"$PLUGINSDIR\oncode-helper.exe" install-shell-command "$INSTDIR"'
+  Pop $0
+SectionEnd
+Section un.ShellCommand
+  nsExec::Exec '"$INSTDIR\oncode-helper.exe" uninstall-shell-command "$INSTDIR"'
+  Pop $0
+SectionEnd
+'''

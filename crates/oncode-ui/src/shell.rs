@@ -623,6 +623,34 @@ fn register_shell_commands(workbench: &mut Workbench, cx: &mut Context<Workbench
         .category("Preferences"),
     );
     workbench.register_command(Command::new("keybindings.reload", "Reload Keyboard Shortcuts", with_shell(|shell, window, cx| shell.load_keybindings(true, window, cx))).category("Preferences"));
+    for (install, id, title) in [(true, "shellCommand.install", "Install 'oncode' Command in PATH"), (false, "shellCommand.uninstall", "Uninstall 'oncode' Command from PATH")] {
+        workbench.register_command(Command::new(id, title, move |_, window, cx| set_shell_command(install, window, cx)).category("Shell Command"));
+    }
+}
+
+/// Perintah `oncode .` di terminal (lihat `oncode-helper/src/shell_command.rs`).
+fn set_shell_command(install: bool, window: &mut Window, cx: &mut App) {
+    let task = spawn_core(cx, app::shell_command_set(install));
+    window
+        .spawn(cx, async move |cx| {
+            let result = task.await;
+            let _ = cx.update(|window, cx| match result {
+                Ok(message) => overlay::toast_success(message, window, cx),
+                Err(error) => overlay::show_error(&error, window, cx),
+            });
+        })
+        .detach();
+}
+
+/// Jendela yang sedang membuka `folder`. Path dibandingkan setelah dinormalkan, karena `oncode .`
+/// bisa memberi path dengan huruf besar-kecil atau tautan yang berbeda dari yang tersimpan.
+pub(crate) fn window_with_folder(folder: &std::path::Path, cx: &App) -> Option<gpui_kit::AnyWindowHandle> {
+    let wanted = std::fs::canonicalize(folder).ok()?;
+    let shells = cx.try_global::<Shells>()?;
+    cx.windows().into_iter().find(|handle| {
+        let root = shells.0.get(&handle.window_id()).and_then(WeakEntity::upgrade).and_then(|shell| shell.read(cx).workspace().map(|w| w.root.clone()));
+        root.is_some_and(|root| std::fs::canonicalize(root).is_ok_and(|root| root == wanted))
+    })
 }
 
 fn show_command_palette(window: &mut Window, cx: &mut App) {

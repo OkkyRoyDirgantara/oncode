@@ -5347,6 +5347,7 @@ version = "0.1.0"
 dependencies = [
  "embed-resource",
  "gpui-kit",
+ "libc",
  "oncode-core",
  "oncode-forge",
  "oncode-git",
@@ -5440,6 +5441,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tokio",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
