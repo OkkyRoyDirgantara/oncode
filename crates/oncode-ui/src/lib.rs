@@ -6,6 +6,7 @@
 
 pub mod app;
 pub mod app_menu;
+pub mod command_center;
 pub mod commands;
 pub mod editor;
 pub mod file_icons;

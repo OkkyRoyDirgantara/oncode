@@ -6,9 +6,9 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use gpui_kit::component::input::{Editor, EditorState};
-use gpui_kit::component::{v_flex, ActiveTheme as _, Theme, ThemeMode, TitleBar, WindowExt as _};
+use gpui_kit::component::{v_flex, Theme, ThemeMode, TitleBar, WindowExt as _};
 use gpui_kit::{
-    div, px, App, AppContext as _, Context, Entity, InteractiveElement as _, IntoElement, ParentElement as _, PathPromptOptions, Render, SharedString, Styled as _, Subscription, Task,
+    div, px, App, AppContext as _, Context, Entity, IntoElement, ParentElement as _, PathPromptOptions, Render, SharedString, Styled as _, Subscription, Task,
     WeakEntity, Window,
 };
 use oncode_core::api::app::{self, WorkspaceInfo};
@@ -445,17 +445,16 @@ impl Shell {
 
 impl Render for Shell {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let title: SharedString = match &self.workspace {
-            Some(workspace) => workspace.name.clone().into(),
-            None => "OnCode".into(),
-        };
         // The title bar is drawn by us: on Wayland (GNOME) there are no server-side decorations, and
         // it looks the same on all three OSes. The close button goes through the unsaved tabs check.
         // The File, Edit, etc. menus are in the title bar, except on macOS: there it is the system menu bar.
+        // The folder's name is in the search box in the middle (and in the OS window title).
         let menu_in_title_bar = !cfg!(target_os = "macos");
         if !menu_in_title_bar {
             crate::app_menu::sync(window, cx);
         }
+        let menus = menu_in_title_bar.then(|| crate::menubar::menu_bar(window, cx).into_any_element());
+        let folder = self.workspace.as_ref().map(|workspace| workspace.name.clone());
         let weak = cx.weak_entity();
         v_flex()
             .size_full()
@@ -467,12 +466,7 @@ impl Render for Shell {
                             window.remove_window();
                         }
                     })
-                    .child(
-                        gpui_kit::component::h_flex()
-                            .gap_3()
-                            .children(menu_in_title_bar.then(|| crate::menubar::menu_bar(window, cx)))
-                            .child(div().id("window-title").text_sm().text_color(cx.theme().muted_foreground).child(title)),
-                    ),
+                    .child(crate::command_center::title_bar_content(menus, folder.as_deref(), window, cx)),
             )
             .child(div().flex_1().min_h_0().w_full().child(self.workbench.clone()))
     }

@@ -1,6 +1,6 @@
 //! View tests for the window framework: command palette, quick open, keyboard shortcuts, session.
 
-use gpui_kit::test::TestWindowExt as _;
+use gpui_kit::test::{TestQueryExt as _, TestWindowExt as _};
 use gpui_kit::TestAppContext;
 use oncode_ui::editor::{active_file, open_file, OpenFile};
 use oncode_ui::testing::TestApp;
@@ -292,4 +292,41 @@ async fn command_line_folder_reuses_its_window_or_opens_a_new_one(cx: &mut TestA
     cx.update(|cx| oncode_ui::open_from_command_line(None, cx));
     cx.run_until_parked();
     assert_eq!(window_folders(cx).len(), 3);
+}
+
+/// The search box in the title bar is in the middle of the window, shows the folder's name, and opens Go to File.
+#[gpui_kit::test]
+async fn title_bar_search_box_opens_go_to_file(cx: &mut TestAppContext) {
+    let app = TestApp::new(cx);
+    let project = app.project(&[("src/main.rs", "fn main() {}\n")]);
+    let window = app.open(Some(&project), cx).await;
+    let name = project.file_name().unwrap().to_string_lossy().into_owned();
+    window.update(cx, |window, cx| {
+        window.render_frame(cx);
+        let center = window.find_by_label(&format!("Search files in {name}")).bounds().center().x;
+        let middle = window.viewport_size().width / 2.;
+        assert!((center - middle).abs() < gpui_kit::px(1.), "box at {center:?}, window middle at {middle:?}");
+        window.click("command-center", cx);
+    });
+    cx.run_until_parked();
+    window.update(cx, |window, cx| {
+        window.render_frame(cx);
+        assert!(window.try_find_by_label("Go to file").is_some(), "Go to File is open");
+    });
+}
+
+/// Without a folder there are no files to go to: the box opens the command palette.
+#[gpui_kit::test]
+async fn title_bar_search_box_without_a_folder_opens_the_command_palette(cx: &mut TestAppContext) {
+    let app = TestApp::new(cx);
+    let window = app.open(None, cx).await;
+    window.update(cx, |window, cx| {
+        window.render_frame(cx);
+        window.click("command-center", cx);
+    });
+    cx.run_until_parked();
+    window.update(cx, |window, cx| {
+        window.render_frame(cx);
+        assert!(window.try_find_by_label("Type a command").is_some(), "the command palette is open");
+    });
 }
