@@ -395,3 +395,39 @@ async fn font_settings_apply_to_open_terminals_and_line_drawing_renders(cx: &mut
     }
     window.update(cx, |window, cx| window.render_frame(cx));
 }
+
+// ----- Ukuran PTY -----
+
+/// Terminal dibuat sebelum tata letak pertama, jadi PTY lahir 80x24. Ukuran sebenarnya baru diketahui
+/// setelah layout, dan spawn berjalan async sehingga id PTY bisa belum ada saat itu. Shell tetap harus
+/// melihat ukuran yang sama dengan grid; kalau tidak, program layar penuh (mis. Claude CLI) menggambar
+/// untuk 80x24 di area yang jauh lebih lebar sampai ada resize manual.
+#[gpui_kit::test]
+async fn shell_sees_the_same_size_as_the_grid_after_the_first_layout(cx: &mut TestAppContext) {
+    let app = TestApp::new(cx);
+    cx.update(oncode_ui_terminal::init);
+    let project = app.project(&[("a.txt", "a\n")]);
+    let window = app.open(Some(&project), cx).await;
+    let workbench = window.workbench(cx);
+
+    assert!(window.run_command(cx, "terminal.toggle"));
+    let panel = cx.update(|cx| oncode_ui_terminal::panel(workbench.read(cx)).unwrap());
+    window.wait_until(cx, "shell berjalan", |_, cx| panel.read(cx).active_session().is_some_and(|s| s.read(cx).is_running())).await;
+    let session = cx.update(|cx| panel.read(cx).active_session().unwrap().clone());
+    window.update(cx, |window, cx| window.render_frame(cx));
+    cx.run_until_parked();
+
+    let (cols, rows) = cx.update(|cx| session.read(cx).grid_size());
+    assert_ne!((cols, rows), (80, 24), "uji ini hanya berarti bila panel tidak kebetulan berukuran 80x24");
+
+    // Windows: `default_shell` selalu memilih pwsh atau powershell lebih dulu daripada cmd.
+    let command = if cfg!(windows) { r#"Write-Output "$([Console]::WindowWidth) $([Console]::WindowHeight)" > size.txt"# } else { "stty size | awk '{print $2, $1}' > size.txt" };
+    window.update(cx, |window, cx| {
+        window.input(command, cx);
+        window.press("enter", cx);
+    });
+    let out = project.join("size.txt");
+    window.wait_until(cx, "shell menulis ukuran PTY", |_, _| std::fs::read(&out).is_ok_and(|bytes| !shell_text(&bytes).trim().is_empty())).await;
+    let seen = shell_text(&std::fs::read(&out).unwrap());
+    assert_eq!(seen.trim(), format!("{cols} {rows}"), "ukuran PTY menurut shell berbeda dari grid emulator");
+}

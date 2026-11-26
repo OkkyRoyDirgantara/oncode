@@ -241,6 +241,13 @@ impl TerminalSession {
                 Ok(id) => {
                     if this.update(cx, |this, cx| {
                         this.id = Some(id);
+                        // Spawn berjalan async: tata letak pertama bisa selesai sebelum `id` ada, sehingga
+                        // `fit` mengubah emulator tanpa memberi tahu PTY. Selaraskan sekarang, kalau tidak
+                        // program di dalamnya (mis. Claude CLI) menggambar untuk 80x24 sampai ada resize.
+                        let current = this.emulator.size();
+                        if current != size {
+                            this.resize_pty(id, current, cx);
+                        }
                         cx.notify();
                     })
                     .is_err()
@@ -553,10 +560,16 @@ impl TerminalSession {
         }
         self.emulator.resize(size);
         if let Some(id) = self.id {
-            let core = self.env.core.clone();
-            spawn_core(cx, async move { term::term_resize(&core, id, cols as u16, rows as u16).await }).detach();
+            self.resize_pty(id, size, cx);
         }
         cx.notify();
+    }
+
+    /// Memberi tahu PTY (dan program di dalamnya lewat SIGWINCH/ConPTY) ukuran grid yang baru.
+    fn resize_pty(&self, id: u32, size: GridSize, cx: &mut Context<Self>) {
+        let core = self.env.core.clone();
+        let (cols, rows) = (size.cols as u16, size.rows as u16);
+        spawn_core(cx, async move { term::term_resize(&core, id, cols, rows).await }).detach();
     }
 }
 
