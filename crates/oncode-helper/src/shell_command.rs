@@ -1,23 +1,23 @@
-//! Perintah `oncode` di terminal, seperti `code` milik VS Code: `oncode .` membuka folder saat ini.
+//! The `oncode` command in the terminal, like VS Code's `code`: `oncode .` opens the current folder.
 //!
-//! Binary aplikasi sengaja tidak bernama `oncode` (lihat `app/Cargo.toml`), jadi yang dipasang
-//! adalah skrip kecil yang menjalankan `oncode-app` di latar belakang agar terminal langsung bebas:
-//! - Windows: `<folder aplikasi>\bin\oncode.cmd`, lalu folder `bin` itu ditambahkan ke PATH
-//!   pengguna. Installer memanggil ini saat memasang dan melepas aplikasi.
-//! - macOS: `/usr/local/bin/oncode`, dengan izin administrator bila folder itu tidak bisa ditulis.
-//! - Linux: `~/.local/bin/oncode` (paket `.deb` sudah memasang `/usr/bin/oncode` sendiri).
+//! The app binary is deliberately not named `oncode` (see `app/Cargo.toml`), so what gets installed
+//! is a small script that runs `oncode-app` in the background so the terminal is free right away:
+//! - Windows: `<app folder>\bin\oncode.cmd`, and then that `bin` folder is added to the user's
+//!   PATH. The installer calls this when installing and removing the app.
+//! - macOS: `/usr/local/bin/oncode`, with administrator permission if that folder is not writable.
+//! - Linux: `~/.local/bin/oncode` (the `.deb` package already installs `/usr/bin/oncode` itself).
 //!
-//! Proses `oncode-app` yang baru meneruskan folder ke OnCode yang sudah berjalan bila ada (lihat
+//! A new `oncode-app` process forwards the folder to an already running OnCode if there is one (see
 //! `app/src/single_instance.rs`).
 
 use std::path::Path;
 use std::process::ExitCode;
 
-/// Penanda di dalam skrip: hanya skrip buatan OnCode yang boleh ditimpa atau dihapus.
+/// Marker inside the script: only scripts created by OnCode may be overwritten or removed.
 const MARKER: &str = "Created by OnCode";
 
-/// `oncode-helper install-shell-command <folder aplikasi>` dan `uninstall-shell-command`.
-/// Pesan untuk pengguna dicetak ke stdout, galat ke stderr.
+/// `oncode-helper install-shell-command <app folder>` and `uninstall-shell-command`.
+/// Messages for the user are printed to stdout, errors to stderr.
 pub fn main(install: bool, app_dir: Option<&str>) -> ExitCode {
     let Some(app_dir) = app_dir else {
         eprintln!("oncode-helper: missing the application folder");
@@ -37,14 +37,14 @@ pub fn main(install: bool, app_dir: Option<&str>) -> ExitCode {
     }
 }
 
-/// Isi `oncode.cmd`. `start` membuat terminal tidak menunggu aplikasi ditutup; path aplikasi
-/// relatif terhadap skrip, sehingga isinya sama untuk semua lokasi pemasangan.
+/// Content of `oncode.cmd`. `start` makes the terminal not wait for the app to close; the app path
+/// is relative to the script, so the content is the same for every install location.
 #[cfg_attr(not(windows), allow(dead_code))]
 fn windows_script() -> String {
     format!("@echo off\r\nrem {MARKER}: opens a folder in OnCode, e.g. `oncode .`\r\nstart \"\" \"%~dp0..\\oncode-app.exe\" %*\r\n")
 }
 
-/// Isi skrip `oncode` untuk macOS dan Linux. `nohup ... &` melepas aplikasi dari terminal.
+/// Content of the `oncode` script for macOS and Linux. `nohup ... &` detaches the app from the terminal.
 #[cfg_attr(not(unix), allow(dead_code))]
 fn unix_script(exe: &Path) -> String {
     format!("#!/bin/sh\n# {MARKER}: opens a folder in OnCode, e.g. `oncode .`\nnohup {} \"$@\" >/dev/null 2>&1 &\n", sh_quote(&exe.to_string_lossy()))
@@ -55,7 +55,7 @@ fn sh_quote(text: &str) -> String {
     format!("'{}'", text.replace('\'', r"'\''"))
 }
 
-/// PATH (format Windows, dipisah `;`) dengan `dir` di ujungnya, atau `None` bila sudah ada.
+/// PATH (Windows format, separated by `;`) with `dir` at the end, or `None` if it is already there.
 #[cfg_attr(not(windows), allow(dead_code))]
 fn path_with(path: &str, dir: &str) -> Option<String> {
     if path.split(';').any(|entry| same_entry(entry, dir)) {
@@ -65,7 +65,7 @@ fn path_with(path: &str, dir: &str) -> Option<String> {
     Some(if path.is_empty() { dir.to_string() } else { format!("{path};{dir}") })
 }
 
-/// PATH tanpa `dir`, atau `None` bila memang tidak ada. Entri lain dibiarkan apa adanya.
+/// PATH without `dir`, or `None` if it was not there. Other entries are left as they are.
 #[cfg_attr(not(windows), allow(dead_code))]
 fn path_without(path: &str, dir: &str) -> Option<String> {
     if !path.split(';').any(|entry| same_entry(entry, dir)) {
@@ -74,7 +74,7 @@ fn path_without(path: &str, dir: &str) -> Option<String> {
     Some(path.split(';').filter(|entry| !same_entry(entry, dir)).collect::<Vec<_>>().join(";"))
 }
 
-/// Path Windows tidak peka huruf besar-kecil; garis miring di akhir diabaikan.
+/// Windows paths are case-insensitive; a trailing slash is ignored.
 fn same_entry(entry: &str, dir: &str) -> bool {
     let normalize = |s: &str| s.trim().trim_end_matches(['\\', '/']).to_lowercase();
     !entry.trim().is_empty() && normalize(entry) == normalize(dir)
@@ -102,13 +102,13 @@ mod platform {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
             Err(e) => return Err(format!("Cannot remove {}: {e}", script.display())),
         }
-        // Hanya terhapus bila kosong.
+        // Only removed if empty.
         let _ = std::fs::remove_dir(&bin);
         Ok("Removed the 'oncode' command from PATH.".to_string())
     }
 
-    /// Nilai `Path` milik pengguna di registri (`HKCU\Environment`). Dibaca dan ditulis apa adanya:
-    /// entri seperti `%USERPROFILE%\bin` tidak dikembangkan dan jenis nilainya dipertahankan.
+    /// The user's `Path` value in the registry (`HKCU\Environment`). Read and written as is:
+    /// entries like `%USERPROFILE%\bin` are not expanded and the value type is preserved.
     mod user_path {
         use windows_sys::Win32::Foundation::{ERROR_FILE_NOT_FOUND, ERROR_SUCCESS};
         use windows_sys::Win32::System::Registry::{
@@ -129,8 +129,8 @@ mod platform {
             text.encode_utf16().chain(Some(0)).collect()
         }
 
-        /// Mengubah PATH pengguna dengan `change` (`None` = tidak ada perubahan), lalu memberi tahu
-        /// Explorer agar terminal yang dibuka setelah ini mendapat PATH baru.
+        /// Modifies the user's PATH with `change` (`None` = no change), then notifies
+        /// Explorer so terminals opened after this get the new PATH.
         pub fn update(change: impl FnOnce(&str) -> Option<String>) -> Result<(), String> {
             let key = open()?;
             let (path, kind) = read(&key)?;
@@ -175,7 +175,7 @@ mod platform {
             while buffer.last() == Some(&0) {
                 buffer.pop();
             }
-            // Lebih baik menolak daripada menulis kembali PATH yang rusak.
+            // Better to refuse than to write back a corrupted PATH.
             let path = String::from_utf16(&buffer).map_err(|_| "The user PATH contains invalid characters; left it unchanged".to_string())?;
             Ok((path, kind))
         }
@@ -246,7 +246,7 @@ mod platform {
         Ok(format!("Removed the 'oncode' command ({}).", target.display()))
     }
 
-    /// Lokasi skrip. `/usr/local/bin` ada di PATH bawaan macOS; `~/.local/bin` di kebanyakan distro Linux.
+    /// Script location. `/usr/local/bin` is on the default macOS PATH; `~/.local/bin` on most Linux distros.
     fn target() -> Result<PathBuf, String> {
         if cfg!(target_os = "macos") {
             return Ok(PathBuf::from("/usr/local/bin/oncode"));
@@ -255,8 +255,8 @@ mod platform {
         Ok(PathBuf::from(home).join(".local/bin/oncode"))
     }
 
-    /// Binary yang dijalankan skrip. AppImage berjalan dari folder sementara yang hilang saat
-    /// aplikasi ditutup, jadi yang dipakai berkas `.AppImage`-nya sendiri.
+    /// The binary the script runs. An AppImage runs from a temporary folder that disappears when the
+    /// app is closed, so the `.AppImage` file itself is used.
     fn executable(app_dir: &Path) -> PathBuf {
         std::env::var_os("APPIMAGE").map(PathBuf::from).filter(|path| path.is_file()).unwrap_or_else(|| app_dir.join("oncode-app"))
     }
@@ -269,7 +269,7 @@ mod platform {
         if let Some(dir) = target.parent() {
             std::fs::create_dir_all(dir)?;
         }
-        // Tautan lama dihapus dulu agar penulisan tidak mengikuti tautan ke berkas lain.
+        // The old link is removed first so the write does not follow the link to another file.
         match std::fs::remove_file(target) {
             Ok(()) => {}
             Err(error) if error.kind() == ErrorKind::NotFound => {}
@@ -283,7 +283,7 @@ mod platform {
         super::sh_quote(&path.to_string_lossy())
     }
 
-    /// Menjalankan perintah shell sebagai administrator lewat dialog izin macOS.
+    /// Runs a shell command as administrator through the macOS permission dialog.
     fn as_administrator(command: &str) -> Result<(), String> {
         let escaped = command.replace('\\', "\\\\").replace('"', "\\\"");
         let output = std::process::Command::new("osascript")
@@ -311,7 +311,7 @@ mod tests {
         assert_eq!(path_with(r"C:\Windows;%USERPROFILE%\bin", r"C:\OnCode\bin").as_deref(), Some(r"C:\Windows;%USERPROFILE%\bin;C:\OnCode\bin"));
         assert_eq!(path_with(r"C:\Windows;", r"C:\OnCode\bin").as_deref(), Some(r"C:\Windows;C:\OnCode\bin"));
         assert_eq!(path_with("", r"C:\OnCode\bin").as_deref(), Some(r"C:\OnCode\bin"));
-        // Sudah ada, termasuk dengan huruf atau garis miring akhir yang berbeda.
+        // Already present, including with a different letter case or trailing slash.
         assert_eq!(path_with(r"C:\Windows;c:\oncode\BIN\", r"C:\OnCode\bin"), None);
     }
 

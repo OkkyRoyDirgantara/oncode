@@ -3,7 +3,7 @@ use std::path::Path;
 
 use serde::Serialize;
 
-/// Kode galat yang dipakai UI untuk memilih pesan dan aksi lanjutan.
+/// Error code used by the UI to pick a message and follow-up actions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum WsErrorCode {
@@ -21,7 +21,7 @@ pub enum WsErrorCode {
 #[error("{message}")]
 pub struct WsError {
     pub code: WsErrorCode,
-    /// Ringkas, untuk ditampilkan ke pengguna.
+    /// Concise, meant to be shown to the user.
     pub message: String,
 }
 
@@ -52,7 +52,7 @@ impl WsError {
         Self::new(WsErrorCode::Io, message)
     }
 
-    /// Galat I/O yang terjadi pada `path`; kodenya diturunkan dari `ErrorKind`.
+    /// An I/O error that occurred on `path`; its code is derived from `ErrorKind`.
     pub fn io(path: &Path, err: io::Error) -> Self {
         let code = code_of(err.kind());
         let shown = path.display();
@@ -111,9 +111,9 @@ mod tests {
 
     #[test]
     fn display_is_message_and_code_is_camel_case() {
-        let e = WsError::new(WsErrorCode::InvalidPattern, "pola salah");
-        assert_eq!(e.to_string(), "pola salah");
+        let e = WsError::new(WsErrorCode::InvalidPattern, "bad pattern");
+        assert_eq!(e.to_string(), "bad pattern");
         let json = serde_json::to_string(&e).unwrap();
-        assert_eq!(json, r#"{"code":"invalidPattern","message":"pola salah"}"#);
+        assert_eq!(json, r#"{"code":"invalidPattern","message":"bad pattern"}"#);
     }
 }

@@ -1,4 +1,4 @@
-//! Susunan interactive rebase: validasi (sama dengan `build_todo` di backend) dan pengurutan ulang.
+//! The interactive rebase plan: validation (same as `build_todo` in the backend) and reordering.
 
 use oncode_git::{RebaseAction, RebaseTodoItem};
 
@@ -15,9 +15,9 @@ pub fn action_hint(action: RebaseAction) -> &'static str {
     }
 }
 
-/// Pesan galat bila susunan tidak sah, atau `None` bila boleh dijalankan.
-/// Aturannya mengikuti backend: squash/fixup membutuhkan pick/reword/edit sebelumnya,
-/// dan harus ada minimal satu commit yang tersisa.
+/// The error message if the plan is invalid, or `None` if it may run.
+/// The rules follow the backend: squash/fixup need a preceding pick/reword/edit,
+/// and at least one commit must remain.
 pub fn validate_plan(items: &[RebaseTodoItem]) -> Option<String> {
     if items.is_empty() {
         return Some("There are no commits to rebase.".into());
@@ -42,7 +42,7 @@ pub fn validate_plan(items: &[RebaseTodoItem]) -> Option<String> {
     None
 }
 
-/// Memindahkan item dari indeks `from` ke indeks `to`; indeks di luar batas tidak mengubah apa pun.
+/// Moves the item from index `from` to index `to`; out-of-range indexes change nothing.
 pub fn move_item<T>(items: &mut Vec<T>, from: usize, to: usize) {
     if from == to || from >= items.len() || to >= items.len() {
         return;
@@ -67,8 +67,8 @@ mod tests {
         actions.iter().enumerate().map(|(i, action)| RebaseTodoItem { action: *action, oid: oid(i + 1), subject: format!("c{}", i + 1) }).collect()
     }
 
-    // Tabel ini mencerminkan `build_todo` di crates/oncode-git/src/ops.rs:
-    // squash/fixup butuh pick/reword/edit sebelumnya; minimal satu commit tersisa.
+    // This table mirrors `build_todo` in crates/oncode-git/src/ops.rs:
+    // squash/fixup need a preceding pick/reword/edit; at least one commit remains.
     #[test]
     fn accepts_valid_plans() {
         let valid: &[&[RebaseAction]] = &[
@@ -82,7 +82,7 @@ mod tests {
             &[Edit, Fixup],
             &[Drop, Pick],
             &[Drop, Pick, Squash],
-            // Commit yang di-drop di antaranya tidak menghapus dasar yang sudah ada.
+            // A dropped commit in between does not remove the base that already exists.
             &[Pick, Drop, Squash],
             &[Pick, Drop, Drop],
             &[Pick, Squash, Drop, Fixup, Reword],
@@ -100,14 +100,14 @@ mod tests {
             (&[Fixup], "\"fixup\""),
             (&[Squash, Pick], "\"squash\""),
             (&[Fixup, Pick], "\"fixup\""),
-            // Drop tidak dihitung sebagai commit sebelumnya.
+            // Drop does not count as a preceding commit.
             (&[Drop, Squash], "\"squash\""),
             (&[Drop, Drop, Fixup, Pick], "\"fixup\""),
             (&[Drop], "Every commit is dropped"),
             (&[Drop, Drop, Drop], "Every commit is dropped"),
         ];
         for (actions, expected) in invalid {
-            let message = validate_plan(&plan(actions)).unwrap_or_else(|| panic!("{actions:?} seharusnya ditolak"));
+            let message = validate_plan(&plan(actions)).unwrap_or_else(|| panic!("{actions:?} should be rejected"));
             assert!(message.contains(expected), "{actions:?}: {message}");
             if expected.starts_with('"') {
                 assert!(message.contains("needs an earlier commit"), "{message}");

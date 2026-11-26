@@ -1,13 +1,13 @@
-//! Format tanggal dan hash untuk daftar commit.
+//! Date and hash formatting for the commit list.
 
 use oncode_git::Timestamp;
 
-/// Detik Unix saat ini.
+/// The current Unix time in seconds.
 pub fn now_seconds() -> f64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or(0.0)
 }
 
-/// Waktu relatif ringkas dari detik Unix, mis. "5m ago", "3d ago", "2y ago".
+/// Compact relative time from Unix seconds, e.g. "5m ago", "3d ago", "2y ago".
 pub fn relative_date_at(seconds: Timestamp, now: f64) -> String {
     let diff = (now - seconds).floor();
     if !diff.is_finite() {
@@ -37,7 +37,7 @@ pub fn relative_date(seconds: Timestamp) -> String {
     relative_date_at(seconds, now_seconds())
 }
 
-/// Tanggal dan jam lengkap dalam zona waktu setempat, mis. "Nov 17, 2026, 2:05 PM".
+/// Full date and time in the local time zone, e.g. "Nov 17, 2026, 2:05 PM".
 pub fn full_date(seconds: Timestamp) -> String {
     use chrono::TimeZone as _;
     if !seconds.is_finite() {
@@ -53,7 +53,7 @@ pub fn short_oid(oid: &str) -> &str {
     oid.get(..8).unwrap_or(oid)
 }
 
-/// Nama revisi untuk judul dialog: hash penuh dipendekkan, nama ref dibiarkan.
+/// Revision name for dialog titles: a full hash is shortened, a ref name is left as is.
 pub fn short_rev(rev: &str) -> &str {
     if rev.len() >= 40 {
         short_oid(rev)
@@ -66,7 +66,7 @@ pub fn plural(n: usize, word: &str) -> String {
     format!("{n} {word}{}", if n == 1 { "" } else { "s" })
 }
 
-/// Nama terakhir sebuah path (`/` atau `\`).
+/// The last component of a path (`/` or `\`).
 pub fn base_name(path: &str) -> &str {
     path.trim_end_matches(['/', '\\']).rsplit(['/', '\\']).next().unwrap_or(path)
 }
@@ -98,7 +98,7 @@ mod tests {
             (800.0 * DAY, "2y ago"),
         ];
         for (seconds, expected) in cases {
-            assert_eq!(ago(seconds), expected, "{seconds} detik lalu");
+            assert_eq!(ago(seconds), expected, "{seconds} seconds ago");
         }
     }
 

@@ -1,4 +1,4 @@
-//! Pengaturan aplikasi: sedikit, bertipe, dengan nilai bawaan yang masuk akal.
+//! Application settings: few, typed, with sensible defaults.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -16,9 +16,9 @@ pub struct EditorSettings {
     pub insert_spaces: bool,
     pub word_wrap: bool,
     pub line_numbers: bool,
-    /// Tampilkan blame baris kursor di ujung baris itu (inline blame, seperti GitLens).
+    /// Show the blame of the cursor line at the end of that line (inline blame, like GitLens).
     pub inline_blame: bool,
-    /// Format berkas setiap kali disimpan (butuh ekstensi Formatters atau language server).
+    /// Format the file every time it is saved (needs the Formatters extension or a language server).
     pub format_on_save: bool,
 }
 
@@ -42,9 +42,9 @@ impl Default for EditorSettings {
 pub enum AutoSave {
     #[default]
     Off,
-    /// Simpan saat editor kehilangan fokus.
+    /// Save when the editor loses focus.
     OnFocusChange,
-    /// Simpan satu detik setelah ketikan terakhir.
+    /// Save one second after the last keystroke.
     AfterDelay,
 }
 
@@ -66,13 +66,13 @@ pub enum Theme {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub enum StartupView {
-    /// Source Control bila folder adalah repositori, selain itu Explorer.
+    /// Source Control if the folder is a repository, otherwise Explorer.
     #[default]
     Scm,
     Explorer,
 }
 
-/// Sisi jendela tempat activity bar dan sidebar berada.
+/// The side of the window where the activity bar and sidebar are placed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub enum SidebarPosition {
@@ -92,9 +92,9 @@ pub struct WorkbenchSettings {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GitSettings {
-    /// Path ke git; kosong = cari di PATH.
+    /// Path to git; empty = look it up in PATH.
     pub path: Option<String>,
-    /// 0 = tidak pernah fetch otomatis.
+    /// 0 = never fetch automatically.
     pub auto_fetch_minutes: u32,
     pub pull_strategy: PullStrategy,
     pub confirm_force_push: bool,
@@ -109,12 +109,12 @@ impl Default for GitSettings {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct TerminalSettings {
-    /// Kosong = shell bawaan pengguna.
+    /// Empty = the user's default shell.
     pub shell: Option<String>,
-    /// Daftar font (dipisah koma) khusus terminal; kosong = font editor.
+    /// Comma-separated font list for the terminal only; empty = editor font.
     pub font_family: Option<String>,
     pub font_size: Option<u32>,
-    /// Tinggi baris dalam persen ukuran font (100–200); kosong = 120.
+    /// Line height as a percentage of the font size (100–200); empty = 120.
     pub line_height: Option<u32>,
 }
 
@@ -122,33 +122,33 @@ pub struct TerminalSettings {
 #[serde(rename_all = "camelCase")]
 pub struct LspSettings {
     pub enabled: bool,
-    /// Menimpa atau menambah daftar server bawaan, per id bahasa.
+    /// Overrides or adds to the default server list, per language id.
     pub servers: BTreeMap<String, ServerSpec>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct ForgeSettings {
-    /// Client ID aplikasi OAuth untuk login device flow di github.com / gitlab.com, sekaligus
-    /// bawaan untuk server lain yang belum punya Client ID sendiri. Kosong = Client ID bawaan build.
+    /// OAuth app Client ID for the device flow login on github.com / gitlab.com, also the
+    /// default for other servers that have no Client ID of their own. Empty = the build's default Client ID.
     pub github_client_id: Option<String>,
     pub gitlab_client_id: Option<String>,
-    /// Client ID per server (kunci: origin, mis. `https://git.example.com`). Aplikasi OAuth hanya
-    /// dikenal oleh server tempat ia didaftarkan, jadi tiap server self-hosted perlu miliknya sendiri.
+    /// Per-server Client ID (key: origin, e.g. `https://git.example.com`). An OAuth app is only
+    /// known to the server where it was registered, so each self-hosted server needs its own.
     pub client_ids: BTreeMap<String, String>,
 }
 
-/// Fitur tambahan yang bisa dinyalakan atau dimatikan satu per satu (Settings → Extensions).
+/// Additional features that can be turned on or off one by one (Settings → Extensions).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExtensionSettings {
-    /// Pratinjau Markdown (`Ctrl+Shift+V`).
+    /// Markdown preview (`Ctrl+Shift+V`).
     pub markdown_preview: bool,
-    /// Formatter eksternal per bahasa (Prettier, rustfmt, gofmt, ruff, dart format, …).
+    /// External per-language formatters (Prettier, rustfmt, gofmt, ruff, dart format, …).
     pub formatters: bool,
-    /// Highlight untuk bahasa tambahan (Kotlin, Dart, C#, PHP, Lua, Swift, GraphQL, …).
+    /// Highlighting for additional languages (Kotlin, Dart, C#, PHP, Lua, Swift, GraphQL, …).
     pub extra_languages: bool,
-    /// Go to Definition dan Ctrl+klik tanpa language server: mencari definisi di seluruh proyek.
+    /// Go to Definition and Ctrl+click without a language server: finds definitions across the whole project.
     pub symbol_search: bool,
 }
 
@@ -158,29 +158,29 @@ impl Default for ExtensionSettings {
     }
 }
 
-/// Jalur ke Claude untuk "Generate Commit Message".
+/// The route to Claude for "Generate Commit Message".
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub enum AiProvider {
-    /// API bila ada API key; tanpa key, Claude Code CLI bila terpasang.
+    /// API if there is an API key; without a key, Claude Code CLI if installed.
     #[default]
     Auto,
-    /// Claude Code CLI (`claude -p`) dengan login Claude Code pengguna; tanpa API key.
+    /// Claude Code CLI (`claude -p`) with the user's Claude Code login; no API key.
     ClaudeCode,
-    /// Claude API dengan API key Anthropic.
+    /// Claude API with an Anthropic API key.
     Api,
-    /// Endpoint kustom (`ai.customBaseUrl`): penyedia lain, gateway, atau model lokal.
+    /// Custom endpoint (`ai.customBaseUrl`): another provider, a gateway, or a local model.
     Custom,
 }
 
-/// Format API endpoint kustom.
+/// Format of the custom API endpoint.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum ApiFormat {
-    /// Chat Completions ala OpenAI: OpenAI, OpenRouter, Groq, DeepSeek, Ollama, LM Studio, LiteLLM, …
+    /// OpenAI-style Chat Completions: OpenAI, OpenRouter, Groq, DeepSeek, Ollama, LM Studio, LiteLLM, …
     #[default]
     #[serde(rename = "openai")]
     OpenAi,
-    /// Messages API ala Anthropic: gateway atau proxy yang meneruskan ke Claude.
+    /// Anthropic-style Messages API: a gateway or proxy that forwards to Claude.
     #[serde(rename = "anthropic")]
     Anthropic,
 }
@@ -189,16 +189,16 @@ pub enum ApiFormat {
 #[serde(rename_all = "camelCase")]
 pub struct AiSettings {
     pub provider: AiProvider,
-    /// Model Claude untuk "Generate Commit Message". Untuk Claude Code CLI boleh juga alias
-    /// seperti `opus` atau `sonnet`.
+    /// Claude model for "Generate Commit Message". For the Claude Code CLI an alias
+    /// such as `opus` or `sonnet` is also allowed.
     pub model: String,
-    /// Origin Claude API, mis. gateway/proxy organisasi. Kosong = `https://api.anthropic.com`.
+    /// Claude API origin, e.g. an organization gateway/proxy. Empty = `https://api.anthropic.com`.
     pub base_url: Option<String>,
-    /// Format API endpoint kustom (provider `custom`).
+    /// Format of the custom API endpoint (`custom` provider).
     pub custom_format: ApiFormat,
-    /// Alamat endpoint kustom, mis. `https://openrouter.ai/api/v1` atau `http://localhost:11434/v1`.
+    /// Custom endpoint address, e.g. `https://openrouter.ai/api/v1` or `http://localhost:11434/v1`.
     pub custom_base_url: Option<String>,
-    /// Model di endpoint kustom, mis. `gpt-4.1-mini` atau `qwen2.5-coder`.
+    /// Model on the custom endpoint, e.g. `gpt-4.1-mini` or `qwen2.5-coder`.
     pub custom_model: Option<String>,
 }
 
@@ -238,7 +238,7 @@ impl Default for Settings {
     }
 }
 
-/// Menggabungkan `overlay` ke `base`: objek digabung per kunci, nilai lain menimpa.
+/// Merges `overlay` into `base`: objects are merged per key, other values overwrite.
 pub fn merge_json(base: &mut serde_json::Value, overlay: &serde_json::Value) {
     match (base, overlay) {
         (serde_json::Value::Object(base), serde_json::Value::Object(overlay)) => {
@@ -251,8 +251,8 @@ pub fn merge_json(base: &mut serde_json::Value, overlay: &serde_json::Value) {
 }
 
 impl Settings {
-    /// Membaca pengaturan. Kunci yang tidak ada di berkas memakai nilai bawaan;
-    /// berkas hilang atau rusak menghasilkan nilai bawaan seluruhnya.
+    /// Reads the settings. Keys missing from the file use the default value;
+    /// a missing or corrupt file yields all defaults.
     pub fn load(path: &Path) -> Self {
         let Some(file) = std::fs::read_to_string(path).ok().and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok()) else {
             return Self::default();
@@ -260,7 +260,7 @@ impl Settings {
         Self::default().merged_with(&file)
     }
 
-    /// Nilai `overlay` ditimpakan ke pengaturan ini; bila hasilnya tidak sah, pengaturan ini dipertahankan.
+    /// Applies the `overlay` values onto these settings; if the result is invalid, these settings are kept.
     fn merged_with(&self, overlay: &serde_json::Value) -> Self {
         let Ok(mut base) = serde_json::to_value(self) else { return self.clone() };
         merge_json(&mut base, overlay);
@@ -277,8 +277,8 @@ impl Settings {
         std::fs::rename(tmp, path)
     }
 
-    /// Pengaturan efektif untuk sebuah proyek: pengaturan pengguna ditimpa
-    /// `.oncode/settings.json` milik proyek. Hanya dipanggil untuk folder yang dipercaya.
+    /// Effective settings for a project: the user's settings overridden by the project's
+    /// `.oncode/settings.json`. Only called for trusted folders.
     pub fn with_project(&self, project_root: &Path) -> Self {
         let project = project_root.join(".oncode").join("settings.json");
         match std::fs::read_to_string(project).ok().and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok()) {
@@ -302,8 +302,8 @@ mod tests {
         assert_eq!(s.editor.font_size, 18);
         assert_eq!(s.editor.tab_size, 4);
         assert!(s.lsp.enabled);
-        // Nilai bertipe salah tidak merusak pengaturan lain: berkas diabaikan seluruhnya.
-        std::fs::write(&path, r#"{ "editor": { "fontSize": "besar" } }"#).unwrap();
+        // A wrongly typed value does not corrupt the other settings: the file is ignored entirely.
+        std::fs::write(&path, r#"{ "editor": { "fontSize": "large" } }"#).unwrap();
         assert_eq!(Settings::load(&path), Settings::default());
     }
 
@@ -331,7 +331,7 @@ mod tests {
         user.editor.font_size = 16;
         let effective = user.with_project(dir.path());
         assert_eq!(effective.editor.tab_size, 2);
-        assert_eq!(effective.editor.font_size, 16, "kunci yang tidak ditimpa tetap dari pengguna");
+        assert_eq!(effective.editor.font_size, 16, "keys that are not overridden stay from the user");
         assert_eq!(effective.lsp.servers["rust"].command, "ra-custom");
     }
 }

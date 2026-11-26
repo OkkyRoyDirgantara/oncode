@@ -1,10 +1,10 @@
-//! Halaman pengaturan: formulir di atas pengaturan tingkat PENGGUNA. Setiap perubahan langsung
-//! disimpan (isian teks menunggu jeda singkat); nilai yang tidak sah tidak pernah disimpan.
+//! Settings page: a form over USER-level settings. Every change is saved immediately
+//! (text inputs wait for a short delay); invalid values are never saved.
 //!
-//! Alur data: `user` adalah pengaturan pengguna terbaru menurut halaman ini, `saved` yang terakhir
-//! diketahui tersimpan. Penyimpanan berjalan berurutan dan selalu menulis `user` terbaru, jadi
-//! perubahan yang beruntun tidak saling mendahului. Perubahan dari luar (`SettingsChanged`)
-//! diambil hanya bila tidak ada perubahan lokal yang lebih baru.
+//! Data flow: `user` is the latest user settings according to this page, `saved` is the last one
+//! known to be stored. Saving runs sequentially and always writes the latest `user`, so
+//! successive changes never overtake each other. External changes (`SettingsChanged`)
+//! are taken only if there is no newer local change.
 
 use std::collections::HashMap;
 use std::time::Duration;
@@ -37,7 +37,7 @@ use crate::model::{
     matches_query, parse_number, set_server_override, split_args, validate_server_command, Field, FieldKind, OverrideContext, SectionId, FIELDS, SECTIONS,
 };
 
-/// Jeda sebelum isian teks disimpan.
+/// Delay before a text input is saved.
 pub const TEXT_DEBOUNCE: Duration = Duration::from_millis(400);
 
 const SERVER_TABLE_KEYWORDS: &str = "language servers lsp table command arguments override installed customize reset";
@@ -46,7 +46,7 @@ const ACCOUNTS_KEYWORDS: &str = "accounts github gitlab sign in sign out login l
 const OVERRIDE_TEXT: &str = "overridden by project (.oncode/settings.json)";
 const OVERRIDE_TOOLTIP: &str = "A project setting in .oncode/settings.json replaces this value while this folder is open. Changing it here affects other folders.";
 
-/// Kotak isian yang dikelola halaman: kolom teks/angka, atau perintah/argumen penimpaan server.
+/// Input boxes managed by the page: text/number fields, or the command/arguments of a server override.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 enum ControlKey {
     Field(&'static str),
@@ -65,7 +65,7 @@ impl ControlKey {
     }
 }
 
-/// Isian yang sudah lolos validasi dan siap disimpan.
+/// Input that has passed validation and is ready to be saved.
 enum Parsed {
     Text(String),
     Number(Option<u32>),
@@ -91,8 +91,8 @@ fn parse(key: &ControlKey, text: &str) -> Result<Parsed, String> {
     }
 }
 
-/// Penimpaan yang sedang berlaku untuk `language`, atau server bawaannya sebagai titik awal.
-/// Selalu dibangun dari nilai terbaru di pengaturan, agar `env` dan kolom lain tidak hilang.
+/// The override currently in effect for `language`, or its built-in server as a starting point.
+/// Always built from the latest value in the settings, so `env` and other fields aren't lost.
 fn base_spec(settings: &Settings, language: &str, servers: Option<&[LspServerInfo]>) -> Option<ServerSpec> {
     settings.lsp.servers.get(language).cloned().or_else(|| {
         let info = servers?.iter().find(|info| info.language == language)?;
@@ -127,7 +127,7 @@ fn apply_parsed(key: &ControlKey, parsed: Parsed, settings: &mut Settings, serve
     }
 }
 
-/// Isi kotak isian menurut pengaturan; `None` bila kotaknya sudah tidak punya tempat (penimpaan dihapus).
+/// The content of an input box according to the settings; `None` if the box no longer has a place (override removed).
 fn canonical_text(key: &ControlKey, settings: &Settings) -> Option<String> {
     match key {
         ControlKey::Field(id) => field_by_id(id).map(|field| field_text(field, settings)),
@@ -138,8 +138,8 @@ fn canonical_text(key: &ControlKey, settings: &Settings) -> Option<String> {
 
 struct TextControl {
     state: Entity<InputState>,
-    /// Ada ketikan yang belum tersimpan (termasuk isian tidak sah yang masih ditampilkan).
-    /// Selama ini benar, nilai dari luar tidak menimpa isi kotak.
+    /// There is typing that has not been saved yet (including invalid input that is still displayed).
+    /// While this is true, outside values do not overwrite the box's content.
     dirty: bool,
     problem: Option<SharedString>,
     pending: Option<Parsed>,
@@ -170,21 +170,21 @@ type ChoiceState = SelectState<Vec<ChoiceItem>>;
 pub struct SettingsPage {
     env: Env,
     focus_handle: FocusHandle,
-    /// Pengaturan pengguna terbaru menurut halaman ini (mungkin belum selesai disimpan).
+    /// The latest user settings according to this page (may not have finished saving).
     user: Settings,
-    /// Pengaturan pengguna yang terakhir diketahui tersimpan; pembanding untuk penanda "ditimpa proyek".
+    /// The user settings last known to be stored; the baseline for the "overridden by project" marker.
     saved: Settings,
     defaults: Settings,
     info: Option<AppInfo>,
     servers: Option<Vec<LspServerInfo>>,
-    /// Pengaturan LSP saat tabel server terakhir dimuat; berubah berarti tabel perlu dimuat ulang.
+    /// The LSP settings when the server table was last loaded; a change means the table needs reloading.
     servers_for: Option<LspSettings>,
     search: Entity<InputState>,
     query: String,
     texts: HashMap<ControlKey, TextControl>,
     selects: HashMap<&'static str, Entity<ChoiceState>>,
     saving: bool,
-    /// Tampilan akun dari crate lain (lihat `register_accounts_view`).
+    /// Account view from another crate (see `register_accounts_view`).
     accounts: Option<AnyView>,
     _servers_task: Task<()>,
     _subscriptions: Vec<Subscription>,
@@ -212,10 +212,10 @@ impl SettingsPage {
                     this.on_external_change(settings.clone(), window, cx);
                 }
             }),
-            // Suntingan yang masih menunggu ikut disimpan saat halaman ditutup.
+            // Edits still waiting are saved too when the page is closed.
             cx.on_release(Self::save_on_release),
         ];
-        // Penanda "ditimpa proyek" bergantung pada pengaturan efektif jendela.
+        // The "overridden by project" marker depends on the window's effective settings.
         if let Some(workbench) = env.workbench.upgrade() {
             subscriptions.push(cx.subscribe_in(&workbench, window, |_, _, event: &WorkbenchEvent, _, cx| {
                 if matches!(event, WorkbenchEvent::SettingsChanged) {
@@ -270,8 +270,8 @@ impl SettingsPage {
         this.sync_controls(window, cx);
         this.load_info(window, cx);
         this.load_servers(window, cx);
-        // `Workbench` sedang dipinjam saat tab dibangun; tampilan akun dibuat setelahnya supaya
-        // pembangunnya bebas membaca `Workbench`.
+        // `Workbench` is borrowed while the tab is being built; the account view is created afterwards so
+        // its builder is free to read `Workbench`.
         cx.defer_in(window, |this, window, cx| {
             if let Some(builder) = crate::accounts_builder(cx) {
                 this.accounts = Some(builder(&this.env, window, cx));
@@ -281,39 +281,39 @@ impl SettingsPage {
         this
     }
 
-    // ----- Pembacaan (dipakai juga oleh uji) -----
+    // ----- Reading (also used by tests) -----
 
-    /// Pengaturan pengguna terbaru menurut halaman ini.
+    /// The latest user settings according to this page.
     pub fn user_settings(&self) -> &Settings {
         &self.user
     }
 
-    /// Semua perubahan sudah tersimpan dan tidak ada isian yang menunggu jeda.
+    /// All changes are saved and no input is waiting for the delay.
     pub fn is_settled(&self) -> bool {
         !self.saving && self.user == self.saved && self.texts.values().all(|control| control.pending.is_none())
     }
 
-    /// Pesan galat yang sedang ditampilkan untuk sebuah kolom (id seperti `editor.fontSize`).
+    /// The error message currently shown for a field (an id such as `editor.fontSize`).
     pub fn problem(&self, field_id: &str) -> Option<String> {
         self.texts.iter().find(|(key, _)| matches!(key, ControlKey::Field(id) if *id == field_id)).and_then(|(_, control)| control.problem.as_ref().map(|p| p.to_string()))
     }
 
-    /// Isi kotak isian sebuah kolom teks atau angka seperti yang terlihat.
+    /// The input box content of a text or number field as it appears.
     pub fn field_input(&self, field_id: &str, cx: &App) -> Option<String> {
         self.texts.iter().find(|(key, _)| matches!(key, ControlKey::Field(id) if *id == field_id)).map(|(_, control)| control.state.read(cx).value().to_string())
     }
 
-    /// Tabel language server yang sudah dimuat.
+    /// The language server table, once loaded.
     pub fn servers(&self) -> Option<&[LspServerInfo]> {
         self.servers.as_deref()
     }
 
-    /// Informasi aplikasi (versi git atau alasan git tidak tersedia), bila sudah dimuat.
+    /// App information (the git version or the reason git is unavailable), once loaded.
     pub fn app_info(&self) -> Option<&AppInfo> {
         self.info.as_ref()
     }
 
-    // ----- Memuat data -----
+    // ----- Loading data -----
 
     fn load_info(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let core = self.env.core.clone();
@@ -328,7 +328,7 @@ impl SettingsPage {
         .detach();
     }
 
-    /// Memuat tabel server. Status terpasang ikut berubah saat penimpaan atau sakelar LSP berubah.
+    /// Loads the server table. The installed status changes along with an override or the LSP switch.
     fn load_servers(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.servers_for = Some(self.saved.lsp.clone());
         let (core, label) = (self.env.core.clone(), self.env.window.to_string());
@@ -353,9 +353,9 @@ impl SettingsPage {
         }
     }
 
-    // ----- Menyimpan -----
+    // ----- Saving -----
 
-    /// Menerapkan perubahan ke pengaturan terbaru lalu menyimpannya.
+    /// Applies a change to the latest settings, then saves them.
     fn commit(&mut self, change: impl FnOnce(&mut Settings), window: &mut Window, cx: &mut Context<Self>) {
         let mut next = self.user.clone();
         change(&mut next);
@@ -372,8 +372,8 @@ impl SettingsPage {
         cx.notify();
     }
 
-    /// Menyimpan `user` sampai yang tersimpan sama dengan yang terbaru. Hanya satu putaran yang
-    /// berjalan pada satu waktu, jadi penyimpanan tidak pernah saling mendahului.
+    /// Saves `user` until what is stored equals the latest. Only one loop runs at a
+    /// time, so saves never overtake each other.
     fn start_saving(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.saving {
             return;
@@ -398,7 +398,7 @@ impl SettingsPage {
                 Err(error) => {
                     this.saving = false;
                     overlay::toast_error(format!("Could not save settings: {}", error.message), window, cx);
-                    // Tampilan dikembalikan ke apa yang benar-benar tersimpan.
+                    // The view is restored to what is actually stored.
                     let stored = this.env.core.user_settings();
                     this.user = stored.clone();
                     this.saved = stored;
@@ -414,9 +414,9 @@ impl SettingsPage {
         .detach();
     }
 
-    /// Jendela lain (atau penyimpanan dari sini) mengubah pengaturan pengguna.
+    /// Another window (or a save from here) changed the user settings.
     fn on_external_change(&mut self, settings: Settings, window: &mut Window, cx: &mut Context<Self>) {
-        // Perubahan lokal yang belum tersimpan lebih baru; penyimpanannya akan menyamakan keadaan.
+        // A local change that hasn't been saved is newer; saving it will bring the state back in line.
         if self.saving || self.user != self.saved {
             return;
         }
@@ -429,7 +429,7 @@ impl SettingsPage {
         }
     }
 
-    /// Pengaturan yang harus tersimpan bila halaman ditutup sekarang: `user` ditambah isian yang masih menunggu jeda.
+    /// The settings that must be stored if the page is closed now: `user` plus inputs still waiting for the delay.
     fn settings_with_pending(&mut self) -> Settings {
         let mut next = self.user.clone();
         let keys: Vec<ControlKey> = self.texts.keys().cloned().collect();
@@ -452,7 +452,7 @@ impl SettingsPage {
         }
     }
 
-    // ----- Kotak isian -----
+    // ----- Input boxes -----
 
     fn new_text_control(&self, key: ControlKey, window: &mut Window, cx: &mut Context<Self>) -> TextControl {
         let text = canonical_text(&key, &self.user).unwrap_or_default();
@@ -461,7 +461,7 @@ impl SettingsPage {
             match &key {
                 ControlKey::Field(id) => match field_by_id(id).map(|field| &field.kind) {
                     Some(FieldKind::Text(spec)) => state.placeholder(spec.placeholder),
-                    // Hanya digit yang bisa diketik; di luar rentang dijepit `NumberInput` saat fokus lepas.
+                    // Only digits can be typed; out of range values are clamped by `NumberInput` when focus is lost.
                     Some(FieldKind::Number(spec)) => {
                         state.placeholder(spec.placeholder).validate(|text, _| text.chars().all(|c| c.is_ascii_digit())).min(spec.min as f64).max(spec.max as f64)
                     }
@@ -483,7 +483,7 @@ impl SettingsPage {
         TextControl { state, dirty: false, problem: None, pending: None, debounce: None, _subscription: subscription }
     }
 
-    /// Isi kotak berubah: validasi sekarang, simpan setelah jeda (atau saat `flush`).
+    /// The box content changed: validate now, save after the delay (or on `flush`).
     fn text_changed(&mut self, key: &ControlKey, debounce: bool, window: &mut Window, cx: &mut Context<Self>) {
         let Some(control) = self.texts.get_mut(key) else { return };
         let text = control.state.read(cx).value().to_string();
@@ -509,10 +509,10 @@ impl SettingsPage {
         cx.notify();
     }
 
-    /// Menyimpan isian yang menunggu tanpa menunggu jeda (Enter, fokus lepas, atau jeda habis).
+    /// Saves the pending input without waiting for the delay (Enter, focus lost, or the delay elapsed).
     fn flush(&mut self, key: &ControlKey, window: &mut Window, cx: &mut Context<Self>) {
         let Some(control) = self.texts.get_mut(key) else { return };
-        // Tugas jeda dilepas, bukan dibatalkan: `flush` bisa sedang dipanggil dari dalamnya.
+        // The delay task is detached, not canceled: `flush` may be getting called from inside it.
         if let Some(task) = control.debounce.take() {
             task.detach();
         }
@@ -525,7 +525,7 @@ impl SettingsPage {
     }
 
     fn text_blurred(&mut self, key: &ControlKey, window: &mut Window, cx: &mut Context<Self>) {
-        // `NumberInput` menjepit nilai di luar rentang saat fokus lepas; isi kotak dinilai ulang.
+        // `NumberInput` clamps out of range values when focus is lost; the box content is re-evaluated.
         if self.texts.get(key).is_some_and(|control| control.dirty) {
             self.text_changed(key, false, window, cx);
         }
@@ -533,7 +533,7 @@ impl SettingsPage {
         self.sync_text(key, window, cx);
     }
 
-    /// Menyamakan isi kotak dengan pengaturan, kecuali kotak itu sedang disunting.
+    /// Brings the box content in line with the settings, unless that box is being edited.
     fn sync_text(&mut self, key: &ControlKey, window: &mut Window, cx: &mut Context<Self>) {
         let Some(text) = canonical_text(key, &self.user) else { return };
         let Some(control) = self.texts.get(key) else { return };
@@ -545,7 +545,7 @@ impl SettingsPage {
         }
     }
 
-    /// Membuang suntingan lokal sebuah kotak (termasuk isian tidak sah) dan menampilkan nilai pengaturan.
+    /// Discards a box's local edits (including invalid input) and shows the settings value.
     fn reset_text(&mut self, key: &ControlKey, window: &mut Window, cx: &mut Context<Self>) {
         let Some(text) = canonical_text(key, &self.user) else { return };
         let Some(control) = self.texts.get_mut(key) else { return };
@@ -556,7 +556,7 @@ impl SettingsPage {
         control.state.update(cx, |state, cx| state.set_value(text, window, cx));
     }
 
-    /// Menyamakan semua kontrol dengan `user`: kotak isian, pilihan, dan kotak penimpaan server.
+    /// Brings all controls in line with `user`: input boxes, selects, and server override boxes.
     fn sync_controls(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let languages: Vec<String> = self.user.lsp.servers.keys().cloned().collect();
         self.texts.retain(|key, _| match key {
@@ -590,7 +590,7 @@ impl SettingsPage {
     fn reset_field(&mut self, field: &'static Field, window: &mut Window, cx: &mut Context<Self>) {
         let defaults = self.defaults.clone();
         self.commit(|settings| apply_default(field, settings, &defaults), window, cx);
-        // Apa pun yang sedang diketik di kolom ini kalah oleh nilai yang baru ditetapkan.
+        // Whatever is being typed in this field loses to the value that was just set.
         self.reset_text(&ControlKey::Field(field.id), window, cx);
         cx.notify();
     }
@@ -620,9 +620,9 @@ impl SettingsPage {
         .detach();
     }
 
-    // ----- Penimpaan server -----
+    // ----- Server overrides -----
 
-    /// Membuat penimpaan dari server yang sedang berlaku, untuk kemudian disunting.
+    /// Creates an override from the server currently in effect, to be edited afterwards.
     fn customize_server(&mut self, language: &str, window: &mut Window, cx: &mut Context<Self>) {
         let Some(spec) = base_spec(&self.user, language, self.servers.as_deref()) else { return };
         self.commit(|settings| set_server_override(settings, language, Some(spec)), window, cx);
@@ -632,7 +632,7 @@ impl SettingsPage {
         self.commit(|settings| set_server_override(settings, language, None), window, cx);
     }
 
-    // ----- Tampilan -----
+    // ----- View -----
 
     fn render_override_marker(&self, id: SharedString, cx: &mut Context<Self>) -> AnyElement {
         div()
@@ -659,7 +659,7 @@ impl SettingsPage {
         )
     }
 
-    /// Versi git yang terdeteksi, atau alasan fitur Git tidak tersedia.
+    /// The detected git version, or the reason the Git feature is unavailable.
     fn render_git_status(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let info = self.info.as_ref()?;
         let theme = cx.theme();
@@ -897,7 +897,7 @@ impl SettingsPage {
                     )),
             )
             .child(Button::new("settings-open-keybindings").outline().small().icon(Icon::new(Lucide::Keyboard)).label("Open keybindings.json").tooltip(path).on_click(|_, window, cx| {
-                // Command yang tidak terdaftar menghasilkan galat yang terlihat, bukan diam.
+                // An unregistered command produces a visible error rather than silence.
                 if commands::get("keybindings.openJson", window, cx).is_some() {
                     commands::execute("keybindings.openJson", Value::Null, window, cx);
                 } else {
@@ -908,8 +908,8 @@ impl SettingsPage {
             .into_any_element()
     }
 
-    /// Daftar akun dan login: tampilan dari fitur forge bila terdaftar, selain itu tombol yang
-    /// menjalankan command masuknya (bila ada).
+    /// Account list and sign-in: the view from the forge feature if registered, otherwise a button that
+    /// runs its sign-in command (if any).
     fn render_accounts(&self, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
         let (muted, border) = (cx.theme().muted_foreground, cx.theme().border);
         if let Some(view) = &self.accounts {
@@ -987,7 +987,7 @@ impl SettingsPage {
 
 impl Render for SettingsPage {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        // `render` berjalan di luar pinjaman `Workbench`, jadi pengaturan efektif boleh dibaca di sini.
+        // `render` runs outside the `Workbench` borrow, so the effective settings can be read here.
         let effective = self.env.workbench.upgrade().map(|workbench| workbench.read(cx).settings().clone());
         let saved = self.saved.clone();
         let context = OverrideContext { trusted: self.env.trusted, user: &saved, effective: effective.as_ref() };

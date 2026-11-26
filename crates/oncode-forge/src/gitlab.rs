@@ -1,4 +1,4 @@
-//! Penyedia GitLab: gitlab.com dan instance self-hosted.
+//! GitLab provider: gitlab.com and self-hosted instances.
 
 use serde::{Deserialize, Serialize};
 use tokio::sync::OnceCell;
@@ -13,14 +13,14 @@ use crate::model::{
 };
 use crate::provider::ForgeProvider;
 
-/// Batas halaman job (masing-masing 100 butir) yang diambil untuk satu pipeline.
+/// Limit on job pages (100 items each) fetched for a single pipeline.
 const MAX_JOB_PAGES: u32 = 10;
 
 #[derive(Debug)]
 pub(crate) struct GitLabProvider {
     api: Api,
     host: ForgeHost,
-    /// Username akun ini, diambil sekali saat pertama dibutuhkan.
+    /// This account's username, fetched once when first needed.
     username: OnceCell<String>,
 }
 
@@ -44,7 +44,7 @@ impl GitLabProvider {
         Ok(name.as_str())
     }
 
-    /// Avatar di instance self-hosted bisa berupa path relatif.
+    /// Avatars on self-hosted instances can be relative paths.
     fn absolute_url(&self, url: Option<String>) -> Option<String> {
         let url = non_empty(url)?;
         if url.starts_with('/') && !url.starts_with("//") {
@@ -58,7 +58,7 @@ impl GitLabProvider {
         let state = match mr.state.as_str() {
             "merged" => PrState::Merged,
             "closed" => PrState::Closed,
-            // `opened`, dan `locked` (sedang dalam proses merge).
+            // `opened`, and `locked` (a merge is in progress).
             _ => PrState::Open,
         };
         let is_cross_repo = match (mr.source_project_id, mr.target_project_id) {
@@ -137,8 +137,8 @@ impl ForgeProvider for GitLabProvider {
         match filter {
             PrFilter::Open | PrFilter::All => {}
             PrFilter::Mine => params.push(("scope", "created_by_me".to_string())),
-            // `reviewer_username` tersedia sejak GitLab 13.8, lebih lama daripada
-            // `scope=reviews_for_me`, sehingga aman untuk instance self-hosted lama.
+            // `reviewer_username` has been available since GitLab 13.8, older than
+            // `scope=reviews_for_me`, so it is safe for old self-hosted instances.
             PrFilter::ReviewRequested => params.push(("reviewer_username", self.username().await?.to_string())),
         }
         let (mrs, headers) = self.api.get::<Vec<GlMergeRequest>>(&path, &params).await?;
@@ -147,7 +147,7 @@ impl ForgeProvider for GitLabProvider {
 
     async fn get_pull_request(&self, repo: &RepoRef, number: u32) -> Result<PullRequestDetail> {
         let path = format!("{}/merge_requests/{number}", project_path(repo)?);
-        // Jumlah commit tidak ada di jawaban MR, jadi diambil dari daftar commit-nya.
+        // The commit count is not in the MR response, so it is taken from its commit list.
         let ((mr, _), commits) =
             tokio::try_join!(self.api.get::<GlMergeRequest>(&path, &[]), self.commit_count(&path))?;
 
@@ -157,11 +157,11 @@ impl ForgeProvider for GitLabProvider {
             match mr.merge_status.as_deref() {
                 Some("can_be_merged") => Some(true),
                 Some("cannot_be_merged") => Some(false),
-                // `unchecked`, `checking`, `cannot_be_merged_recheck`: masih dihitung.
+                // `unchecked`, `checking`, `cannot_be_merged_recheck`: still being computed.
                 _ => None,
             }
         };
-        // `changes_count` berupa string, dan dibatasi sampai "1000+".
+        // `changes_count` is a string, capped at "1000+".
         let changed_files = mr
             .changes_count
             .as_deref()
@@ -173,7 +173,7 @@ impl ForgeProvider for GitLabProvider {
             .iter()
             .filter_map(|label| match label {
                 serde_json::Value::String(name) => Some(name.clone()),
-                // Bentuk objek muncul bila `with_labels_details` aktif.
+                // The object form appears when `with_labels_details` is enabled.
                 serde_json::Value::Object(map) => map.get("name").and_then(|n| n.as_str()).map(str::to_string),
                 _ => None,
             })
@@ -186,7 +186,7 @@ impl ForgeProvider for GitLabProvider {
             mergeable,
             commits,
             changed_files,
-            // GitLab tidak menyediakan jumlah baris yang ditambah/dihapus lewat REST.
+            // GitLab does not provide the number of added/deleted lines via REST.
             additions: 0,
             deletions: 0,
             pull_request: self.pull_request(mr),
@@ -226,7 +226,7 @@ impl ForgeProvider for GitLabProvider {
         }
 
         if jobs.is_empty() {
-            // Pipeline tanpa job yang terlihat (misalnya hanya memicu pipeline lain).
+            // A pipeline with no visible jobs (for example one that only triggers another pipeline).
             return Ok(vec![Check {
                 name: format!("Pipeline #{}", pipeline.id),
                 state: job_state(&pipeline.status, false),
@@ -234,7 +234,7 @@ impl ForgeProvider for GitLabProvider {
             }]);
         }
 
-        // API mengurutkan dari job terbaru; dibalik agar mengikuti urutan pipeline.
+        // The API sorts from the newest job; reversed to follow the pipeline order.
         jobs.sort_by_key(|job| job.id);
         Ok(jobs
             .into_iter()
@@ -267,7 +267,7 @@ impl ForgeProvider for GitLabProvider {
     }
 }
 
-/// `/projects/{id}` dengan jalur proyek di-encode (`grup%2Fproyek`).
+/// `/projects/{id}` with the project path encoded (`group%2Fproject`).
 fn project_path(repo: &RepoRef) -> Result<String> {
     if repo.owner.trim().is_empty() || repo.name.trim().is_empty() {
         return Err(ForgeError::invalid("Repository owner and name must not be empty"));
@@ -275,8 +275,8 @@ fn project_path(repo: &RepoRef) -> Result<String> {
     Ok(format!("/projects/{}", encode_segment(&repo.full_name())))
 }
 
-/// GitLab tidak punya parameter draft saat membuat MR; status draft ditentukan oleh
-/// awalan judul.
+/// GitLab has no draft parameter when creating an MR; the draft status is determined by
+/// the title prefix.
 fn merge_request_title(title: &str, draft: bool) -> String {
     let title = title.trim();
     if !draft || has_draft_prefix(title) {
@@ -290,20 +290,20 @@ fn has_draft_prefix(title: &str) -> bool {
     ["draft:", "[draft]", "(draft)"].iter().any(|prefix| lower.starts_with(prefix))
 }
 
-/// Memetakan status job atau pipeline ke [`CheckState`].
+/// Maps a job or pipeline status to a [`CheckState`].
 fn job_state(status: &str, allow_failure: bool) -> CheckState {
     match status {
         "success" => CheckState::Success,
-        // Job yang boleh gagal tampil sebagai peringatan, bukan kegagalan.
+        // A job that is allowed to fail shows up as a warning, not a failure.
         "failed" if allow_failure => CheckState::Neutral,
         "failed" => CheckState::Failure,
         "running" | "canceling" => CheckState::Running,
         "canceled" | "cancelled" => CheckState::Cancelled,
         "skipped" => CheckState::Skipped,
-        // Menunggu dijalankan secara manual.
+        // Waiting to be run manually.
         "manual" => CheckState::Neutral,
-        // `created`, `pending`, `waiting_for_resource`, `preparing`, `scheduled`, dan
-        // status baru yang belum dikenal.
+        // `created`, `pending`, `waiting_for_resource`, `preparing`, `scheduled`, and
+        // new statuses not yet recognized.
         _ => CheckState::Pending,
     }
 }
@@ -354,7 +354,7 @@ impl From<GlProject> for RemoteRepo {
             updated_at: timestamp_or_zero(updated),
             full_name: project.path_with_namespace,
             description: project.description.unwrap_or_default(),
-            // `internal` terlihat oleh semua pengguna yang login, tetapi bukan publik.
+            // `internal` is visible to all logged-in users, but is not public.
             private: project.visibility.as_deref().is_some_and(|v| v != "public"),
             fork: project.forked_from_project.is_some(),
             clone_url_https: project.http_url_to_repo.unwrap_or_default(),
@@ -435,22 +435,22 @@ mod tests {
 
     #[test]
     fn project_path_is_url_encoded() {
-        let repo = RepoRef { host: "gitlab.com".into(), owner: "grup/subgrup".into(), name: "proyek".into() };
-        assert_eq!(project_path(&repo).expect("path"), "/projects/grup%2Fsubgrup%2Fproyek");
-        let empty = RepoRef { host: "gitlab.com".into(), owner: String::new(), name: "proyek".into() };
+        let repo = RepoRef { host: "gitlab.com".into(), owner: "group/subgroup".into(), name: "project".into() };
+        assert_eq!(project_path(&repo).expect("path"), "/projects/group%2Fsubgroup%2Fproject");
+        let empty = RepoRef { host: "gitlab.com".into(), owner: String::new(), name: "project".into() };
         assert!(project_path(&empty).is_err());
     }
 
     #[test]
     fn draft_title_prefix() {
-        assert_eq!(merge_request_title("Tambah fitur", true), "Draft: Tambah fitur");
-        assert_eq!(merge_request_title("Tambah fitur", false), "Tambah fitur");
-        assert_eq!(merge_request_title("Draft: Tambah fitur", true), "Draft: Tambah fitur");
-        assert_eq!(merge_request_title("draft: tambah fitur", true), "draft: tambah fitur");
-        assert_eq!(merge_request_title("[Draft] Tambah fitur", true), "[Draft] Tambah fitur");
-        assert_eq!(merge_request_title("(draft) Tambah fitur", true), "(draft) Tambah fitur");
-        // "Drafting" bukan awalan draft.
-        assert_eq!(merge_request_title("Drafting ulang", true), "Draft: Drafting ulang");
+        assert_eq!(merge_request_title("Add feature", true), "Draft: Add feature");
+        assert_eq!(merge_request_title("Add feature", false), "Add feature");
+        assert_eq!(merge_request_title("Draft: Add feature", true), "Draft: Add feature");
+        assert_eq!(merge_request_title("draft: add feature", true), "draft: add feature");
+        assert_eq!(merge_request_title("[Draft] Add feature", true), "[Draft] Add feature");
+        assert_eq!(merge_request_title("(draft) Add feature", true), "(draft) Add feature");
+        // "Drafting" is not a draft prefix.
+        assert_eq!(merge_request_title("Drafting again", true), "Draft: Drafting again");
     }
 
     #[test]

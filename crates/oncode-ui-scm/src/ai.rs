@@ -1,17 +1,17 @@
-//! "Generate Commit Message" dengan AI: pengelolaan API key (Anthropic dan endpoint kustom). Alur
-//! pembuatan pesannya ada di [`ScmPanel::generate_message`](crate::view::ScmPanel::generate_message).
+//! "Generate Commit Message" with AI: API key management (Anthropic and a custom endpoint). The
+//! message generation flow is in [`ScmPanel::generate_message`](crate::view::ScmPanel::generate_message).
 
 use gpui_kit::{App, AsyncWindowContext, Window};
 use oncode_core::{api, AppResult, Shared};
 use oncode_ui::overlay::{self, Confirm, TextPrompt};
 use oncode_ui::{core, spawn_core};
 
-/// Key mana yang diatur.
+/// Which key is being managed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum KeyKind {
-    /// API key Anthropic (provider Anthropic API / Otomatis).
+    /// Anthropic API key (Anthropic API / Automatic provider).
     Anthropic,
-    /// API key endpoint kustom (provider Custom endpoint).
+    /// Custom endpoint API key (Custom endpoint provider).
     Custom,
 }
 
@@ -23,7 +23,7 @@ impl KeyKind {
         }
     }
 
-    /// Nama di tengah kalimat.
+    /// The name in the middle of a sentence.
     fn noun(self) -> &'static str {
         match self {
             KeyKind::Anthropic => "Anthropic API key",
@@ -67,8 +67,8 @@ async fn remove(core: Shared, kind: KeyKind) -> AppResult<()> {
     }
 }
 
-/// Meminta API key lalu menyimpannya. `reason` ditampilkan di atas petunjuk (mis. key lama
-/// ditolak). `true` bila key tersimpan.
+/// Asks for an API key and saves it. `reason` is shown above the help text (e.g. the old key
+/// was rejected). `true` if the key was saved.
 pub(crate) async fn ask_api_key(core: Shared, kind: KeyKind, reason: Option<String>, cx: &mut AsyncWindowContext) -> bool {
     let message = match reason {
         Some(reason) => format!("{reason}\n\n{}", kind.help()),

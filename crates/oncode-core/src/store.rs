@@ -1,5 +1,5 @@
-//! Data aplikasi yang bertahan antarsesi: proyek terakhir, folder yang dipercaya,
-//! akun (tanpa token), dan sesi per proyek. Disimpan sebagai `state.json`.
+//! Application data that persists across sessions: recent projects, trusted folders,
+//! accounts (without tokens), and per-project sessions. Stored as `state.json`.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -16,15 +16,15 @@ struct Persisted {
     recent: Vec<String>,
     trusted: Vec<String>,
     accounts: Vec<Account>,
-    /// Sesi per akar proyek, sebagai JSON buram milik frontend.
+    /// Sessions per project root, as opaque JSON owned by the frontend.
     sessions: BTreeMap<String, String>,
 }
 
 pub struct Store {
     path: PathBuf,
     data: Mutex<Persisted>,
-    /// Akun yang tokennya hanya ada di memori (keychain tidak tersedia); tidak ditulis ke disk
-    /// agar tidak muncul sebagai akun tanpa token setelah aplikasi dibuka ulang.
+    /// Accounts whose token exists only in memory (keychain unavailable); not written to disk
+    /// so they do not show up as token-less accounts after the app is reopened.
     session_accounts: Mutex<Vec<Account>>,
 }
 
@@ -65,7 +65,7 @@ impl Store {
         self.update(|d| d.recent.retain(|r| r != root));
     }
 
-    /// Folder dipercaya bila ia sendiri atau salah satu induknya ada di daftar.
+    /// A folder is trusted if it or one of its parents is in the list.
     pub fn is_trusted(&self, path: &Path) -> bool {
         self.data.lock().unwrap().trusted.iter().any(|t| path.starts_with(t))
     }
@@ -85,7 +85,7 @@ impl Store {
         accounts
     }
 
-    /// Mencatat akun yang login. `persist: false` untuk akun yang tokennya hanya bertahan selama sesi ini.
+    /// Records a logged-in account. `persist: false` for accounts whose token only lasts for this session.
     pub fn upsert_account(&self, account: Account, persist: bool) {
         self.session_accounts.lock().unwrap().retain(|a| a.id != account.id);
         if persist {
@@ -135,13 +135,13 @@ mod tests {
     fn trust_covers_subfolders_only() {
         let dir = tempfile::tempdir().unwrap();
         let store = Store::load(dir.path().join("state.json"));
-        store.set_trusted("/proyek/app", true);
-        assert!(store.is_trusted(Path::new("/proyek/app")));
-        assert!(store.is_trusted(Path::new("/proyek/app/vendor/lib")));
-        assert!(!store.is_trusted(Path::new("/proyek/app-lain")));
-        assert!(!store.is_trusted(Path::new("/proyek")));
-        store.set_trusted("/proyek/app", false);
-        assert!(!store.is_trusted(Path::new("/proyek/app")));
+        store.set_trusted("/project/app", true);
+        assert!(store.is_trusted(Path::new("/project/app")));
+        assert!(store.is_trusted(Path::new("/project/app/vendor/lib")));
+        assert!(!store.is_trusted(Path::new("/project/app-other")));
+        assert!(!store.is_trusted(Path::new("/project")));
+        store.set_trusted("/project/app", false);
+        assert!(!store.is_trusted(Path::new("/project/app")));
     }
 
     #[test]
@@ -158,17 +158,17 @@ mod tests {
             avatar_url: None,
         };
         let store = Store::load(path.clone());
-        store.upsert_account(account("tetap"), true);
-        store.upsert_account(account("sesi"), false);
-        assert_eq!(store.accounts().iter().map(|a| a.username.as_str()).collect::<Vec<_>>(), vec!["tetap", "sesi"]);
-        // Setelah aplikasi dibuka ulang hanya akun yang tokennya tersimpan di keychain yang tersisa.
-        assert_eq!(Store::load(path.clone()).accounts().iter().map(|a| a.username.as_str()).collect::<Vec<_>>(), vec!["tetap"]);
+        store.upsert_account(account("persistent"), true);
+        store.upsert_account(account("session"), false);
+        assert_eq!(store.accounts().iter().map(|a| a.username.as_str()).collect::<Vec<_>>(), vec!["persistent", "session"]);
+        // After the app is reopened only the accounts whose token is stored in the keychain remain.
+        assert_eq!(Store::load(path.clone()).accounts().iter().map(|a| a.username.as_str()).collect::<Vec<_>>(), vec!["persistent"]);
 
-        // Akun yang semula tersimpan lalu login ulang tanpa keychain berpindah menjadi akun sesi.
-        store.upsert_account(account("tetap"), false);
+        // An account that was originally persisted and then logs in again without a keychain becomes a session account.
+        store.upsert_account(account("persistent"), false);
         assert!(Store::load(path.clone()).accounts().is_empty());
         assert_eq!(store.accounts().len(), 2);
-        store.remove_account("github:github.com:sesi");
+        store.remove_account("github:github.com:session");
         assert_eq!(store.accounts().len(), 1);
     }
 

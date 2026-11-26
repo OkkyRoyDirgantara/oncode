@@ -1,15 +1,15 @@
-//! Galat tunggal yang dikembalikan ke UI oleh semua fungsi API.
+//! The single error returned to the UI by all API functions.
 
 use serde::Serialize;
 
-/// `code` dipakai UI untuk memilih pesan dan aksi lanjutan (mis. `pushRejected`, `stale`, `untrusted`).
+/// `code` is used by the UI to pick a message and follow-up actions (e.g. `pushRejected`, `stale`, `untrusted`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, thiserror::Error)]
 #[serde(rename_all = "camelCase")]
 #[error("{message}")]
 pub struct AppError {
     pub code: String,
     pub message: String,
-    /// Mis. stderr git apa adanya.
+    /// E.g. git's stderr as is.
     pub detail: Option<String>,
 }
 
@@ -29,7 +29,7 @@ impl AppError {
     }
 }
 
-/// Nama varian enum kode galat dalam camelCase (mis. `pushRejected`), sama seperti bentuk serde-nya.
+/// Name of an error code enum variant in camelCase (e.g. `pushRejected`), same as its serde form.
 fn code_name<T: Serialize>(code: &T) -> String {
     serde_json::to_value(code).ok().and_then(|v| v.as_str().map(String::from)).unwrap_or_else(|| "unknown".into())
 }
@@ -82,12 +82,12 @@ mod tests {
 
     #[test]
     fn backend_error_codes_keep_their_camel_case_names() {
-        let git = oncode_git::GitError { code: oncode_git::GitErrorCode::NotARepo, message: "bukan repo".into(), detail: Some("fatal".into()) };
+        let git = oncode_git::GitError { code: oncode_git::GitErrorCode::NotARepo, message: "not a repo".into(), detail: Some("fatal".into()) };
         let app = AppError::from(git);
         assert_eq!((app.code.as_str(), app.detail.as_deref()), ("notARepo", Some("fatal")));
         assert_eq!(AppError::untrusted().code, "untrusted");
         assert_eq!(AppError::invalid("x").code, "invalidInput");
-        assert_eq!(AppError::from(std::io::Error::other("rusak")).code, "io");
-        assert_eq!(AppError::new("io", "pesan").to_string(), "pesan");
+        assert_eq!(AppError::from(std::io::Error::other("broken")).code, "io");
+        assert_eq!(AppError::new("io", "message").to_string(), "message");
     }
 }

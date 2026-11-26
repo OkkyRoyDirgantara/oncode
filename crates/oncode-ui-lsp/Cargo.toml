@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
-description = "Klien LSP untuk editor dan panel Problems untuk OnCode"
+description = "LSP client for the editor and Problems panel for OnCode"
 
 [dependencies]
 oncode-core = { path = "../oncode-core" }

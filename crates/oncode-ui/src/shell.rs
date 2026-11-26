@@ -1,6 +1,6 @@
-//! Isi sebuah jendela: memegang `Workbench` yang sedang aktif dan menggantinya saat folder
-//! dibuka, ditutup, atau status kepercayaannya berubah. Juga menjembatani event `oncode-core`
-//! (pengaturan, pemberitahuan, permintaan kredensial git, perubahan berkas) ke jendela ini.
+//! The content of a window: holds the active `Workbench` and replaces it when a folder
+//! is opened, closed, or its trust status changes. Also bridges `oncode-core` events
+//! (settings, notices, git credential requests, file changes) to this window.
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -24,11 +24,11 @@ use crate::quick_pick::{quick_pick, PickItem, QuickPickOptions};
 use crate::workbench::{Workbench, WorkbenchEvent};
 use crate::{core_bus, keys, spawn_core};
 
-/// Sesi per proyek: tab berkas yang terbuka dipulihkan saat folder dibuka lagi.
-/// Format sama dengan versi 0.2.
+/// The per-project session: open file tabs are restored when the folder is opened again.
+/// Same format as version 0.2.
 #[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SessionData {
-    /// Path absolut berkas yang terbuka, sesuai urutan tab.
+    /// Absolute paths of the open files, in tab order.
     #[serde(default)]
     pub files: Vec<String>,
     #[serde(default)]
@@ -45,12 +45,12 @@ impl SessionData {
         data
     }
 
-    /// Tab berkas tetap (bukan pratinjau) dari semua grup.
+    /// Permanent (non-preview) file tabs from all groups.
     pub fn collect(model: &crate::model::Model) -> Self {
         let mut files: Vec<String> = Vec::new();
         for tab in model.all_tabs() {
             if tab.kind == "file" && !tab.preview {
-                // Berkas baru yang belum disimpan tidak bisa dibuka lagi dari disk.
+                // A new file that has not been saved cannot be reopened from disk.
                 if let Some(path) = tab.param_str("path").filter(|path| !crate::editor::is_untitled(path)) {
                     if !files.iter().any(|f| f == path) {
                         files.push(path.to_string());
@@ -63,7 +63,7 @@ impl SessionData {
     }
 }
 
-/// Tab berkas untuk sebuah path absolut, atau berkas baru (`untitled:Untitled-1`).
+/// A file tab for an absolute path, or a new file (`untitled:Untitled-1`).
 pub fn file_tab(path: &str) -> TabData {
     let path = &crate::editor::file_path(path);
     if let Some(name) = path.strip_prefix(crate::editor::UNTITLED_PREFIX) {
@@ -78,7 +78,7 @@ pub struct Shell {
     label: SharedString,
     workbench: Entity<Workbench>,
     workspace: Option<WorkspaceInfo>,
-    /// Sesi tidak disimpan selama folder berganti atau sedang dipulihkan.
+    /// The session is not saved while the folder is switching or being restored.
     session_frozen: bool,
     last_session: String,
     prompts: Vec<PromptRequest>,
@@ -107,7 +107,7 @@ impl Shell {
         let bus = core_bus(cx);
         let subscriptions = vec![
             cx.subscribe_in(&bus, window, Self::on_core_event),
-            // Menu bar macOS mengikuti jendela yang aktif; digambar ulang agar `app_menu::sync` berjalan.
+            // The macOS menu bar follows the active window; redraw so `app_menu::sync` runs.
             cx.observe_window_activation(window, |_, _, cx| cx.notify()),
         ];
         window.on_window_should_close(cx, {
@@ -177,7 +177,7 @@ impl Shell {
         window.set_window_title(&title);
     }
 
-    /// Memasang `Workbench` baru untuk keadaan workspace ini, lalu memulihkan sesi.
+    /// Installs a new `Workbench` for this workspace state, then restores the session.
     fn install(&mut self, workspace: Option<WorkspaceInfo>, window: &mut Window, cx: &mut Context<Self>) {
         self.session_frozen = true;
         let settings = workspace.as_ref().map(|w| w.settings.clone()).unwrap_or_else(|| self.core.user_settings());
@@ -190,7 +190,7 @@ impl Shell {
         cx.notify();
     }
 
-    // ----- Folder -----
+    // ----- Folders -----
 
     pub fn pick_and_open_folder(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let paths = cx.prompt_for_paths(PathPromptOptions { files: false, directories: true, multiple: false, prompt: Some("Open Folder".into()) });
@@ -202,7 +202,7 @@ impl Shell {
         .detach();
     }
 
-    /// Menutup semua tab (dengan konfirmasi untuk yang belum disimpan), lalu membuka folder.
+    /// Closes all tabs (with confirmation for unsaved ones), then opens the folder.
     pub fn open_folder(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
         self.save_session_now(cx);
         self.session_frozen = true;
@@ -246,7 +246,7 @@ impl Shell {
         .detach();
     }
 
-    /// Mengubah status kepercayaan folder. Tab yang terbuka dipertahankan lewat sesi.
+    /// Changes the folder's trust status. Open tabs are preserved through the session.
     pub fn set_trusted(&mut self, trusted: bool, window: &mut Window, cx: &mut Context<Self>) {
         if self.workspace.is_none() {
             return;
@@ -281,8 +281,8 @@ impl Shell {
         false
     }
 
-    /// Menyimpan sesi. `None` bila jendela boleh langsung ditutup; selain itu semua tab ditutup
-    /// dengan pertanyaan untuk tab yang belum disimpan, dan hasilnya `true` bila pengguna tidak membatalkan.
+    /// Saves the session. `None` if the window may be closed right away; otherwise all tabs are closed
+    /// with a question for unsaved tabs, and the result is `true` if the user did not cancel.
     fn confirm_close(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Option<Task<bool>> {
         self.save_session_now(cx);
         if !self.workbench.read(cx).has_dirty_tabs(cx) {
@@ -296,7 +296,7 @@ impl Shell {
         spawn_core(cx, async move { app::workspace_close(&core, &label).await }).detach();
     }
 
-    // ----- Sesi -----
+    // ----- Session -----
 
     fn schedule_session_save(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.session_frozen || self.workspace.is_none() {
@@ -331,7 +331,7 @@ impl Shell {
         let expected = root.clone();
         let task = spawn_core(cx, async move {
             let session = SessionData::parse(app::session_get(&core, root).await.ok().flatten().as_deref());
-            // Berkas yang sudah tidak ada dilewati.
+            // Files that no longer exist are skipped.
             let files: Vec<String> = session.files.iter().filter(|f| std::path::Path::new(f).is_file()).cloned().collect();
             SessionData { active: session.active.filter(|a| files.contains(a)), files }
         });
@@ -356,7 +356,7 @@ impl Shell {
         .detach();
     }
 
-    // ----- Event dari core -----
+    // ----- Events from the core -----
 
     fn on_core_event(&mut self, _: &Entity<crate::CoreBus>, event: &CoreEvent, window: &mut Window, cx: &mut Context<Self>) {
         match event {
@@ -391,7 +391,7 @@ impl Shell {
         }
     }
 
-    /// Menampilkan permintaan git berikutnya (kredensial, konfirmasi host, pesan commit) satu per satu.
+    /// Shows the next git request (credentials, host confirmation, commit message), one at a time.
     fn next_prompt(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.prompt_open || self.prompts.is_empty() {
             return;
@@ -421,9 +421,9 @@ impl Shell {
         .detach();
     }
 
-    // ----- Pintasan keyboard -----
+    // ----- Keyboard shortcuts -----
 
-    /// Membaca `keybindings.json` dan menerapkannya ke semua jendela.
+    /// Reads `keybindings.json` and applies it to all windows.
     pub fn load_keybindings(&mut self, notify: bool, window: &mut Window, cx: &mut Context<Self>) {
         let core = self.core.clone();
         let task = spawn_core(cx, async move { app::keybindings_get(&core).await.unwrap_or_else(|_| "{}".into()) });
@@ -449,9 +449,9 @@ impl Render for Shell {
             Some(workspace) => workspace.name.clone().into(),
             None => "OnCode".into(),
         };
-        // Bilah judul digambar sendiri: di Wayland (GNOME) tidak ada dekorasi dari server, dan
-        // tampilannya jadi seragam di tiga OS. Tombol tutup melewati pemeriksaan tab belum disimpan.
-        // Menu File, Edit, dst. ada di bilah judul, kecuali di macOS: di sana menu bar sistem.
+        // The title bar is drawn by us: on Wayland (GNOME) there are no server-side decorations, and
+        // it looks the same on all three OSes. The close button goes through the unsaved tabs check.
+        // The File, Edit, etc. menus are in the title bar, except on macOS: there it is the system menu bar.
         let menu_in_title_bar = !cfg!(target_os = "macos");
         if !menu_in_title_bar {
             crate::app_menu::sync(window, cx);
@@ -478,8 +478,8 @@ impl Render for Shell {
     }
 }
 
-/// Menutup semua jendela seperti tombol tutup (bertanya bila ada tab belum disimpan), lalu keluar.
-/// Dibatalkan, dengan jendela tersisa tetap terbuka, bila pengguna membatalkan salah satu pertanyaan.
+/// Closes all windows like the close button (asking if there are unsaved tabs), then quits.
+/// Canceled, with the remaining windows left open, if the user cancels one of the questions.
 pub(crate) fn quit(cx: &mut App) {
     let windows = cx.windows();
     cx.spawn(async move |cx| {
@@ -510,7 +510,7 @@ fn apply_theme(settings: &Settings, window: &mut Window, cx: &mut App) {
     }
 }
 
-/// Dialog pesan multi-baris (pesan commit saat rebase, merge, dan sejenisnya). `None` membatalkan operasi git.
+/// A multi-line message dialog (the commit message during rebase, merge, and the like). `None` cancels the git operation.
 fn prompt_message(initial: String, window: &mut Window, cx: &mut App) -> Task<Option<String>> {
     let (tx, rx) = tokio::sync::oneshot::channel::<Option<String>>();
     let tx = std::rc::Rc::new(std::cell::Cell::new(Some(tx)));
@@ -543,7 +543,7 @@ fn prompt_message(initial: String, window: &mut Window, cx: &mut App) -> Task<Op
     cx.spawn(async move |_| rx.await.ok().flatten())
 }
 
-/// Command milik jendela: palet, quick open, folder, jendela baru, pintasan keyboard.
+/// The window's own commands: palette, quick open, folders, new window, keyboard shortcuts.
 fn register_shell_commands(workbench: &mut Workbench, cx: &mut Context<Workbench>) {
     let has_workspace = workbench.env().root.is_some();
     let core = workbench.env().core.clone();
@@ -628,7 +628,7 @@ fn register_shell_commands(workbench: &mut Workbench, cx: &mut Context<Workbench
     }
 }
 
-/// Perintah `oncode .` di terminal (lihat `oncode-helper/src/shell_command.rs`).
+/// The `oncode .` command in the terminal (see `oncode-helper/src/shell_command.rs`).
 fn set_shell_command(install: bool, window: &mut Window, cx: &mut App) {
     let task = spawn_core(cx, app::shell_command_set(install));
     window
@@ -642,8 +642,8 @@ fn set_shell_command(install: bool, window: &mut Window, cx: &mut App) {
         .detach();
 }
 
-/// Jendela yang sedang membuka `folder`. Path dibandingkan setelah dinormalkan, karena `oncode .`
-/// bisa memberi path dengan huruf besar-kecil atau tautan yang berbeda dari yang tersimpan.
+/// The window that currently has `folder` open. Paths are compared after normalization, because `oncode .`
+/// may give a path with different casing or links than the stored one.
 pub(crate) fn window_with_folder(folder: &std::path::Path, cx: &App) -> Option<gpui_kit::AnyWindowHandle> {
     let wanted = std::fs::canonicalize(folder).ok()?;
     let shells = cx.try_global::<Shells>()?;

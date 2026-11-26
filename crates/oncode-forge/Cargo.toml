@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
-description = "Integrasi GitHub dan GitLab untuk OnCode: klien REST, login device flow, penyimpanan token di keychain OS"
+description = "GitHub and GitLab integration for OnCode: REST client, device flow login, token storage in the OS keychain"
 
 [dependencies]
 serde.workspace = true
@@ -13,11 +13,11 @@ thiserror.workspace = true
 tokio.workspace = true
 async-trait = "0.1"
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
-# TLS lewat rustls (tanpa OpenSSL / native-tls). Di reqwest 0.13 `form` dan `query`
-# adalah fitur terpisah; `system-proxy` agar proxy sistem tetap dihormati.
+# TLS via rustls (no OpenSSL / native-tls). In reqwest 0.13 `form` and `query`
+# are separate features; `system-proxy` keeps the system proxy honored.
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "http2", "json", "form", "query", "system-proxy"] }
-# Fitur `v1` memilih penyimpanan bawaan tiap OS: Keychain (macOS), Credential Manager
-# (Windows), dan Secret Service lewat zbus yang murni Rust (Linux/*nix, tanpa libdbus).
+# The `v1` feature selects each OS's native store: Keychain (macOS), Credential Manager
+# (Windows), and Secret Service via the pure-Rust zbus (Linux/*nix, no libdbus).
 keyring = { version = "4", default-features = false, features = ["v1"] }
 
 [dev-dependencies]

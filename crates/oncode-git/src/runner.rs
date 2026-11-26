@@ -1,4 +1,4 @@
-//! Menjalankan `git` sebagai proses anak dengan lingkungan yang terkendali.
+//! Runs `git` as a child process in a controlled environment.
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -14,13 +14,13 @@ use crate::error::{GitError, GitErrorCode, Result};
 use crate::helper::{HelperServer, OpContext};
 use crate::model::{GitInfo, GitLogEntry, Progress};
 
-/// Versi Git minimum yang didukung.
+/// The minimum supported Git version.
 pub const MIN_GIT_VERSION: (u32, u32) = (2, 40);
 
 pub type ProgressFn = Arc<dyn Fn(Progress) + Send + Sync>;
 pub type LogFn = Arc<dyn Fn(GitLogEntry) + Send + Sync>;
 
-/// Instalasi git yang dipakai aplikasi.
+/// The git installation used by the app.
 pub struct Git {
     path: PathBuf,
     version: (u32, u32, u32),
@@ -46,7 +46,7 @@ impl Output {
     }
 }
 
-/// Satu perintah git yang akan dijalankan.
+/// A single git command to run.
 pub struct Cmd {
     pub(crate) args: Vec<OsString>,
     pub(crate) stdin: Option<Vec<u8>>,
@@ -102,7 +102,7 @@ impl Cmd {
         }
     }
 
-    /// Menambahkan `-- <path...>`.
+    /// Appends `-- <path...>`.
     pub fn paths<I, S>(mut self, paths: I) -> Self
     where
         I: IntoIterator<Item = S>,
@@ -118,14 +118,14 @@ impl Cmd {
         self
     }
 
-    /// Menandai perintah sebagai operasi tulis: dicatat ke Git Output dan boleh mengunci index.
+    /// Marks the command as a write operation: it is recorded in Git Output and may lock the index.
     pub fn write(mut self) -> Self {
         self.write = true;
         self.log = true;
         self
     }
 
-    /// Kode keluar selain 0 yang dianggap berhasil.
+    /// Exit codes other than 0 that are treated as success.
     pub fn ok_codes(mut self, codes: &[i32]) -> Self {
         self.ok_codes = codes.to_vec();
         self
@@ -158,7 +158,7 @@ impl Cmd {
 }
 
 impl Git {
-    /// Mencari git (path eksplisit atau dari PATH) dan memeriksa versinya.
+    /// Locates git (an explicit path or from PATH) and checks its version.
     pub async fn discover(explicit: Option<PathBuf>) -> Result<Arc<Self>> {
         let path = explicit.unwrap_or_else(|| PathBuf::from(if cfg!(windows) { "git.exe" } else { "git" }));
         let mut command = Command::new(&path);
@@ -208,7 +208,7 @@ impl Git {
         *self.logger.write().unwrap() = Some(logger);
     }
 
-    /// Menjalankan perintah; kode keluar di luar `ok_codes` menjadi galat.
+    /// Runs a command; an exit code outside `ok_codes` becomes an error.
     pub async fn run(&self, cwd: &Path, cmd: Cmd) -> Result<Output> {
         let ok_codes = cmd.ok_codes.clone();
         let display: Vec<String> = cmd.args.iter().map(|a| a.to_string_lossy().into_owned()).collect();
@@ -220,7 +220,7 @@ impl Git {
         }
     }
 
-    /// Menjalankan perintah dan mengembalikan keluaran apa pun kode keluarnya.
+    /// Runs a command and returns the output whatever its exit code.
     pub async fn run_raw(&self, cwd: &Path, cmd: Cmd) -> Result<Output> {
         let started = Instant::now();
         let display: Vec<String> = cmd.args.iter().map(|a| a.to_string_lossy().into_owned()).collect();
@@ -264,7 +264,7 @@ impl Git {
                 token = Some(registered);
             }
             None => {
-                // Tanpa helper tidak ada yang bisa menjawab editor; terima isi bawaan.
+                // Without a helper nothing can answer the editor; accept the default content.
                 command.env("GIT_EDITOR", "true").env("GIT_SEQUENCE_EDITOR", "true");
             }
         }
@@ -314,8 +314,8 @@ impl Git {
             }
         }
 
-        let mut stdout = child.stdout.take().expect("stdout dipipa");
-        let mut stderr = child.stderr.take().expect("stderr dipipa");
+        let mut stdout = child.stdout.take().expect("stdout is piped");
+        let mut stderr = child.stderr.take().expect("stderr is piped");
         let out_task = tokio::spawn(async move {
             let mut buf = Vec::new();
             let _ = stdout.read_to_end(&mut buf).await;
@@ -380,7 +380,7 @@ fn hide_window(command: &mut Command) {
 #[cfg(not(windows))]
 fn hide_window(_command: &mut Command) {}
 
-/// Mengurai "git version 2.53.0" (termasuk akhiran seperti ".windows.1").
+/// Parses "git version 2.53.0" (including suffixes such as ".windows.1").
 pub fn parse_version(text: &str) -> Option<(u32, u32, u32)> {
     let rest = text.trim().strip_prefix("git version ")?;
     let mut parts = rest.split(|c: char| !c.is_ascii_digit()).filter(|p| !p.is_empty());
@@ -390,7 +390,7 @@ pub fn parse_version(text: &str) -> Option<(u32, u32, u32)> {
     Some((major, minor, patch))
 }
 
-/// Mengurai baris progres git, mis. `Receiving objects:  45% (450/1000), 1.2 MiB | 500 KiB/s`.
+/// Parses a git progress line, e.g. `Receiving objects:  45% (450/1000), 1.2 MiB | 500 KiB/s`.
 pub fn parse_progress(line: &str) -> Option<Progress> {
     let line = line.trim().trim_start_matches("remote: ").trim();
     let (phase, rest) = line.split_once(':')?;
@@ -402,7 +402,7 @@ pub fn parse_progress(line: &str) -> Option<Progress> {
     Some(Progress { phase: phase.to_string(), percent, text: line.to_string() })
 }
 
-/// Menyisakan baris terakhir dari tiap rangkaian pembaruan progres (`\r`).
+/// Keeps the last line of each run of progress updates (`\r`).
 fn clean_stderr(raw: &str) -> String {
     raw.split('\n')
         .map(|line| line.rsplit('\r').find(|part| !part.trim().is_empty()).unwrap_or("").trim_end())
@@ -425,7 +425,7 @@ fn shell_join(args: &[String]) -> String {
         .join(" ")
 }
 
-/// Menolak nama ref/revisi yang bisa terbaca sebagai opsi atau berisi karakter kontrol.
+/// Rejects ref/revision names that could be read as an option or contain control characters.
 pub fn check_ref(value: &str) -> Result<&str> {
     if value.is_empty() || value.starts_with('-') || value.chars().any(|c| c.is_control()) {
         return Err(GitError::invalid(format!("Invalid ref name: {value:?}")));
@@ -433,8 +433,8 @@ pub fn check_ref(value: &str) -> Result<&str> {
     Ok(value)
 }
 
-/// Menolak path yang keluar dari repositori: absolut, berakar (`/x` atau `\x`, yang di Windows
-/// tidak dihitung `is_absolute` karena tanpa drive), berawalan drive (`C:x`), atau memakai `..`.
+/// Rejects paths that escape the repository: absolute, rooted (`/x` or `\x`, which on Windows
+/// `is_absolute` does not count because they have no drive), drive-prefixed (`C:x`), or using `..`.
 pub fn check_path(value: &str) -> Result<&str> {
     use std::path::Component;
     let path = Path::new(value);
@@ -485,11 +485,11 @@ mod tests {
         assert!(check_path("../etc/passwd").is_err());
         assert!(check_path("/abs").is_err());
         assert!(check_path("src/a b.rs").is_ok());
-        assert!(check_path("src/../../luar").is_err());
+        assert!(check_path("src/../../outside").is_err());
         if cfg!(windows) {
             assert!(check_path(r"\Windows\System32").is_err());
-            assert!(check_path("C:luar.txt").is_err());
-            assert!(check_path(r"C:\luar.txt").is_err());
+            assert!(check_path("C:outside.txt").is_err());
+            assert!(check_path(r"C:\outside.txt").is_err());
             assert!(check_path(r"src\a.rs").is_ok());
         }
     }

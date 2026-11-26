@@ -1,5 +1,5 @@
-//! Klien LSP untuk editor, panel Problems, dan command LSP (go to definition, references, rename,
-//! format, restart).
+//! LSP client for the editor, the Problems panel, and the LSP commands (go to definition, references,
+//! rename, format, restart).
 
 pub mod diagnostics;
 pub mod edits;
@@ -33,18 +33,18 @@ use model::{build_groups, flatten_rows, relative_path, ProblemFilter, ProblemGro
 
 pub const PROBLEMS_PANEL: &str = "problems";
 
-/// Mendaftarkan fitur ini. Dipanggil sekali dari `app/src/main.rs` setelah `oncode_ui::init`.
+/// Registers this feature. Called once from `app/src/main.rs` after `oncode_ui::init`.
 pub fn init(cx: &mut App) {
     oncode_ui::editor::register_format_provider(oncode_ui::editor::LSP_PRIORITY, lsp_format_provider, cx);
     oncode_ui::register_feature(cx, setup);
 }
 
-/// Store diagnostics jendela ini.
+/// This window's diagnostics store.
 pub fn diagnostics(workbench: &Workbench) -> Option<Entity<Diagnostics>> {
     workbench.extension::<Entity<Diagnostics>>()
 }
 
-/// Pengelola language server jendela ini; `None` bila folder tidak dipercaya.
+/// This window's language server manager; `None` if the folder is not trusted.
 pub fn hub(workbench: &Workbench) -> Option<Entity<LspHub>> {
     workbench.extension::<Entity<LspHub>>()
 }
@@ -83,7 +83,7 @@ fn setup(workbench: &mut Workbench, window: &mut Window, cx: &mut Context<Workbe
         window,
         cx,
     );
-    // Language server hanya untuk folder yang dipercaya.
+    // Language servers only run for trusted folders.
     if !env.trusted {
         return;
     }
@@ -102,8 +102,8 @@ fn setup(workbench: &mut Workbench, window: &mut Window, cx: &mut Context<Workbe
         cx,
     );
 
-    // Tersedia bila berkas aktif punya server yang berjalan; pintasannya hanya saat editornya fokus
-    // (F2 juga dipakai explorer).
+    // Available when the active file has a running server; the shortcut only applies while the editor
+    // is focused (F2 is also used by the explorer).
     let has_server = {
         let hub = hub.clone();
         move |window: &Window, cx: &App| {
@@ -116,8 +116,8 @@ fn setup(workbench: &mut Workbench, window: &mut Window, cx: &mut Context<Workbe
         let Some(workbench) = Workbench::for_window(window, cx) else { return false };
         active_file(workbench.read(cx), cx).is_some_and(|(_, _, state)| state.focus_handle(cx).is_focused(window))
     };
-    // "Go to Definition" (F12) dan "Format Document" didaftarkan editor: keduanya juga berjalan
-    // tanpa server (pencarian proyek, ekstensi Formatters); server ini menjadi salah satu penyedianya.
+    // "Go to Definition" (F12) and "Format Document" are registered by the editor: both also work
+    // without a server (project search, the Formatters extension); this server is one of their providers.
     workbench.register_command(
         Command::new("editor.findReferences", "Find All References", find_references).category("Edit").key("Shift+F12").when(has_server.clone()).keys_when(editor_focused),
     );
@@ -135,7 +135,7 @@ fn setup(workbench: &mut Workbench, window: &mut Window, cx: &mut Context<Workbe
     );
 }
 
-/// Konteks permintaan untuk berkas aktif: hub, path, uri, klien, dan posisi kursor.
+/// Request context for the active file: hub, path, uri, client, and cursor position.
 struct Active {
     workbench: Entity<Workbench>,
     hub: Entity<LspHub>,
@@ -235,8 +235,8 @@ fn rename_symbol(_: &Value, window: &mut Window, cx: &mut App) {
         .detach();
 }
 
-/// Penyedia format language server: dipakai bila ekstensi Formatters tidak punya formatter untuk
-/// berkas ini. `None` bila server tidak berjalan atau tidak mendukung formatting.
+/// The language server's format provider: used when the Formatters extension has no formatter for
+/// this file. `None` if the server is not running or does not support formatting.
 fn lsp_format_provider(buffer: &Entity<Buffer>, state: &Entity<gpui_kit::component::input::EditorState>, window: &mut Window, cx: &mut App) -> Option<Task<FormatOutcome>> {
     let workbench = Workbench::for_window(window, cx)?;
     let hub = hub(workbench.read(cx))?;
@@ -265,7 +265,7 @@ fn lsp_format_provider(buffer: &Entity<Buffer>, state: &Entity<gpui_kit::compone
     }))
 }
 
-/// Kata di bawah kursor, untuk mengisi kotak rename.
+/// The word under the cursor, to prefill the rename box.
 trait WordAt {
     fn word_at_offset(&self, offset: usize) -> String;
 }
@@ -281,7 +281,7 @@ impl WordAt for gpui_kit::component::input::Rope {
     }
 }
 
-// ----- Panel Problems -----
+// ----- Problems panel -----
 
 pub struct ProblemsPanel {
     diagnostics: Entity<Diagnostics>,
@@ -398,7 +398,7 @@ impl Render for ProblemsPanel {
     }
 }
 
-/// Item status bar: jumlah galat dan peringatan; klik membuka panel Problems.
+/// Status bar item: the error and warning counts; clicking opens the Problems panel.
 struct ProblemsStatus {
     diagnostics: Entity<Diagnostics>,
     _subscription: Subscription,
@@ -435,7 +435,7 @@ impl Render for ProblemsStatus {
     }
 }
 
-/// Item status bar: status language server berkas aktif.
+/// Status bar item: the language server status of the active file.
 struct LspStatus {
     hub: Entity<LspHub>,
     workbench: gpui_kit::WeakEntity<Workbench>,
@@ -479,7 +479,7 @@ impl Render for LspStatus {
     }
 }
 
-/// Posisi kursor editor aktif dalam satuan server, untuk uji.
+/// The active editor's cursor position in the server's units, for tests.
 pub fn cursor_position(text: &str, offset: usize, encoding: oncode_lsp::PositionEncoding) -> lsp_types::Position {
     position_at(text, offset, encoding)
 }

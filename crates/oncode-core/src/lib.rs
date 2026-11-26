@@ -1,12 +1,12 @@
-//! State aplikasi OnCode tanpa UI dan tanpa Tauri.
+//! OnCode application state without UI and without Tauri.
 //!
-//! - [`Core`] memegang registry repositori, workspace per jendela, pengaturan, data tersimpan,
-//!   operasi yang bisa dibatalkan, dan permintaan yang menunggu jawaban pengguna.
-//! - [`api`] memuat seluruh "command" v0.2 sebagai fungsi biasa, satu modul per domain.
-//! - Perubahan disiarkan sebagai [`CoreEvent`] lewat [`EventSink`] yang diberikan saat konstruksi.
+//! - [`Core`] holds the repository registry, per-window workspaces, settings, persisted data,
+//!   cancelable operations, and requests waiting for a user answer.
+//! - [`api`] contains all the v0.2 "commands" as plain functions, one module per domain.
+//! - Changes are broadcast as [`CoreEvent`] through the [`EventSink`] given at construction.
 //!
-//! Semua fungsi `async` di crate ini harus dijalankan di runtime tokio yang diberikan ke
-//! [`Core::new`] (mis. lewat [`Core::spawn`]); lapisan UI menerima hasilnya di thread utamanya sendiri.
+//! All `async` functions in this crate must run on the tokio runtime given to
+//! [`Core::new`] (e.g. via [`Core::spawn`]); the UI layer receives the results on its own main thread.
 
 pub mod api;
 pub mod dirs;

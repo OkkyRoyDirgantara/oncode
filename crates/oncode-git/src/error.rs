@@ -1,6 +1,6 @@
 use serde::Serialize;
 
-/// Kode galat yang dipakai UI untuk memilih pesan dan aksi lanjutan.
+/// Error code the UI uses to choose the message and follow-up action.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum GitErrorCode {
@@ -27,7 +27,7 @@ pub enum GitErrorCode {
 pub struct GitError {
     pub code: GitErrorCode,
     pub message: String,
-    /// Biasanya stderr git apa adanya.
+    /// Usually git's stderr verbatim.
     pub detail: Option<String>,
 }
 
@@ -51,7 +51,7 @@ impl GitError {
         Self::new(GitErrorCode::Unknown, format!("{context}: {err}"))
     }
 
-    /// Memetakan stderr dan kode keluar git ke kode galat.
+    /// Maps git's stderr and exit code to an error code.
     pub fn from_output(args: &[String], code: i32, stdout: &str, stderr: &str) -> Self {
         let text = format!("{stderr}\n{stdout}");
         let lower = text.to_lowercase();

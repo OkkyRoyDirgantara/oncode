@@ -1,8 +1,8 @@
-//! Tab editor konflik: Current | Result | Incoming. Hanya panel Result yang bisa disunting.
+//! Conflict editor tab: Current | Result | Incoming. Only the Result panel is editable.
 //!
-//! Komponen `Diff` punya dukungan konflik bawaan (`DiffFile::parse_conflicts`), tetapi hasilnya
-//! tidak bisa disunting bebas; di sini tiga editor dipakai agar panel Result tetap editor biasa.
-//! Rentang tiap konflik di panel Result dijaga oleh `ConflictState`.
+//! The `Diff` component has built-in conflict support (`DiffFile::parse_conflicts`), but its result
+//! cannot be freely edited; here three editors are used so the Result panel stays a regular editor.
+//! The range of each conflict in the Result panel is tracked by `ConflictState`.
 
 use std::rc::Rc;
 
@@ -27,7 +27,7 @@ use serde_json::json;
 use crate::conflict_state::{build_initial_result, minimal_edit, normalize, ConflictChoice, ConflictState, InitialResult};
 use crate::util::base_name;
 
-/// Tab konflik untuk sebuah berkas.
+/// Conflict tab for a file.
 pub fn conflict_tab(root: &str, path: &str) -> TabData {
     TabData::new("conflict", format!("{} (Conflict)", base_name(path)), json!({ "root": root, "path": path })).with_id(format!("conflict:{root}:{path}")).with_description(path.to_string())
 }
@@ -53,7 +53,7 @@ fn choice_key(choice: ConflictChoice) -> &'static str {
     }
 }
 
-/// Dekorasi milik editor konflik pada ketiga panel.
+/// Decorations owned by the conflict editor across the three panels.
 struct Decorations {
     result_fill: RangeDecorationCollection,
     result_gutter: GutterDecorationCollection,
@@ -67,16 +67,16 @@ pub struct ConflictView {
     path: String,
     detail: Option<ConflictDetail>,
     error: Option<String>,
-    /// `None` untuk konflik non-teks (biner, atau salah satu sisi menghapus berkas).
+    /// `None` for non-text conflicts (binary, or one side deleted the file).
     initial: Option<InitialResult>,
     model: ConflictState,
     current: Entity<EditorState>,
     result: Entity<EditorState>,
     incoming: Entity<EditorState>,
     decorations: Decorations,
-    /// Isi panel Result yang sudah tercermin di `model`.
+    /// Content of the Result panel already reflected in `model`.
     synced: Rope,
-    /// Isi panel Result sudah diubah tetapi belum ditandai selesai.
+    /// The Result panel content has been changed but not yet marked as resolved.
     touched: bool,
     saving: bool,
     focus_handle: FocusHandle,
@@ -97,7 +97,7 @@ impl ConflictView {
         };
         let subscriptions = vec![
             cx.subscribe(&result, |this, _, event: &InputEditsEvent, cx| this.on_result_edits(event, cx)),
-            // Daftar konflik repositori menentukan apakah berkas ini masih perlu diselesaikan.
+            // The repository's conflict list determines whether this file still needs resolving.
             cx.observe(&repos(cx), |_, _, cx| cx.notify()),
         ];
         let mut this = Self {
@@ -127,7 +127,7 @@ impl ConflictView {
         self.detail.is_some() || self.error.is_some()
     }
 
-    /// Jumlah konflik dan yang belum diselesaikan.
+    /// Number of conflicts and how many are unresolved.
     pub fn counts(&self) -> (usize, usize) {
         (self.model.conflicts.len(), self.model.unresolved())
     }
@@ -136,7 +136,7 @@ impl ConflictView {
         self.touched
     }
 
-    /// State editor panel Result.
+    /// Editor state of the Result panel.
     pub fn result(&self) -> &Entity<EditorState> {
         &self.result
     }
@@ -178,10 +178,10 @@ impl ConflictView {
         cx.notify();
     }
 
-    /// Mencerminkan suntingan manual di panel Result ke rentang konflik.
+    /// Reflects manual edits in the Result panel onto the conflict ranges.
     fn on_result_edits(&mut self, event: &InputEditsEvent, cx: &mut Context<Self>) {
         let Some((_, last)) = event.edits().last() else { return };
-        // Penggantian oleh tombol pilihan sudah tercatat di model.
+        // Replacements made by the choice buttons are already recorded in the model.
         if *last == self.synced {
             return;
         }
@@ -223,7 +223,7 @@ impl ConflictView {
         self.decorations.incoming_fill.set(incoming_fills, cx);
     }
 
-    /// Menjadikan sebuah konflik aktif dan menampilkannya di ketiga panel.
+    /// Makes a conflict active and reveals it in all three panels.
     fn reveal(&mut self, index: usize, focus: bool, cx: &mut Context<Self>) {
         let Some(initial) = &self.initial else { return };
         let Some(conflict) = self.model.conflicts.get(index) else { return };
@@ -240,7 +240,7 @@ impl ConflictView {
         cx.notify();
     }
 
-    /// Pindah ke konflik berikutnya atau sebelumnya (berputar).
+    /// Moves to the next or previous conflict (wrapping around).
     pub fn go_to(&mut self, delta: isize, cx: &mut Context<Self>) {
         let total = self.model.conflicts.len() as isize;
         if total == 0 {
@@ -250,7 +250,7 @@ impl ConflictView {
         self.reveal(next, true, cx);
     }
 
-    /// Mengganti isi konflik aktif dengan sisi pilihan.
+    /// Replaces the content of the active conflict with the chosen side.
     pub fn choose(&mut self, choice: ConflictChoice, window: &mut Window, cx: &mut Context<Self>) {
         let index = self.model.active;
         let Some((range, insert)) = self.model.choose(index, choice) else { return };
@@ -258,7 +258,7 @@ impl ConflictView {
         if !unchanged {
             self.result.update(cx, |state, cx| {
                 state.set_selected_range(range.clone(), cx);
-                // Rentang kosong tetap berupa kursor di posisi itu, jadi teks disisipkan di sana.
+                // An empty range is still a cursor at that position, so the text is inserted there.
                 state.replace(insert.clone(), window, cx);
             });
             self.synced = self.result.read(cx).text().clone();
@@ -273,7 +273,7 @@ impl ConflictView {
         cx.notify();
         let Some(workbench) = self.env.workbench.upgrade() else { return };
         let id = self.tab_id();
-        // Ditunda: bisa dipanggil selagi `Workbench` diperbarui.
+        // Deferred: may be called while `Workbench` is being updated.
         window.defer(cx, move |window, cx| {
             workbench.update(cx, |workbench, cx| {
                 let groups: Vec<u32> = workbench.model().groups.iter().filter(|group| group.contains(&id)).map(|group| group.id).collect();
@@ -284,7 +284,7 @@ impl ConflictView {
         });
     }
 
-    /// Menulis isi panel Result ke berkas dan menandai konflik selesai.
+    /// Writes the Result panel content to the file and marks the conflict resolved.
     pub fn mark_resolved(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.saving {
             return;
@@ -295,7 +295,7 @@ impl ConflictView {
             let title = if left == 1 { "1 conflict is still unresolved".to_string() } else { format!("{left} conflicts are still unresolved") };
             overlay::confirm(Confirm::new(title, "Unresolved conflicts keep the Current side. Mark the file as resolved anyway?", "Mark as Resolved"), window, cx)
         });
-        // Akhir baris mengikuti berkas aslinya.
+        // Line endings follow the original file.
         let crlf = detail.current.as_deref().or(detail.incoming.as_deref()).unwrap_or_default().contains("\r\n");
         let (core, root, path) = (self.env.core.clone(), self.root.clone(), self.path.clone());
         cx.spawn_in(window, async move |this, cx| {
@@ -328,7 +328,7 @@ impl ConflictView {
         .detach();
     }
 
-    /// Menyelesaikan konflik non-teks dengan satu sisi, atau dengan menghapus berkas.
+    /// Resolves a non-text conflict with one side, or by deleting the file.
     fn resolve_simple(&mut self, side: Option<ConflictSide>, window: &mut Window, cx: &mut Context<Self>) {
         if self.saving {
             return;
@@ -370,7 +370,7 @@ impl ConflictView {
         .detach();
     }
 
-    // ----- Tampilan -----
+    // ----- View -----
 
     fn render_centered(&self, children: Vec<gpui_kit::AnyElement>) -> gpui_kit::AnyElement {
         v_flex().id("conflict-message").size_full().track_focus(&self.focus_handle).items_center().justify_center().gap_3().p_4().children(children).into_any_element()
@@ -437,7 +437,7 @@ impl ConflictView {
                     .on_click(cx.listener(|this, _, window, cx| this.mark_resolved(window, cx))),
             );
 
-        // Bilah konflik aktif: status dan pilihan sisinya.
+        // Active conflict bar: its status and side choices.
         let choice_bar = active.map(|conflict| {
             let mut choices = vec![(ConflictChoice::Current, "Use Current"), (ConflictChoice::Incoming, "Use Incoming"), (ConflictChoice::Both, "Use Both")];
             if !conflict.base.is_empty() {
@@ -490,7 +490,7 @@ impl Focusable for ConflictView {
 
 impl Render for ConflictView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        // Selama snapshot belum ada, berkas dianggap masih konflik.
+        // Until a snapshot exists, the file is assumed to still be in conflict.
         let still_conflicted = repos(cx).read(cx).snapshot(&self.root).is_none_or(|snapshot| snapshot.conflicted.iter().any(|entry| entry.path == self.path));
         let muted = cx.theme().muted_foreground;
         let body = if let Some(error) = &self.error {
@@ -513,7 +513,7 @@ impl Render for ConflictView {
     }
 }
 
-/// Isi tab untuk jenis `conflict`.
+/// Tab content for the `conflict` kind.
 pub struct ConflictTab {
     pub view: Entity<ConflictView>,
 }

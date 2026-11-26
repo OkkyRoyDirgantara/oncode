@@ -1,5 +1,5 @@
-//! Property test staging parsial: untuk pilihan perubahan acak, isi index setelah
-//! `apply_splice` harus sama dengan hasil yang dihitung secara independen.
+//! Property test for partial staging: for a random selection of changes, the index content after
+//! `apply_splice` must equal the independently computed result.
 
 mod common;
 
@@ -7,7 +7,7 @@ use common::TestRepo;
 use oncode_git::*;
 use proptest::prelude::*;
 
-/// Satu suntingan pada berkas dasar: ganti `remove` baris mulai `at` dengan baris `insert`.
+/// A single edit to the base file: replace `remove` lines starting at `at` with the `insert` lines.
 #[derive(Debug, Clone)]
 struct Change {
     at: usize,
@@ -18,10 +18,10 @@ struct Change {
 
 fn scenario() -> impl Strategy<Value = (Vec<String>, Vec<Change>, bool, bool)> {
     (4usize..24).prop_flat_map(|len| {
-        let base: Vec<String> = (0..len).map(|i| format!("baris {i}")).collect();
+        let base: Vec<String> = (0..len).map(|i| format!("line {i}")).collect();
         let changes = prop::collection::vec((0usize..len, 0usize..3, prop::collection::vec("[a-z]{1,6}", 0..3), any::<bool>()), 1..5).prop_map(
             move |raw| {
-                // Susun perubahan yang tidak tumpang-tindih dan tidak bersebelahan, terurut.
+                // Build changes that do not overlap and are not adjacent, in order.
                 let mut changes: Vec<Change> = Vec::new();
                 let mut next_free = 0usize;
                 let mut sorted = raw;
@@ -46,7 +46,7 @@ fn scenario() -> impl Strategy<Value = (Vec<String>, Vec<Change>, bool, bool)> {
     })
 }
 
-/// Menerapkan perubahan terpilih ke baris dasar (perhitungan pembanding, tanpa memakai kode yang diuji).
+/// Applies the selected changes to the base lines (a reference computation, without using the code under test).
 fn apply(base: &[String], changes: &[Change], pick: impl Fn(&Change) -> bool) -> Vec<String> {
     let mut out = Vec::new();
     let mut cursor = 0;
@@ -71,7 +71,7 @@ fn text(lines: &[String], final_newline: bool) -> String {
     s
 }
 
-/// Rentang baris tiap perubahan pada sisi A (dasar) dan sisi B (semua perubahan diterapkan).
+/// Line range of each change on side A (base) and side B (all changes applied).
 fn ops(changes: &[Change], only_selected: bool) -> Vec<SpliceOp> {
     let mut shift: isize = 0;
     let mut out = Vec::new();
@@ -91,7 +91,7 @@ proptest! {
     #[test]
     fn staged_content_matches_independent_model((base, changes, nl_a, nl_b) in scenario()) {
         prop_assume!(!changes.is_empty());
-        // Tanpa newline di akhir, baris terakhir tidak boleh tersentuh agar model pembanding tetap sederhana.
+        // Without a trailing newline, the last line must not be touched so the reference model stays simple.
         let touches_end = changes.iter().any(|c| c.at + c.remove >= base.len());
         let _ = nl_b;
         let (nl_a, nl_b) = if touches_end { (true, true) } else { (nl_a, nl_a) };
@@ -100,20 +100,20 @@ proptest! {
             let t = TestRepo::with_commit().await;
             let original = text(&base, nl_a);
             let modified = text(&apply(&base, &changes, |_| true), nl_b);
-            t.commit_file("f.txt", &original, "Dasar");
+            t.commit_file("f.txt", &original, "Base");
             t.write("f.txt", &modified);
 
-            // Stage hanya perubahan terpilih.
+            // Stage only the selected changes.
             let d = t.repo.diff_contents("f.txt", None, &DiffSource::Worktree).await.unwrap();
             t.repo.apply_splice(SpliceTarget::Stage, "f.txt", &ops(&changes, true), &d.a.fingerprint, &d.b.fingerprint).await.unwrap();
             let expected = text(&apply(&base, &changes, |c| c.selected), nl_a);
             prop_assert_eq!(t.index("f.txt"), expected.clone());
             prop_assert_eq!(t.read("f.txt"), modified.clone());
 
-            // Unstage semuanya kembali mengembalikan index ke isi HEAD.
+            // Unstaging everything again restores the index to the HEAD content.
             let d = t.repo.diff_contents("f.txt", None, &DiffSource::Staged).await.unwrap();
             let staged_only: Vec<Change> = changes.iter().filter(|c| c.selected).cloned().map(|mut c| { c.selected = true; c }).collect();
-            // Posisi pada sisi B (index) dihitung dari perubahan yang benar-benar di-stage.
+            // Positions on side B (index) are computed from the changes that were actually staged.
             let mut shift: isize = 0;
             let mut undo = Vec::new();
             for c in &staged_only {
@@ -124,7 +124,7 @@ proptest! {
             t.repo.apply_splice(SpliceTarget::Unstage, "f.txt", &undo, &d.a.fingerprint, &d.b.fingerprint).await.unwrap();
             prop_assert_eq!(t.index("f.txt"), original.clone());
 
-            // Discard perubahan terpilih dari working tree menyisakan perubahan yang tidak dipilih.
+            // Discarding the selected changes from the working tree leaves the unselected changes.
             let d = t.repo.diff_contents("f.txt", None, &DiffSource::Worktree).await.unwrap();
             t.repo.apply_splice(SpliceTarget::Discard, "f.txt", &ops(&changes, true), &d.a.fingerprint, &d.b.fingerprint).await.unwrap();
             let remaining = text(&apply(&base, &changes, |c| !c.selected), nl_b);

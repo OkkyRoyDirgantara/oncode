@@ -1,4 +1,4 @@
-//! Perkakas bersama uji integrasi: repositori sementara yang terisolasi dari konfigurasi pengguna.
+//! Shared tooling for integration tests: a temporary repository isolated from the user's configuration.
 #![allow(dead_code)]
 
 use std::path::{Path, PathBuf};
@@ -10,18 +10,18 @@ use tempfile::TempDir;
 
 static ENV: Once = Once::new();
 
-/// Mengisolasi git dari konfigurasi global/sistem dan menetapkan identitas uji.
+/// Isolates git from the global/system configuration and sets the test identity.
 pub fn isolate() {
     ENV.call_once(|| {
         let vars = [
-            // Berkas kosong milik platform: `NUL` di Windows.
+            // The platform's empty file: `NUL` on Windows.
             ("GIT_CONFIG_GLOBAL", if cfg!(windows) { "NUL" } else { "/dev/null" }),
             ("GIT_CONFIG_NOSYSTEM", "1"),
-            ("GIT_AUTHOR_NAME", "Penguji"),
-            ("GIT_AUTHOR_EMAIL", "penguji@contoh.id"),
-            ("GIT_COMMITTER_NAME", "Penguji"),
-            ("GIT_COMMITTER_EMAIL", "penguji@contoh.id"),
-            // Submodule dari path lokal memerlukan izin protokol file.
+            ("GIT_AUTHOR_NAME", "Tester"),
+            ("GIT_AUTHOR_EMAIL", "tester@example.com"),
+            ("GIT_COMMITTER_NAME", "Tester"),
+            ("GIT_COMMITTER_EMAIL", "tester@example.com"),
+            // A submodule from a local path requires file protocol permission.
             ("GIT_CONFIG_COUNT", "2"),
             ("GIT_CONFIG_KEY_0", "protocol.file.allow"),
             ("GIT_CONFIG_VALUE_0", "always"),
@@ -41,7 +41,7 @@ pub struct TestRepo {
 }
 
 impl TestRepo {
-    /// Repositori kosong dengan branch `main`.
+    /// An empty repository with a `main` branch.
     pub async fn new() -> Self {
         isolate();
         let dir = tempfile::tempdir().unwrap();
@@ -51,12 +51,12 @@ impl TestRepo {
         Self { dir, repo, git }
     }
 
-    /// Repositori dengan satu commit berisi `README.md`.
+    /// A repository with one commit containing `README.md`.
     pub async fn with_commit() -> Self {
         let t = Self::new().await;
-        t.write("README.md", "# Proyek\n");
+        t.write("README.md", "# Project\n");
         t.git(&["add", "-A"]);
-        t.git(&["commit", "-q", "-m", "Commit pertama"]);
+        t.git(&["commit", "-q", "-m", "First commit"]);
         t
     }
 
@@ -80,12 +80,12 @@ impl TestRepo {
         std::fs::read_to_string(self.file(rel)).unwrap()
     }
 
-    /// Menjalankan git langsung (di luar lapisan yang diuji) dan mengembalikan stdout.
+    /// Runs git directly (outside the layer under test) and returns stdout.
     pub fn git(&self, args: &[&str]) -> String {
         raw_git(self.path(), args)
     }
 
-    /// Menulis berkas lalu membuat commit berisi seluruh perubahan.
+    /// Writes a file and then creates a commit containing all changes.
     pub fn commit_file(&self, rel: &str, content: &str, message: &str) -> String {
         self.write(rel, content);
         self.git(&["add", "-A"]);
@@ -93,7 +93,7 @@ impl TestRepo {
         self.git(&["rev-parse", "HEAD"]).trim().to_string()
     }
 
-    /// Isi berkas di index.
+    /// The content of a file in the index.
     pub fn index(&self, rel: &str) -> String {
         self.git(&["show", &format!(":{rel}")])
     }
@@ -104,7 +104,7 @@ pub fn raw_git(cwd: &Path, args: &[&str]) -> String {
     let out = Command::new("git").current_dir(cwd).args(args).output().unwrap();
     assert!(
         out.status.success(),
-        "git {:?} gagal: {}{}",
+        "git {:?} failed: {}{}",
         args,
         String::from_utf8_lossy(&out.stderr),
         String::from_utf8_lossy(&out.stdout)
@@ -112,7 +112,7 @@ pub fn raw_git(cwd: &Path, args: &[&str]) -> String {
     String::from_utf8_lossy(&out.stdout).into_owned()
 }
 
-/// Sama seperti [`raw_git`] tetapi tidak panik bila git gagal.
+/// Same as [`raw_git`] but does not panic if git fails.
 pub fn try_git(cwd: &Path, args: &[&str]) -> bool {
     isolate();
     Command::new("git").current_dir(cwd).args(args).output().map(|o| o.status.success()).unwrap_or(false)

@@ -1,16 +1,16 @@
 use serde::Serialize;
 
-/// Kode galat yang dipakai UI untuk memilih pesan dan aksi lanjutan.
+/// Error code the UI uses to choose a message and follow-up action.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum LspErrorCode {
-    /// Tidak ada server dengan id tersebut (sudah dihentikan atau prosesnya sudah keluar).
+    /// There is no server with that id (it was stopped or its process has exited).
     NotFound,
-    /// Perintah server tidak ditemukan di PATH; UI menampilkan petunjuk pemasangan.
+    /// The server command was not found on PATH; the UI shows installation instructions.
     ServerNotInstalled,
-    /// Perintah ditemukan tetapi prosesnya gagal dijalankan.
+    /// The command was found but its process failed to start.
     SpawnFailed,
-    /// Gagal menulis ke stdin server.
+    /// Failed to write to the server's stdin.
     Io,
 }
 

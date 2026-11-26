@@ -1,6 +1,6 @@
-//! Menggambar isi layar terminal (`grid::Frame`) ke jendela: latar per sel, seleksi, karakter
-//! garis/blok/powerline sebagai bentuk, teks per potongan dengan lebar huruf dipaksa selebar sel,
-//! lalu kursor.
+//! Paints the terminal screen contents (`grid::Frame`) to the window: the background per cell, the
+//! selection, line/block/powerline characters as shapes, text per run with the letter width forced to
+//! the cell width, and then the cursor.
 
 use std::sync::Arc;
 
@@ -14,7 +14,7 @@ use crate::glyphs::{self, Segment, Shape};
 use crate::grid::Frame;
 use crate::palette::{to_hsla, Palette};
 
-/// Font terminal tanpa ligatur: `->`, `!=`, `=>` tetap dua huruf di dua sel, seperti terminal lain.
+/// The terminal font without ligatures: `->`, `!=`, `=>` stay two letters in two cells, like other terminals.
 pub fn terminal_font(family: SharedString) -> Font {
     Font {
         family,
@@ -25,12 +25,12 @@ pub fn terminal_font(family: SharedString) -> Font {
     }
 }
 
-/// Ukuran yang dipakai untuk menggambar; sudah dibulatkan ke piksel perangkat.
+/// The sizes used for drawing; already rounded to device pixels.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct CellMetrics {
     pub cell_width: Pixels,
     pub line_height: Pixels,
-    /// Ketebalan garis tipis (box drawing, garis bawah, kursor).
+    /// Thickness of thin lines (box drawing, underline, cursor).
     pub line: f32,
     pub scale: f32,
 }
@@ -42,7 +42,7 @@ impl CellMetrics {
 }
 
 pub fn paint_frame(frame: &Frame, origin: Point<Pixels>, metrics: CellMetrics, font: &Font, font_size: Pixels, palette: &Palette, window: &mut Window, cx: &mut App) {
-    // Titik awal di batas piksel perangkat, agar tepi sel tidak jatuh di tengah piksel.
+    // The origin on a device pixel boundary, so cell edges do not fall in the middle of a pixel.
     let snap = |value: Pixels| px((f32::from(value) * metrics.scale).round() / metrics.scale);
     let origin = point(snap(origin.x), snap(origin.y));
 
@@ -78,7 +78,7 @@ pub fn paint_frame(frame: &Frame, origin: Point<Pixels>, metrics: CellMetrics, f
             underline: run.underline.then(|| UnderlineStyle { thickness: px(metrics.line), color: Some(color), wavy: false }),
             strikethrough: run.strikethrough.then(|| StrikethroughStyle { thickness: px(metrics.line), color: Some(color) }),
         };
-        // Setiap huruf ditaruh tepat di selnya, apa pun lebar glyph aslinya (font cadangan, ikon).
+        // Each letter is placed exactly in its cell, whatever the original glyph width (fallback font, icons).
         let shaped = window.text_system().shape_line(SharedString::from(run.text.clone()), font_size, &[style], Some(metrics.cell_width * run.cell_width as f32));
         let at = metrics.bounds(origin, run.row, run.column, run.cells).origin;
         let _ = shaped.paint(at, metrics.line_height, TextAlign::Left, None, window, cx);
@@ -89,7 +89,7 @@ pub fn paint_frame(frame: &Frame, origin: Point<Pixels>, metrics: CellMetrics, f
         let color = to_hsla(cursor.color);
         let thick = px(metrics.line * 2.);
         match cursor.shape {
-            // Latar dan warna huruf kursor blok sudah ada di `frame`.
+            // The background and letter color of a block cursor are already in `frame`.
             CursorShape::Block | CursorShape::Hidden => {}
             CursorShape::HollowBlock => window.paint_quad(outline(bounds, color, BorderStyle::default())),
             CursorShape::Beam => window.paint_quad(fill(Bounds::new(bounds.origin, size(thick, bounds.size.height)), color)),

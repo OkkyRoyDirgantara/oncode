@@ -1,31 +1,31 @@
 use serde::Serialize;
 
-/// Kode galat yang dipakai UI untuk memilih pesan dan aksi lanjutan.
+/// Error code the UI uses to choose a message and follow-up action.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ForgeErrorCode {
-    /// Token tidak ada, salah, atau sudah kedaluwarsa (HTTP 401).
+    /// The token is missing, wrong, or expired (HTTP 401).
     Unauthorized,
-    /// Token sah tetapi tidak berhak atas sumber daya ini (HTTP 403).
+    /// The token is valid but not permitted to access this resource (HTTP 403).
     Forbidden,
-    /// Sumber daya tidak ada, atau tidak terlihat oleh akun ini (HTTP 404).
+    /// The resource does not exist, or is not visible to this account (HTTP 404).
     NotFound,
-    /// Batas laju API terlampaui (HTTP 429, atau 403 dengan header batas laju).
+    /// The API rate limit was exceeded (HTTP 429, or 403 with a rate-limit header).
     RateLimited,
-    /// Gagal terhubung, waktu habis, atau server sedang bermasalah (HTTP 5xx).
+    /// Failed to connect, timed out, or the server is having problems (HTTP 5xx).
     Network,
-    /// Jawaban server tidak berbentuk seperti yang diharapkan.
+    /// The server's response is not shaped as expected.
     InvalidResponse,
-    /// Operasi tidak didukung oleh penyedia atau instance ini.
+    /// The operation is not supported by this provider or instance.
     Unsupported,
-    /// Keychain OS tidak tersedia atau menolak akses.
+    /// The OS keychain is unavailable or denied access.
     Keychain,
-    /// Masukan ditolak, baik oleh pustaka ini maupun oleh server (HTTP 400/409/422).
+    /// Input was rejected, either by this library or by the server (HTTP 400/409/422).
     InvalidInput,
 }
 
-/// Galat dari lapisan forge. `message` aman ditampilkan ke pengguna dan tidak pernah
-/// memuat token.
+/// Error from the forge layer. `message` is safe to show to the user and never
+/// contains a token.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, thiserror::Error)]
 #[serde(rename_all = "camelCase")]
 #[error("{message}")]
@@ -68,9 +68,9 @@ mod tests {
 
     #[test]
     fn serializes_with_camel_case_code() {
-        let err = ForgeError::new(ForgeErrorCode::RateLimited, "Batas laju API terlampaui");
-        let json = serde_json::to_value(&err).expect("serialisasi galat");
-        assert_eq!(json, serde_json::json!({ "code": "rateLimited", "message": "Batas laju API terlampaui" }));
-        assert_eq!(err.to_string(), "Batas laju API terlampaui");
+        let err = ForgeError::new(ForgeErrorCode::RateLimited, "API rate limit exceeded");
+        let json = serde_json::to_value(&err).expect("serialize error");
+        assert_eq!(json, serde_json::json!({ "code": "rateLimited", "message": "API rate limit exceeded" }));
+        assert_eq!(err.to_string(), "API rate limit exceeded");
     }
 }

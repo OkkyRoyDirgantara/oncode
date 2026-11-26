@@ -1,4 +1,4 @@
-//! Logika murni panel Problems: saring, kelompokkan per berkas, dan urutkan.
+//! Pure logic of the Problems panel: filter, group per file, and sort.
 
 use std::collections::HashSet;
 
@@ -9,7 +9,7 @@ pub struct ProblemFilter {
     pub text: String,
     pub errors: bool,
     pub warnings: bool,
-    /// Mencakup `info` dan `hint`.
+    /// Covers `info` and `hint`.
     pub infos: bool,
 }
 
@@ -21,9 +21,9 @@ impl Default for ProblemFilter {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProblemGroup {
-    /// Path absolut.
+    /// Absolute path.
     pub path: String,
-    /// Path relatif terhadap folder proyek (dengan garis miring), untuk ditampilkan.
+    /// Path relative to the project folder (with forward slashes), for display.
     pub relative: String,
     pub name: String,
     pub dir: String,
@@ -33,9 +33,9 @@ pub struct ProblemGroup {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProblemRow {
-    /// Judul berkas: indeks kelompoknya.
+    /// File title: its group index.
     File(usize),
-    /// Satu masalah: indeks kelompok dan indeks di dalam kelompok.
+    /// A single problem: the group index and the index within the group.
     Problem(usize, usize),
 }
 
@@ -47,7 +47,7 @@ fn count(items: &[Problem]) -> ProblemCounts {
     counts
 }
 
-/// Jumlah seluruh masalah, tanpa penyaring.
+/// Total number of problems, without any filter.
 pub fn count_problems<'a>(files: impl IntoIterator<Item = &'a [Problem]>) -> ProblemCounts {
     let mut total = ProblemCounts::default();
     for items in files {
@@ -72,7 +72,7 @@ fn matches_text(item: &Problem, needle: &str) -> bool {
         || item.code.as_ref().is_some_and(|code| code.to_lowercase().contains(needle))
 }
 
-/// Path relatif terhadap folder proyek; path di luar folder dikembalikan apa adanya.
+/// Path relative to the project folder; a path outside the folder is returned as is.
 pub fn relative_path(root: Option<&str>, path: &str) -> String {
     let Some(root) = root.map(|root| root.trim_end_matches(['/', '\\'])).filter(|root| !root.is_empty()) else { return path.to_string() };
     match path.strip_prefix(root) {
@@ -81,9 +81,9 @@ pub fn relative_path(root: Option<&str>, path: &str) -> String {
     }
 }
 
-/// Kelompok per berkas. Di dalam berkas: severity (galat dulu) lalu posisi. Antarberkas: yang punya
-/// galat dulu, lalu peringatan, lalu menurut path. Teks penyaring dicocokkan dengan pesan, sumber,
-/// kode, atau path berkas (bila path cocok, semua masalah berkas itu lolos).
+/// Groups per file. Within a file: severity (errors first) then position. Across files: those with
+/// errors first, then warnings, then by path. The filter text is matched against the message, source,
+/// code, or file path (if the path matches, all of that file's problems pass).
 pub fn build_groups<'a>(files: impl IntoIterator<Item = (&'a str, &'a [Problem])>, filter: &ProblemFilter, relative: impl Fn(&str) -> String) -> Vec<ProblemGroup> {
     let needle = filter.text.trim().to_lowercase();
     let mut groups: Vec<ProblemGroup> = Vec::new();
@@ -107,7 +107,7 @@ pub fn build_groups<'a>(files: impl IntoIterator<Item = (&'a str, &'a [Problem])
     groups
 }
 
-/// Baris datar untuk daftar yang divirtualisasi; berkas yang dilipat hanya menyisakan judulnya.
+/// Flat rows for the virtualized list; a collapsed file keeps only its title.
 pub fn flatten_rows(groups: &[ProblemGroup], collapsed: &HashSet<String>) -> Vec<ProblemRow> {
     let mut rows = Vec::new();
     for (index, group) in groups.iter().enumerate() {
@@ -192,7 +192,7 @@ mod tests {
         let main = groups.iter().find(|group| group.name == "main.rs").unwrap();
         let order: Vec<String> = main.items.iter().map(|item| format!("{:?}:{}:{}", item.severity, item.line, item.column)).collect();
         assert_eq!(order, ["Error:5:2", "Error:5:9", "Error:20:4", "Warning:1:0", "Info:1:0", "Hint:2:0"]);
-        // Daftar di store tidak ikut diurutkan.
+        // The list in the store is not sorted along with it.
         assert_eq!(files["/proj/src/main.rs"][0].severity, Severity::Warning);
     }
 
@@ -204,7 +204,7 @@ mod tests {
         assert_eq!(errors_only[1].items.len(), 3);
         assert_eq!(errors_only[1].counts, ProblemCounts { errors: 3, warnings: 0, infos: 0 });
 
-        // Tanpa galat, main.rs diurutkan sebagai berkas peringatan.
+        // Without errors, main.rs is sorted as a warnings file.
         let no_errors = groups(&files, &ProblemFilter { errors: false, ..Default::default() });
         assert_eq!(relatives(&no_errors), ["src/main.rs", "src/warn_only.rs", "a/info_only.ts"]);
         assert!(groups(&files, &ProblemFilter { text: String::new(), errors: false, warnings: false, infos: false }).is_empty());
@@ -219,7 +219,7 @@ mod tests {
         assert_eq!(by("UNUSED"), ["src/main.rs=1", "src/warn_only.rs=1"]);
         assert_eq!(by("e0308"), ["src/main.rs=1"]);
         assert_eq!(by("eslint"), ["a/info_only.ts=1"]);
-        // Path cocok: semua masalah berkas itu lolos.
+        // Path matches: all of that file's problems pass.
         assert_eq!(by("main.rs"), ["src/main.rs=6"]);
         assert_eq!(by("  compiler  "), ["lib/errors.go=1"]);
         assert!(by("nothing matches this").is_empty());

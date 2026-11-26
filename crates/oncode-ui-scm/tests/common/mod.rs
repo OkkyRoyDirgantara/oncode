@@ -1,5 +1,5 @@
-//! Server git smart-HTTP kecil untuk uji: `git http-backend` lewat CGI, dengan Basic auth.
-//! Hanya mendengarkan di 127.0.0.1; tidak ada permintaan ke internet.
+//! A small git smart-HTTP server for tests: `git http-backend` over CGI, with Basic auth.
+//! It only listens on 127.0.0.1; there are no requests to the internet.
 #![allow(dead_code)]
 
 use std::io::{BufRead, BufReader, Read, Write};
@@ -12,7 +12,7 @@ use std::sync::Arc;
 pub struct GitHttpServer {
     pub port: u16,
     pub root: PathBuf,
-    /// Jumlah permintaan yang ditolak karena kredensial salah atau tidak ada.
+    /// The number of requests rejected because the credentials were wrong or missing.
     pub rejected: Arc<AtomicUsize>,
     _dir: tempfile::TempDir,
 }
@@ -35,11 +35,11 @@ fn base64(input: &[u8]) -> String {
 }
 
 impl GitHttpServer {
-    /// Server dengan satu repositori bare kosong `proyek.git` (branch bawaan `main`).
+    /// A server with one empty bare repository `project.git` (default branch `main`).
     pub fn start(user: &str, password: &str) -> Self {
         let dir = tempfile::tempdir().unwrap();
         let root = oncode_ui::testing::canonical(dir.path());
-        let bare = root.join("proyek.git");
+        let bare = root.join("project.git");
         std::fs::create_dir_all(&bare).unwrap();
         oncode_ui::testing::git(&bare, &["init", "-q", "--bare", "-b", "main"]);
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -59,11 +59,11 @@ impl GitHttpServer {
     }
 
     pub fn url(&self) -> String {
-        format!("http://127.0.0.1:{}/proyek.git", self.port)
+        format!("http://127.0.0.1:{}/project.git", self.port)
     }
 
     pub fn bare(&self) -> PathBuf {
-        self.root.join("proyek.git")
+        self.root.join("project.git")
     }
 }
 

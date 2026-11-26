@@ -1,4 +1,4 @@
-//! Pencarian teks proyek dan ganti di banyak berkas.
+//! Project text search and replace across many files.
 
 use std::borrow::Cow;
 use std::io;
@@ -17,49 +17,49 @@ use crate::fs::{absolute, is_inside, write_atomic};
 use crate::gitignore::walk_builder;
 use crate::index::to_slash;
 
-/// Panjang maksimum `LineMatch::preview`, dalam karakter.
+/// Maximum length of `LineMatch::preview`, in characters.
 const PREVIEW_MAX_CHARS: usize = 400;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SearchQuery {
     pub pattern: String,
-    /// `false`: `pattern` dicari apa adanya. `true`: sintaks crate `regex`.
+    /// `false`: `pattern` is searched for literally. `true`: the `regex` crate's syntax.
     pub is_regex: bool,
     pub case_sensitive: bool,
     pub whole_word: bool,
-    /// Glob berkas yang disertakan; kosong berarti semua. `*.rs` cocok di kedalaman mana pun,
-    /// `src` mencakup seluruh isi folder `src`, dan glob bergaris miring (`src/*.ts`)
-    /// dicocokkan dari akar proyek.
+    /// Globs of files to include; empty means all. `*.rs` matches at any depth,
+    /// `src` covers the entire contents of the `src` folder, and globs containing a slash (`src/*.ts`)
+    /// are matched from the project root.
     pub include: Vec<String>,
-    /// Glob berkas atau folder yang dikecualikan, dengan aturan yang sama.
+    /// Globs of files or folders to exclude, with the same rules.
     pub exclude: Vec<String>,
-    /// Jumlah kecocokan maksimum; `0` berarti tanpa batas.
+    /// Maximum number of matches; `0` means unlimited.
     pub max_results: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LineMatch {
-    /// Nomor baris, mulai dari 1.
+    /// Line number, starting from 1.
     pub line: u32,
-    /// Awal kecocokan di dalam baris, dalam unit UTF-16, mulai dari 0.
+    /// Start of the match within the line, in UTF-16 units, starting from 0.
     pub column: u32,
-    /// Panjang kecocokan dalam unit UTF-16.
+    /// Length of the match in UTF-16 units.
     pub length: u32,
-    /// Isi baris tanpa akhir baris, dipangkas menjadi paling banyak 400 karakter di sekitar
-    /// kecocokan. Kecocokan yang lebih panjang dari itu ikut terpotong.
+    /// The line contents without the line ending, trimmed to at most 400 characters around
+    /// the match. A match longer than that is truncated too.
     pub preview: String,
-    /// Awal kecocokan di dalam `preview`, dalam unit UTF-16.
+    /// Start of the match within `preview`, in UTF-16 units.
     pub preview_offset: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FileMatches {
-    /// Path relatif terhadap akar proyek, dengan garis miring.
+    /// Path relative to the project root, with forward slashes.
     pub path: String,
-    /// Urut menurut baris lalu kolom.
+    /// Sorted by line, then column.
     pub matches: Vec<LineMatch>,
 }
 
@@ -68,25 +68,25 @@ pub struct FileMatches {
 pub struct SearchSummary {
     pub files: u32,
     pub matches: u32,
-    /// Pencarian berhenti sebelum selesai: `max_results` tercapai atau dibatalkan.
+    /// The search stopped before finishing: `max_results` was reached or it was canceled.
     pub truncated: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReplaceSummary {
-    /// Jumlah berkas yang diubah.
+    /// Number of files changed.
     pub files: u32,
     pub replacements: u32,
 }
 
-/// Mencari `query` di seluruh berkas di bawah `root`. Memblokir; penelusuran berjalan paralel.
+/// Searches for `query` in all files under `root`. Blocking; the walk runs in parallel.
 ///
-/// Menghormati gitignore, melewati berkas biner dan folder `.git`. `on_file` dipanggil sekali
-/// untuk tiap berkas yang memuat kecocokan, dari thread pekerja dan tanpa urutan tertentu.
-/// Pencarian berhenti lebih awal bila `cancel` disetel atau `max_results` tercapai; pada kedua
-/// keadaan itu `truncated` bernilai `true`. Kecocokan tidak pernah melintasi baris, dan
-/// kecocokan kosong (mis. regex `a*` pada baris tanpa `a`) tidak dilaporkan.
+/// Honors gitignore, skips binary files and the `.git` folder. `on_file` is called once
+/// for each file that contains matches, from a worker thread and in no particular order.
+/// The search stops early if `cancel` is set or `max_results` is reached; in both
+/// cases `truncated` is `true`. Matches never cross lines, and
+/// empty matches (e.g. regex `a*` on a line without `a`) are not reported.
 pub fn search(
     root: &Path,
     query: &SearchQuery,
@@ -132,7 +132,7 @@ pub fn search(
             }
 
             let mut collector = Collector { matcher, progress, matches: Vec::new() };
-            // Berkas yang tidak bisa dibaca dilewati; kecocokan yang sudah terkumpul tetap dikirim.
+            // Files that cannot be read are skipped; matches already collected are still sent.
             let _ = searcher.search_path(matcher, entry.path(), &mut collector);
             if !collector.matches.is_empty() {
                 progress.files.fetch_add(1, Ordering::Relaxed);
@@ -154,15 +154,15 @@ pub fn search(
     })
 }
 
-/// Mengganti setiap kecocokan `query` di berkas-berkas yang diberikan dengan `replacement`.
+/// Replaces every match of `query` in the given files with `replacement`.
 ///
-/// `files` berisi path relatif terhadap `root`; semuanya harus berada di dalam `root`, bila
-/// tidak, galat `InvalidPath` dikembalikan sebelum ada berkas yang diubah. `replacement` adalah
-/// teks apa adanya bila `!is_regex`; bila `is_regex`, `$1`, `${nama}`, dan `$$` diterjemahkan.
-/// Hanya berkas UTF-8 yang diproses; berkas biner, ber-encoding lain, atau yang sudah tidak
-/// ada dilewati. Tiap berkas ditulis secara atomik; `include`, `exclude`, dan `max_results`
-/// pada `query` tidak dipakai. Galat I/O menghentikan proses; berkas yang sudah ditulis
-/// sebelumnya tetap berubah.
+/// `files` contains paths relative to `root`; all of them must be inside `root`, otherwise
+/// an `InvalidPath` error is returned before any file is changed. `replacement` is
+/// literal text if `!is_regex`; if `is_regex`, `$1`, `${name}`, and `$$` are interpreted.
+/// Only UTF-8 files are processed; binary files, files in another encoding, or ones that no longer
+/// exist are skipped. Each file is written atomically; `include`, `exclude`, and `max_results`
+/// in `query` are not used. An I/O error stops the process; files already written
+/// before it stay changed.
 pub fn replace_in_files(root: &Path, query: &SearchQuery, replacement: &str, files: &[String]) -> Result<ReplaceSummary> {
     let matcher = build_matcher(query)?;
     let mut targets = Vec::with_capacity(files.len());
@@ -201,7 +201,7 @@ fn replace_in_file(matcher: &RegexMatcher, path: &Path, replacement: &str, inter
     let mut out = Vec::with_capacity(bytes.len() + 64);
     out.extend_from_slice(bom);
     let mut count = 0u32;
-    // Baris demi baris, sama seperti pencarian, agar `^` dan `$` berperilaku identik.
+    // Line by line, same as the search, so `^` and `$` behave identically.
     for line in body.split_inclusive(|b| *b == b'\n') {
         let content = trim_line_terminator(line);
         let terminator = &line[content.len()..];
@@ -238,14 +238,14 @@ fn build_matcher(query: &SearchQuery) -> Result<RegexMatcher> {
         .case_insensitive(!query.case_sensitive)
         .word(query.whole_word)
         .fixed_strings(!query.is_regex)
-        // `^` dan `$` berlaku per baris; kecocokan tidak pernah memuat `\r` atau `\n`.
+        // `^` and `$` apply per line; a match never contains `\r` or `\n`.
         .multi_line(true)
         .crlf(true)
         .build(&query.pattern)
         .map_err(|err| WsError::invalid_pattern(format!("Invalid search pattern: {err}")))
 }
 
-/// Saringan glob sertakan/kecualikan terhadap path relatif.
+/// An include/exclude glob filter against relative paths.
 struct GlobFilter {
     include: Option<GlobSet>,
     exclude: Option<GlobSet>,
@@ -276,8 +276,8 @@ fn build_glob_set(globs: &[String]) -> Result<Option<GlobSet>> {
         if glob.is_empty() {
             continue;
         }
-        // Tanpa garis miring, glob cocok di kedalaman mana pun; tiap glob juga mencakup isi
-        // folder yang cocok dengannya.
+        // Without a slash, the glob matches at any depth; each glob also covers the contents of
+        // the folder it matches.
         let base = if anchored || glob.contains('/') { glob.to_string() } else { format!("**/{glob}") };
         for pattern in [base.clone(), format!("{base}/**")] {
             let compiled = GlobBuilder::new(&pattern)
@@ -294,7 +294,7 @@ fn build_glob_set(globs: &[String]) -> Result<Option<GlobSet>> {
     builder.build().map(Some).map_err(|err| WsError::invalid_pattern(format!("Invalid glob: {err}")))
 }
 
-/// Keadaan bersama antar-thread pekerja.
+/// State shared between worker threads.
 struct Progress<'a> {
     cancel: &'a AtomicBool,
     limit: u32,
@@ -308,7 +308,7 @@ impl Progress<'_> {
         self.cancel.load(Ordering::Relaxed) || self.truncated.load(Ordering::Relaxed)
     }
 
-    /// Memesan tempat untuk satu kecocokan; `false` bila batas sudah tercapai.
+    /// Reserves a slot for one match; `false` if the limit has already been reached.
     fn reserve(&self) -> bool {
         let mut current = self.matches.load(Ordering::Relaxed);
         loop {
@@ -368,8 +368,8 @@ fn trim_line_terminator(line: &[u8]) -> &[u8] {
     line.strip_suffix(b"\r").unwrap_or(line)
 }
 
-/// Menghitung offset UTF-16 secara bertahap agar baris panjang dengan banyak kecocokan
-/// tidak dipindai ulang dari awal untuk tiap kecocokan.
+/// Computes UTF-16 offsets incrementally so a long line with many matches
+/// is not rescanned from the start for each match.
 #[derive(Default)]
 struct Utf16Cursor {
     byte: usize,
@@ -401,7 +401,7 @@ fn line_match(line: &[u8], start: usize, end: usize, number: u32, cursor: &mut U
     };
     let room = PREVIEW_MAX_CHARS - matched.chars().count();
 
-    // Jendela byte yang cukup untuk `room` karakter, dirapikan ke batas karakter UTF-8.
+    // A byte window large enough for `room` characters, snapped to UTF-8 character boundaries.
     let mut before_start = start.saturating_sub(room * 4);
     while before_start < start && is_continuation(line[before_start]) {
         before_start += 1;
@@ -415,7 +415,7 @@ fn line_match(line: &[u8], start: usize, end: usize, number: u32, cursor: &mut U
     let before_chars = before.chars().count();
     let after_chars = after.chars().count();
 
-    // Sebagian besar ruang diberikan ke teks sesudah kecocokan; sisanya ke teks sebelumnya.
+    // Most of the room goes to the text after the match; the rest to the text before it.
     let tail = after_chars.min(room - before_chars.min(room / 4));
     let lead = before_chars.min(room - tail);
     let lead_text = match before.char_indices().nth(before_chars - lead) {
@@ -476,7 +476,7 @@ mod tests {
         SearchQuery { is_regex: true, case_sensitive: true, ..literal(pattern) }
     }
 
-    /// Menjalankan pencarian dan mengembalikan hasil terurut menurut path.
+    /// Runs a search and returns the results sorted by path.
     fn run(root: &Path, query: &SearchQuery) -> (Vec<FileMatches>, SearchSummary) {
         let found = Mutex::new(Vec::new());
         let cancel = AtomicBool::new(false);
@@ -486,7 +486,7 @@ mod tests {
         (found, summary)
     }
 
-    /// `(path, baris, kolom)` untuk setiap kecocokan.
+    /// `(path, line, column)` for each match.
     fn hits(root: &Path, query: &SearchQuery) -> Vec<(String, u32, u32)> {
         let (files, _) = run(root, query);
         files.iter().flat_map(|f| f.matches.iter().map(|m| (f.path.clone(), m.line, m.column))).collect()
@@ -519,9 +519,9 @@ mod tests {
         write(&root.join("a.txt"), "foo bar\nbar foo\r\nfoo\n");
 
         assert_eq!(hits(root, &regex("^foo")), [("a.txt".to_string(), 1, 0), ("a.txt".to_string(), 3, 0)]);
-        // `$` cocok sebelum `\r\n` maupun `\n`.
+        // `$` matches before both `\r\n` and `\n`.
         assert_eq!(hits(root, &regex("foo$")), [("a.txt".to_string(), 2, 4), ("a.txt".to_string(), 3, 0)]);
-        // `\s` tidak pernah memakan akhir baris.
+        // `\s` never consumes the line ending.
         assert_eq!(hits(root, &regex(r"bar\s+bar")), []);
         let (files, _) = run(root, &regex(r"foo\s*$"));
         assert_eq!(files[0].matches.iter().map(|m| (m.line, m.length)).collect::<Vec<_>>(), [(2, 3), (3, 3)]);
@@ -594,19 +594,19 @@ mod tests {
         assert_eq!(files_of(root, &literal("needle")).len(), 6);
         assert_eq!(files_of(root, &with(&["*.rs"])), ["src/main.rs", "src/util/helper.rs"]);
         assert_eq!(files_of(root, &with(&["*.rs", "*.md"])), ["README.md", "src/main.rs", "src/util/helper.rs"]);
-        // Nama folder mencakup isinya, di kedalaman mana pun.
+        // A folder name covers its contents, at any depth.
         assert_eq!(
             files_of(root, &with(&["src"])),
             ["src/app.ts", "src/main.rs", "src/util/helper.rs", "web/src/index.ts"]
         );
-        // Glob bergaris miring dicocokkan dari akar; `*` tidak melewati pemisah.
+        // A glob containing a slash is matched from the root; `*` does not cross separators.
         assert_eq!(files_of(root, &with(&["src/*.ts"])), ["src/app.ts"]);
         assert_eq!(files_of(root, &with(&["./src/*.rs"])), ["src/main.rs"]);
         assert_eq!(files_of(root, &with(&["/src"])), ["src/app.ts", "src/main.rs", "src/util/helper.rs"]);
         assert_eq!(files_of(root, &with(&["**/*.ts"])), ["src/app.ts", "web/src/index.ts"]);
         assert_eq!(files_of(root, &with(&["web/"])), ["web/dist/bundle.js", "web/src/index.ts"]);
         assert_eq!(files_of(root, &with(&["*.{js,md}"])), ["README.md", "web/dist/bundle.js"]);
-        // Glob kosong diabaikan.
+        // Empty globs are ignored.
         assert_eq!(files_of(root, &with(&["", "  "])).len(), 6);
     }
 
@@ -623,7 +623,7 @@ mod tests {
             files_of(root, &without(&["src/util"])),
             ["README.md", "src/app.ts", "src/main.rs", "web/dist/bundle.js", "web/src/index.ts"]
         );
-        // Kecualikan menang atas sertakan.
+        // Exclude wins over include.
         let both = SearchQuery { include: vec!["*.rs".into()], exclude: vec!["util".into()], ..literal("needle") };
         assert_eq!(files_of(root, &both), ["src/main.rs"]);
     }
@@ -639,7 +639,7 @@ mod tests {
         assert_eq!(try_search(&regex(r"a\nb")), WsErrorCode::InvalidPattern);
         let bad_glob = SearchQuery { include: vec!["src/[".into()], ..literal("x") };
         assert_eq!(try_search(&bad_glob), WsErrorCode::InvalidPattern);
-        // Pola literal boleh memuat karakter khusus regex.
+        // A literal pattern may contain regex special characters.
         search(tmp.path(), &literal("(unclosed"), &cancel, &|_| {}).unwrap();
     }
 
@@ -679,7 +679,7 @@ mod tests {
         let start = matches[1].preview_offset as usize;
         assert_eq!(String::from_utf16(&units[start..start + matches[1].length as usize]).unwrap(), "target");
 
-        // Kecocokan yang memuat karakter non-BMP: panjang dalam unit UTF-16.
+        // A match containing non-BMP characters: the length is in UTF-16 units.
         let (files, _) = run(root, &regex("😀 日"));
         assert_eq!((files[0].matches[0].column, files[0].matches[0].length), (3, 4));
     }
@@ -696,7 +696,7 @@ mod tests {
         let middle = &matches[0];
         assert_eq!((middle.column, middle.length), (1000, 6));
         assert_eq!(middle.preview.chars().count(), 400);
-        // Seperempat ruang untuk teks sebelum kecocokan.
+        // A quarter of the room for the text before the match.
         assert_eq!(middle.preview_offset, 98);
         assert!(middle.preview.starts_with("ééé"));
         assert_eq!(&middle.preview[98 * 2..98 * 2 + 6], "NEEDLE");
@@ -706,13 +706,13 @@ mod tests {
         assert_eq!((at_start.column, at_start.preview_offset), (0, 0));
         assert_eq!(at_start.preview.chars().count(), 400);
 
-        // Kecocokan di ujung baris: seluruh ruang dipakai untuk teks sebelumnya.
+        // A match at the end of the line: all the room is used for the preceding text.
         let at_end = &matches[2];
         assert_eq!((at_end.column, at_end.preview_offset), (1000, 394));
         assert_eq!(at_end.preview.chars().count(), 400);
         assert!(at_end.preview.ends_with("zNEEDLE"));
 
-        // Kecocokan yang lebih panjang dari pratinjau.
+        // A match longer than the preview.
         let (files, _) = run(root, &regex("x+"));
         let huge = &files[0].matches[0];
         assert_eq!((huge.length, huge.preview_offset), (1000, 0));
@@ -724,18 +724,18 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path();
         let mut utf16 = vec![0xFF, 0xFE];
-        for unit in "satu\r\ndua é needle\r\n".encode_utf16() {
+        for unit in "one\r\ntwo é needle\r\n".encode_utf16() {
             utf16.extend_from_slice(&unit.to_le_bytes());
         }
         write(&root.join("utf16.txt"), utf16);
-        write(&root.join("bom.txt"), b"\xEF\xBB\xBFneedle di awal\n");
+        write(&root.join("bom.txt"), b"\xEF\xBB\xBFneedle at the start\n");
         write(&root.join("latin1.txt"), b"caf\xe9 needle\n");
 
         let (files, _) = run(root, &literal("needle"));
         let view: Vec<(&str, u32, u32)> = files.iter().map(|f| (f.path.as_str(), f.matches[0].line, f.matches[0].column)).collect();
         assert_eq!(view, [("bom.txt", 1, 0), ("latin1.txt", 1, 5), ("utf16.txt", 2, 6)]);
         assert_eq!(files[1].matches[0].preview, "caf\u{FFFD} needle");
-        assert_eq!(files[2].matches[0].preview, "dua é needle");
+        assert_eq!(files[2].matches[0].preview, "two é needle");
     }
 
     #[test]
@@ -751,12 +751,12 @@ mod tests {
         assert_eq!(files.iter().map(|f| f.matches.len()).sum::<usize>(), 7);
         assert_eq!(summary.files as usize, files.len());
 
-        // Tepat sebanyak batas: tidak terpotong.
+        // Exactly as many as the limit: not truncated.
         let (_, summary) = run(root, &SearchQuery { max_results: 60, ..literal("needle") });
         assert_eq!(summary, SearchSummary { files: 20, matches: 60, truncated: false });
         let (_, summary) = run(root, &SearchQuery { max_results: 59, ..literal("needle") });
         assert_eq!((summary.matches, summary.truncated), (59, true));
-        // Nol berarti tanpa batas.
+        // Zero means unlimited.
         let (_, summary) = run(root, &literal("needle"));
         assert_eq!(summary, SearchSummary { files: 20, matches: 60, truncated: false });
     }
@@ -770,10 +770,10 @@ mod tests {
         }
 
         let cancel = AtomicBool::new(true);
-        let summary = search(root, &literal("needle"), &cancel, &|_| panic!("tidak boleh ada hasil")).unwrap();
+        let summary = search(root, &literal("needle"), &cancel, &|_| panic!("no results expected")).unwrap();
         assert_eq!(summary, SearchSummary { files: 0, matches: 0, truncated: true });
 
-        // Dibatalkan dari callback setelah hasil pertama.
+        // Canceled from the callback after the first result.
         let cancel = AtomicBool::new(false);
         let summary = search(root, &literal("needle"), &cancel, &|_| cancel.store(true, Ordering::Relaxed)).unwrap();
         assert!(summary.truncated);
@@ -803,19 +803,19 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path();
         write(&root.join("a.txt"), "foo(1) and Foo(2)\nnothing\nfoo(3)\r\n");
-        write(&root.join("b.txt"), "tak ada\n");
+        write(&root.join("b.txt"), "none here\n");
         write(&root.join("sub/c.txt"), "foo(x)");
 
         let query = SearchQuery { case_sensitive: true, ..literal("foo(") };
-        let files = ["a.txt".to_string(), "b.txt".to_string(), "sub/c.txt".to_string(), "hilang.txt".to_string()];
+        let files = ["a.txt".to_string(), "b.txt".to_string(), "sub/c.txt".to_string(), "missing.txt".to_string()];
         let summary = replace_in_files(root, &query, "$1bar[", &files).unwrap();
         assert_eq!(summary, ReplaceSummary { files: 2, replacements: 3 });
-        // `$1` tidak ditafsirkan pada mode literal; akhir baris dipertahankan.
+        // `$1` is not interpreted in literal mode; line endings are preserved.
         assert_eq!(fs::read_to_string(root.join("a.txt")).unwrap(), "$1bar[1) and Foo(2)\nnothing\n$1bar[3)\r\n");
-        assert_eq!(fs::read_to_string(root.join("b.txt")).unwrap(), "tak ada\n");
+        assert_eq!(fs::read_to_string(root.join("b.txt")).unwrap(), "none here\n");
         assert_eq!(fs::read_to_string(root.join("sub/c.txt")).unwrap(), "$1bar[x)");
 
-        // Tidak peka huruf dan kata utuh mengikuti kueri.
+        // Case-insensitivity and whole word follow the query.
         write(&root.join("d.txt"), "Cat cats CAT\n");
         let query = SearchQuery { whole_word: true, ..literal("cat") };
         let summary = replace_in_files(root, &query, "dog", &["d.txt".to_string()]).unwrap();
@@ -837,7 +837,7 @@ mod tests {
             "const alpha: u32 = 1; // $\nconst beta: u32 = 22; // $\r\nconst gamma = 3;\n"
         );
 
-        // Jangkar baris sama seperti pada pencarian; baris kosong tidak tersentuh.
+        // Line anchors are the same as in the search; blank lines are untouched.
         write(&root.join("b.txt"), "a  \nb\n\nc \r\n");
         let summary = replace_in_files(root, &regex(r"\s+$"), "", &["b.txt".to_string()]).unwrap();
         assert_eq!(summary, ReplaceSummary { files: 1, replacements: 2 });

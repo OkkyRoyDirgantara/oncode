@@ -1,193 +1,193 @@
-# Dokumen Rancangan OnCode (Native)
+# OnCode Design Document (Native)
 
 | | |
 |---|---|
-| **Status** | v1.0 — diimplementasikan (semua fitur terpasang); penyimpangan, hasil pengukuran, dan yang belum terverifikasi dicatat di [bagian 15](#15-catatan-implementasi) |
-| **Tanggal** | 18 November 2026 |
-| **Menggantikan** | [Rancangan v0.2 (Tauri + React)](arsip/RANCANGAN-v0.2-tauri.md), yang sudah diimplementasikan dan teruji |
-| **Cakupan** | Rancangan produk dan teknis untuk OnCode sebagai aplikasi native |
+| **Status** | v1.0 — implemented (all features in place); deviations, measurement results, and what is still unverified are recorded in [section 15](#15-implementation-notes) |
+| **Date** | November 18, 2026 |
+| **Supersedes** | [Design v0.2 (Tauri + React)](archive/DESIGN-v0.2-tauri.md), which was implemented and tested |
+| **Scope** | Product and technical design for OnCode as a native application |
 
-OnCode adalah aplikasi desktop untuk menyunting kode yang lebih sederhana daripada Visual Studio Code, dengan **source control (Git) sebagai fitur utama**. Dokumen ini merancang ulang OnCode sebagai aplikasi **native**: seluruh tampilan digambar langsung lewat GPU, tanpa WebView dan tanpa JavaScript.
+OnCode is a desktop application for editing code that is simpler than Visual Studio Code, with **source control (Git) as its main feature**. This document redesigns OnCode as a **native** application: the entire UI is drawn directly on the GPU, with no WebView and no JavaScript.
 
-## Daftar Isi
+## Table of Contents
 
-1. [Ringkasan](#1-ringkasan)
-2. [Kebutuhan](#2-kebutuhan)
-3. [Keputusan Teknologi](#3-keputusan-teknologi)
-4. [Arsitektur Sistem](#4-arsitektur-sistem)
-5. [Rancangan UI](#5-rancangan-ui)
-6. [Modul Git](#6-modul-git)
-7. [Komponen yang Dibangun Sendiri](#7-komponen-yang-dibangun-sendiri)
-8. [Pengaturan dan Penyimpanan Data](#8-pengaturan-dan-penyimpanan-data)
-9. [Keamanan](#9-keamanan)
-10. [Strategi Pengujian](#10-strategi-pengujian)
-11. [Build dan Distribusi](#11-build-dan-distribusi)
+1. [Summary](#1-summary)
+2. [Requirements](#2-requirements)
+3. [Technology Decisions](#3-technology-decisions)
+4. [System Architecture](#4-system-architecture)
+5. [UI Design](#5-ui-design)
+6. [Git Module](#6-git-module)
+7. [Self-Built Components](#7-self-built-components)
+8. [Settings and Data Storage](#8-settings-and-data-storage)
+9. [Security](#9-security)
+10. [Testing Strategy](#10-testing-strategy)
+11. [Build and Distribution](#11-build-and-distribution)
 12. [Roadmap](#12-roadmap)
-13. [Risiko dan Mitigasi](#13-risiko-dan-mitigasi)
-14. [Glosarium](#14-glosarium)
-15. [Catatan Implementasi](#15-catatan-implementasi)
+13. [Risks and Mitigations](#13-risks-and-mitigations)
+14. [Glossary](#14-glossary)
+15. [Implementation Notes](#15-implementation-notes)
 
 ---
 
-## 1. Ringkasan
+## 1. Summary
 
-### 1.1 Mengapa dirancang ulang
+### 1.1 Why the redesign
 
-Versi 0.2 dibangun dengan Tauri: backend Rust dan tampilan berupa halaman web (React + CodeMirror) di dalam WebView milik sistem operasi. Versi itu berfungsi dan teruji, tetapi **terasa jauh lebih berat daripada editor native seperti Zed**. Penyebabnya mendasar, bukan soal penyetelan: begitu aplikasi dibuka, ikut berjalan sebuah mesin browser beserta mesin JavaScript-nya, dan setiap baris teks, daftar, dan panel adalah elemen DOM.
+Version 0.2 was built with Tauri: a Rust backend and a UI made of web pages (React + CodeMirror) inside the operating system's WebView. It worked and was tested, but it **felt much heavier than a native editor such as Zed**. The cause is fundamental, not a matter of tuning: as soon as the app opens, a browser engine and its JavaScript engine come along with it, and every line of text, list, and panel is a DOM element.
 
-Rancangan ini mengganti seluruh lapisan tampilan dengan UI native yang digambar GPU. Lapisan di bawahnya, yaitu crate Rust untuk Git, berkas, terminal (PTY), language server, dan GitHub/GitLab, **dipakai ulang**, karena sejak awal tidak bergantung pada Tauri.
+This design replaces the entire view layer with a native, GPU-drawn UI. The layers underneath, namely the Rust crates for Git, files, the terminal (PTY), language servers, and GitHub/GitLab, are **reused**, because they never depended on Tauri in the first place.
 
-### 1.2 Tujuan
+### 1.2 Goals
 
-1. **Ringan.** Target yang akan diukur pada build rilis:
+1. **Lightweight.** Targets to be measured on a release build:
 
-   | Ukuran | Target |
+   | Measure | Target |
    |---|---|
-   | Jendela siap dipakai (cold start) | < 300 ms |
-   | Memori saat diam, satu proyek menengah terbuka | < 150 MB |
-   | Gulir dan mengetik | 120 fps pada layar 120 Hz, tanpa frame yang terasa tersendat |
-   | Jumlah proses | Satu proses aplikasi, ditambah proses anak yang memang diperlukan (`git`, shell, language server) |
+   | Window ready to use (cold start) | < 300 ms |
+   | Idle memory, one medium-sized project open | < 150 MB |
+   | Scrolling and typing | 120 fps on a 120 Hz display, with no perceptible dropped frames |
+   | Process count | One application process, plus the child processes that are actually needed (`git`, shell, language server) |
 
-2. **Setara fitur dengan v0.2.** Tidak ada fitur yang hilang kecuali yang disebut tegas di [2.3](#23-perbedaan-yang-disengaja-dari-v02).
-3. Semua tujuan v0.2 tetap: Git lengkap tanpa mengetik perintah, editor yang cukup untuk kerja nyata, sederhana, lintas platform (Linux, Windows, macOS).
+2. **Feature parity with v0.2.** No feature is lost except those explicitly named in [2.3](#23-intentional-differences-from-v02).
+3. All v0.2 goals stay: full Git without typing commands, an editor good enough for real work, simplicity, cross-platform (Linux, Windows, macOS).
 
-### 1.3 Non-tujuan
+### 1.3 Non-goals
 
-Tidak berubah dari v0.2: tanpa marketplace ekstensi, debugger, remote development, notebook, sinkronisasi pengaturan, fitur AI, dan workspace multi-root.
+Unchanged from v0.2: no extension marketplace, debugger, remote development, notebooks, settings sync, AI features, or multi-root workspaces.
 
-### 1.4 Keputusan yang sudah diambil
+### 1.4 Decisions already made
 
-| Topik | Keputusan |
+| Topic | Decision |
 |---|---|
-| Kerangka UI | GPUI dengan pustaka komponen `gpui-component` |
-| Versi Tauri | Dihapus dari repositori; tidak dipelihara berdampingan |
-| Lingkup rilis native pertama | Setara penuh dengan v0.2, dalam satu rilis |
+| UI framework | GPUI with the `gpui-component` component library |
+| Tauri version | Removed from the repository; not maintained side by side |
+| Scope of the first native release | Full parity with v0.2, in one release |
 
 ---
 
-## 2. Kebutuhan
+## 2. Requirements
 
-### 2.1 Kebutuhan fungsional
+### 2.1 Functional requirements
 
-Daftar di bawah adalah **daftar kesetaraan**: semua butir sudah ada di v0.2 dan wajib ada di rilis native pertama. Rinciannya tidak diulang di sini; lihat bagian 2 pada [rancangan v0.2](arsip/RANCANGAN-v0.2-tauri.md#2-kebutuhan).
+The list below is the **parity list**: every item already exists in v0.2 and must exist in the first native release. The details are not repeated here; see section 2 of the [v0.2 design](archive/DESIGN-v0.2-tauri.md#2-requirements).
 
-| Area | Butir |
+| Area | Items |
 |---|---|
-| Source control | Status; stage / unstage / discard per berkas, per hunk, per baris; commit (amend, sign-off); diff berdampingan dan unified; branch dan merge; kelola remote; fetch / pull / push dengan dialog kredensial (HTTPS dan SSH); clone dan init; graph dengan pencarian; detail commit dan perbandingan dua commit; stash; tag; cherry-pick; revert; reset; blame; riwayat berkas; editor konflik; interactive rebase; worktree; submodule; reflog; Git Output |
-| Editor dan workspace | Explorer dengan penanda Git; operasi berkas (hapus ke tempat sampah); tab dan split; highlight sintaks; cari/ganti; lipat kode; quick open; command palette; pencarian dan penggantian di seluruh proyek; deteksi perubahan dari luar; encoding dan akhir baris dipertahankan; pemulihan tab |
-| Terminal | Terminal terintegrasi di folder proyek; beberapa terminal; salin/tempel; pencarian; tautan bisa diklik |
-| LSP | Completion, hover, signature help, diagnostics dan panel Problems, go to definition, references, rename, format; konfigurasi server per bahasa |
-| GitHub dan GitLab | Login (device flow dan token), clone dari akun, daftar / detail / checkout / buat pull request, status CI |
-| Kerangka | Mode terbatas untuk folder yang belum dipercaya; pengaturan; `keybindings.json`; layar awal; beberapa jendela |
+| Source control | Status; stage / unstage / discard per file, per hunk, per line; commit (amend, sign-off); side-by-side and unified diff; branches and merge; remote management; fetch / pull / push with a credential dialog (HTTPS and SSH); clone and init; graph with search; commit details and comparison of two commits; stash; tags; cherry-pick; revert; reset; blame; file history; conflict editor; interactive rebase; worktrees; submodules; reflog; Git Output |
+| Editor and workspace | Explorer with Git markers; file operations (delete to trash); tabs and splits; syntax highlighting; find/replace; code folding; quick open; command palette; project-wide search and replace; detection of external changes; encoding and line endings preserved; tab restoration |
+| Terminal | Integrated terminal in the project folder; multiple terminals; copy/paste; search; clickable links |
+| LSP | Completion, hover, signature help, diagnostics and the Problems panel, go to definition, references, rename, format; per-language server configuration |
+| GitHub and GitLab | Login (device flow and token), clone from an account, list / details / checkout / create pull requests, CI status |
+| Framework | Restricted mode for untrusted folders; settings; `keybindings.json`; welcome screen; multiple windows |
 
-Uji end-to-end v0.2 (34 skenario di `e2e/`) menjadi **daftar periksa kesetaraan**: setiap skenario harus punya padanan uji di versi native (lihat [bagian 10](#10-strategi-pengujian)).
+The v0.2 end-to-end tests (34 scenarios in `e2e/`) become the **parity checklist**: every scenario must have an equivalent test in the native version (see [section 10](#10-testing-strategy)).
 
-### 2.2 Kebutuhan non-fungsional
+### 2.2 Non-functional requirements
 
-| Aspek | Target |
+| Aspect | Target |
 |---|---|
-| Kinerja | Seperti [1.2](#12-tujuan) |
-| Ukuran installer | < 40 MB (grammar tree-sitter untuk banyak bahasa menambah ukuran binary) |
-| Status Git | Refresh < 300 ms pada repositori 50.000 berkas |
-| Graph | Lancar pada riwayat 100.000 commit |
-| Berkas besar | Hingga 50 MB bisa dibuka; fitur berat dimatikan di atas 5 MB |
-| Keandalan | Tidak ada aksi yang menghilangkan pekerjaan tanpa konfirmasi eksplisit |
-| Platform | Linux (x86_64, aarch64; Wayland dan X11), Windows 10/11 (x86_64), macOS 12+ |
-| Kebutuhan grafis | GPU dengan Vulkan (Linux), DirectX 11 (Windows), atau Metal (macOS); render perangkat lunak sebagai cadangan bila tersedia di sistem |
-| Prasyarat pengguna | Git ≥ 2.40; language server dipasang sendiri |
-| Bahasa antarmuka | Inggris |
+| Performance | As in [1.2](#12-goals) |
+| Installer size | < 40 MB (tree-sitter grammars for many languages add to the binary size) |
+| Git status | Refresh < 300 ms on a repository with 50,000 files |
+| Graph | Smooth on a history of 100,000 commits |
+| Large files | Files up to 50 MB can be opened; heavy features are turned off above 5 MB |
+| Reliability | No action discards work without explicit confirmation |
+| Platforms | Linux (x86_64, aarch64; Wayland and X11), Windows 10/11 (x86_64), macOS 12+ |
+| Graphics requirements | A GPU with Vulkan (Linux), DirectX 11 (Windows), or Metal (macOS); software rendering as a fallback where the system provides it |
+| User prerequisites | Git ≥ 2.40; language servers are installed by the user |
+| Interface language | English |
 
-### 2.3 Perbedaan yang disengaja dari v0.2
+### 2.3 Intentional differences from v0.2
 
-| Hal | v0.2 | Native v1.0 | Alasan |
+| Item | v0.2 | Native v1.0 | Reason |
 |---|---|---|---|
-| Menyunting di dalam tampilan diff | Sisi kanan diff working tree bisa disunting | Diff baca-saja; tombol "Open File" membuka berkas di editor | Komponen diff yang dipakai bersifat baca-saja; membuat diff yang bisa disunting adalah pekerjaan besar dengan manfaat kecil |
-| Deskripsi pull request | HTML hasil Markdown, disanitasi | Dirender sebagai teks kaya native | Tidak ada lagi HTML, sehingga seluruh kelas masalah injeksi skrip hilang |
-| Multi-kursor | Ada | Ada (kursor tambahan dan seleksi kolom bawaan komponen editor) | Terjawab di N0; lihat [15.2](#152-hasil-pembuktian-n0) |
-| Rename lintas berkas (LSP) | Hanya berkas yang sedang terbuka | Semua berkas yang terdampak | Penyuntingan kini dilakukan di Rust ([7.5](#75-klien-lsp)) |
+| Editing inside the diff view | The right side of the working-tree diff could be edited | Read-only diff; an "Open File" button opens the file in the editor | The diff component used is read-only; building an editable diff is a large piece of work with little benefit |
+| Pull request description | HTML rendered from Markdown, sanitized | Rendered as native rich text | There is no HTML any more, so the whole class of script-injection problems disappears |
+| Multi-cursor | Yes | Yes (extra cursors and column selection built into the editor component) | Answered in N0; see [15.2](#152-n0-proof-results) |
+| Rename across files (LSP) | Only the currently open files | All affected files | Editing is now done in Rust ([7.5](#75-lsp-client)) |
 
-### 2.4 Yang tetap di luar lingkup
+### 2.4 Still out of scope
 
-"Setara" berarti setara dengan yang **benar-benar ada** di v0.2. Hal berikut belum ada di v0.2 dan tidak ditambahkan di rilis native pertama:
+"Parity" means parity with what **actually exists** in v0.2. The following do not exist in v0.2 and are not added in the first native release:
 
-- Pembaruan otomatis dan penandatanganan kode (memerlukan kunci dan sertifikat milik pemilik proyek).
-- Hot exit: perubahan yang belum disimpan tidak dicadangkan saat aplikasi ditutup.
-- Di Graph: menyeret branch ke branch, pencarian hash, filter tanggal.
-- Komentar review inline dan merge pull request dari aplikasi.
-- Bisect, `git log -L`, dukungan LFS khusus, `.editorconfig`, pratinjau gambar dan Markdown.
-- Split editor ke lebih dari satu arah sekaligus.
+- Automatic updates and code signing (they require keys and certificates owned by the project owner).
+- Hot exit: unsaved changes are not backed up when the app is closed.
+- In the Graph: dragging a branch onto a branch, hash search, date filters.
+- Inline review comments and merging pull requests from the app.
+- Bisect, `git log -L`, dedicated LFS support, `.editorconfig`, image and Markdown previews.
+- Splitting the editor in more than one direction at once.
 
 ---
 
-## 3. Keputusan Teknologi
+## 3. Technology Decisions
 
-### 3.1 Ringkasan stack
+### 3.1 Stack summary
 
-Versi diperiksa di crates.io dan docs.rs pada tanggal dokumen ini.
+Versions were checked on crates.io and docs.rs on the date of this document.
 
-| Lapisan | Pilihan | Versi | Catatan |
+| Layer | Choice | Version | Notes |
 |---|---|---|---|
-| Kerangka UI | GPUI | mengikuti `gpui-component` | Apache-2.0. Pra-1.0; lihat [3.2](#32-gpui-dan-gpui-component) |
-| Komponen UI | `gpui-component` | 0.10 | Apache-2.0; editor kode, diff, dock, tab, tree, daftar virtual, command palette, dialog |
-| Highlight sintaks | tree-sitter (lewat `gpui-component`) | 0.27 | ± 35 grammar tersedia sebagai fitur opsional |
-| Emulasi terminal | `alacritty_terminal` | 0.26 | Tampilannya dibuat sendiri ([7.4](#74-terminal)) |
-| PTY | `portable-pty` (lewat `oncode-terminal`) | 0.9 | Sudah ada |
-| Diff teks | `imara-diff` | 0.2 | Untuk penanda perubahan di gutter editor |
-| Tipe protokol LSP | `lsp-types` | 0.97 | Sama dengan yang dipakai `gpui-component` |
-| Pemantau berkas, pencarian, indeks | `notify`, `grep-*`, `ignore`, `nucleo-matcher` (lewat `oncode-workspace`) | — | Sudah ada |
-| HTTP dan keychain | `reqwest`, `keyring` (lewat `oncode-forge`) | 0.13 / 4 | Sudah ada |
-| Pengemasan | `cargo-packager` | 0.11 | deb, AppImage, NSIS, DMG |
-| Bahasa | Rust saja | ≥ 1.88 | Tidak ada lagi TypeScript, Node.js, atau pnpm |
+| UI framework | GPUI | follows `gpui-component` | Apache-2.0. Pre-1.0; see [3.2](#32-gpui-and-gpui-component) |
+| UI components | `gpui-component` | 0.10 | Apache-2.0; code editor, diff, dock, tabs, tree, virtual list, command palette, dialogs |
+| Syntax highlighting | tree-sitter (via `gpui-component`) | 0.27 | ± 35 grammars available as optional features |
+| Terminal emulation | `alacritty_terminal` | 0.26 | The view is built in-house ([7.4](#74-terminal)) |
+| PTY | `portable-pty` (via `oncode-terminal`) | 0.9 | Already exists |
+| Text diff | `imara-diff` | 0.2 | For change markers in the editor gutter |
+| LSP protocol types | `lsp-types` | 0.97 | Same as the one `gpui-component` uses |
+| File watching, search, index | `notify`, `grep-*`, `ignore`, `nucleo-matcher` (via `oncode-workspace`) | — | Already exist |
+| HTTP and keychain | `reqwest`, `keyring` (via `oncode-forge`) | 0.13 / 4 | Already exist |
+| Packaging | `cargo-packager` | 0.11 | deb, AppImage, NSIS, DMG |
+| Language | Rust only | ≥ 1.88 | No more TypeScript, Node.js, or pnpm |
 
-### 3.2 GPUI dan `gpui-component`
+### 3.2 GPUI and `gpui-component`
 
-GPUI adalah kerangka UI yang dibuat untuk editor Zed: ditulis dalam Rust, menggambar lewat GPU, dan dirancang untuk antarmuka padat teks.
+GPUI is the UI framework built for the Zed editor: written in Rust, drawing through the GPU, and designed for text-dense interfaces.
 
-**Yang perlu dipahami sebelum bergantung padanya:**
+**What to understand before depending on it:**
 
-- GPUI masih pra-1.0 dan dokumentasinya sendiri menyatakan perubahan yang merusak kompatibilitas sering terjadi antarversi.
-- `gpui-component` 0.10 tidak memakai rilis `gpui` di crates.io (0.2.2), melainkan snapshot bernama `gpui-pre`. Akibatnya **versi GPUI yang kita pakai ditentukan oleh `gpui-component`**, dan pustaka GPUI lain di luar ekosistem itu belum tentu cocok.
-- Versi keduanya dikunci persis (`=`) di `Cargo.toml`. Kenaikan versi dilakukan sengaja, satu per satu, dengan seluruh uji dijalankan.
+- GPUI is still pre-1.0 and its own documentation says breaking changes are frequent between versions.
+- `gpui-component` 0.10 does not use the `gpui` release on crates.io (0.2.2) but a snapshot named `gpui-pre`. As a result, **the GPUI version we use is determined by `gpui-component`**, and other GPUI libraries outside that ecosystem are not guaranteed to be compatible.
+- Both versions are pinned exactly (`=`) in `Cargo.toml`. Version bumps are done deliberately, one at a time, with the whole test suite run.
 
-**Yang sudah disediakan `gpui-component`** (dan karena itu tidak perlu dibuat):
+**What `gpui-component` already provides** (and therefore need not be built):
 
-| Kebutuhan | Komponen |
+| Need | Component |
 |---|---|
-| Editor kode | `input::Editor` di atas `EditorState`: rope UTF-8, highlight tree-sitter, lipat kode, pencarian, dekorasi gutter, mode baca-saja, indentasi |
-| Kait LSP | `input::Lsp` dengan penyedia completion, hover, definition, code action, warna dokumen, dan semantic token |
-| Diff | `diff::Diff`: tampilan patch baca-saja, tervirtualisasi, mode berdampingan atau unified, penanda gutter interaktif, dekorasi baris, anotasi |
-| Tata letak | `dock`, `resizable`, `tab`, `TitleBar` |
-| Daftar dan pohon | `list` (termasuk daftar virtual), `tree`, `table` |
-| Lapisan atas | `command` (command palette), `menu`, `native_menu`, `dialog`, `notification` |
-| Teks kaya | `text`, untuk merender Markdown deskripsi pull request |
-| Tema | `theme` |
+| Code editor | `input::Editor` on top of `EditorState`: UTF-8 rope, tree-sitter highlighting, code folding, search, gutter decorations, read-only mode, indentation |
+| LSP hooks | `input::Lsp` with providers for completion, hover, definition, code actions, document colors, and semantic tokens |
+| Diff | `diff::Diff`: read-only patch view, virtualized, side-by-side or unified mode, interactive gutter markers, line decorations, annotations |
+| Layout | `dock`, `resizable`, `tab`, `TitleBar` |
+| Lists and trees | `list` (including virtual list), `tree`, `table` |
+| Overlays | `command` (command palette), `menu`, `native_menu`, `dialog`, `notification` |
+| Rich text | `text`, for rendering the Markdown of pull request descriptions |
+| Theme | `theme` |
 
-### 3.3 Alternatif yang ditolak
+### 3.3 Rejected alternatives
 
-| Alternatif | Alasan ditolak |
+| Alternative | Reason rejected |
 |---|---|
-| Tetap di Tauri dan mengoptimalkan (memecah bundel, membatasi tab hidup) | Mengurangi beban, tetapi tidak menghilangkan WebView; tidak akan menyamai aplikasi native |
-| Memakai crate editor milik Zed (`editor`, `terminal_view`, `project`) | Berlisensi GPL-3.0, sehingga OnCode harus ikut GPL; selain itu crate-crate tersebut terikat erat pada struktur internal Zed |
-| Floem (kerangka Lapce) | Lebih sedikit komponen siap pakai; tidak ada komponen diff, dock, atau command palette yang setara |
-| Iced | Matang, tetapi widget editor teksnya dasar: tanpa LSP, lipat kode, atau diff |
-| Qt (C++/QML) | Berarti menulis ulang dalam C++ dan menghubungkan crate Rust lewat FFI; backend yang sudah teruji tidak bisa dipakai langsung |
+| Stay on Tauri and optimize (split bundles, limit live tabs) | Reduces the load but does not remove the WebView; it would not match a native app |
+| Use Zed's own editor crates (`editor`, `terminal_view`, `project`) | Licensed GPL-3.0, so OnCode would have to be GPL too; moreover those crates are tightly bound to Zed's internal structure |
+| Floem (the Lapce framework) | Fewer ready-made components; no equivalent diff, dock, or command palette component |
+| Iced | Mature, but its text editor widget is basic: no LSP, code folding, or diff |
+| Qt (C++/QML) | Would mean rewriting in C++ and connecting the Rust crates through FFI; the already-tested backend could not be used directly |
 
-### 3.4 Git tetap lewat `git` CLI
+### 3.4 Git stays on the `git` CLI
 
-Keputusan v0.2 tidak berubah: semua operasi Git dijalankan lewat `git` milik sistem, karena hanya CLI yang mendukung penuh interactive rebase, worktree, submodule, hooks, credential helper, dan signing. Lapisan ini sudah ada di `crates/oncode-git` beserta uji integrasinya.
+The v0.2 decision is unchanged: all Git operations run through the system `git`, because only the CLI fully supports interactive rebase, worktrees, submodules, hooks, credential helpers, and signing. This layer already exists in `crates/oncode-git` together with its integration tests.
 
 ---
 
-## 4. Arsitektur Sistem
+## 4. System Architecture
 
-### 4.1 Gambaran komponen
+### 4.1 Component overview
 
 ```mermaid
 flowchart TB
-    subgraph App["Proses OnCode"]
+    subgraph App["OnCode process"]
         direction TB
-        UI["app: tampilan GPUI per fitur"]
-        Core["oncode-core: state aplikasi"]
+        UI["app: GPUI views per feature"]
+        Core["oncode-core: application state"]
         UI --> Core
         Core --> GitCrate["oncode-git"]
         Core --> WsCrate["oncode-workspace"]
@@ -197,126 +197,126 @@ flowchart TB
         UI --> DiffCrate["oncode-diff"]
     end
 
-    GitCrate -->|"menjalankan"| GitCli["git CLI"]
-    GitCli -->|"askpass dan editor"| Helper["oncode-helper"]
-    Helper <-->|"socket lokal"| GitCrate
-    WsCrate --> Disk["Sistem berkas"]
-    TermCrate --> Shell["Shell lewat PTY"]
-    LspCrate --> Servers["Language server"]
-    ForgeCrate --> Apis["API GitHub dan GitLab"]
-    ForgeCrate --> Keychain["Keychain OS"]
+    GitCrate -->|"runs"| GitCli["git CLI"]
+    GitCli -->|"askpass and editor"| Helper["oncode-helper"]
+    Helper <-->|"local socket"| GitCrate
+    WsCrate --> Disk["File system"]
+    TermCrate --> Shell["Shell via PTY"]
+    LspCrate --> Servers["Language servers"]
+    ForgeCrate --> Apis["GitHub and GitLab APIs"]
+    ForgeCrate --> Keychain["OS keychain"]
 ```
 
-Perbedaan utama dari v0.2: **tidak ada lagi batas IPC**. Dulu frontend dan backend berbicara lewat command dan event Tauri dengan data yang diserialisasi ke JSON; sekarang tampilan memanggil fungsi Rust secara langsung, di proses yang sama.
+The main difference from v0.2: **there is no IPC boundary any more**. Previously the frontend and backend talked through Tauri commands and events with data serialized to JSON; now the views call Rust functions directly, in the same process.
 
-### 4.2 Struktur direktori
+### 4.2 Directory structure
 
 ```
 oncode/
-├─ app/                          Binary GPUI
+├─ app/                          GPUI binary
 │  └─ src/
 │     ├─ main.rs
-│     ├─ workbench/              Jendela, activity bar, sidebar, tab, panel bawah, status bar
-│     ├─ commands.rs             Registry command dan keybinding
+│     ├─ workbench/              Window, activity bar, sidebar, tabs, bottom panel, status bar
+│     ├─ commands.rs             Command and keybinding registry
 │     └─ features/
 │        ├─ explorer/
-│        ├─ editor/              Tab berkas, buffer, penanda Git, blame
+│        ├─ editor/              File tabs, buffers, Git markers, blame
 │        ├─ search/
-│        ├─ scm/                 Panel Source Control, diff, editor konflik
-│        ├─ graph/               Graph, detail commit, dialog rebase, reflog
+│        ├─ scm/                 Source Control panel, diff, conflict editor
+│        ├─ graph/               Graph, commit details, rebase dialog, reflog
 │        ├─ terminal/
-│        ├─ lsp/                 Penyedia LSP untuk editor, panel Problems
-│        ├─ forge/               Akun, pull request
+│        ├─ lsp/                 LSP providers for the editor, Problems panel
+│        ├─ forge/               Accounts, pull requests
 │        └─ settings/
 ├─ crates/
-│  ├─ oncode-core/               BARU: state aplikasi tanpa UI
-│  ├─ oncode-diff/               BARU: chunk diff antara dua teks
-│  ├─ oncode-git/                Tetap
-│  ├─ oncode-workspace/          Tetap
-│  ├─ oncode-terminal/           Tetap
-│  ├─ oncode-lsp/                Diperluas: klien JSON-RPC
-│  ├─ oncode-forge/              Tetap
-│  └─ oncode-helper/             Tetap
+│  ├─ oncode-core/               NEW: application state without UI
+│  ├─ oncode-diff/               NEW: diff chunks between two texts
+│  ├─ oncode-git/                Unchanged
+│  ├─ oncode-workspace/          Unchanged
+│  ├─ oncode-terminal/           Unchanged
+│  ├─ oncode-lsp/                Extended: JSON-RPC client
+│  ├─ oncode-forge/              Unchanged
+│  └─ oncode-helper/             Unchanged
 └─ docs/
 ```
 
-### 4.3 Yang dipakai ulang, dipindahkan, dan dihapus
+### 4.3 What is reused, moved, and removed
 
-| Bagian v0.2 | Nasib | Keterangan |
+| v0.2 part | Fate | Notes |
 |---|---|---|
-| `crates/oncode-git`, `-workspace`, `-terminal`, `-forge`, `-helper` | **Dipakai ulang apa adanya** | Beserta ± 270 uji unit dan integrasinya |
-| `crates/oncode-lsp` | **Diperluas** | Pengelola proses dan pembingkai pesan tetap; ditambah klien JSON-RPC ([7.5](#75-klien-lsp)) |
-| `src-tauri/src/state.rs`, `settings.rs`, `store.rs`, `tokens.rs` | **Dipindahkan** ke `crates/oncode-core` | Logika registry repositori, penjadwalan snapshot, kepercayaan folder, penyimpanan token; ketergantungan pada Tauri dilepas |
-| `src-tauri/src/commands/*` | **Dihapus** | Hanya pembungkus IPC |
-| `src/` (React, ± 17.000 baris) | **Ditulis ulang** sebagai `app/` | Perilakunya menjadi acuan; kodenya tidak bisa dipakai |
-| Logika murni di frontend (`scm/lines.ts`, `scm/conflictState.ts`, `graph/rebasePlan.ts`, `app/keybindings.ts`, pencocokan pencarian) | **Diterjemahkan ke Rust** beserta ujinya | Aturan yang sama, bahasa berbeda |
-| `tauri-specta`, `src/ipc/bindings.ts`, CSP, capability | **Dihapus** | Tidak ada lagi batas IPC maupun WebView |
-| `e2e/` (WebDriver) | **Dihapus**; skenarionya menjadi daftar periksa | WebDriver hanya berlaku untuk WebView |
+| `crates/oncode-git`, `-workspace`, `-terminal`, `-forge`, `-helper` | **Reused as is** | Together with their ± 270 unit and integration tests |
+| `crates/oncode-lsp` | **Extended** | The process manager and message framing stay; a JSON-RPC client is added ([7.5](#75-lsp-client)) |
+| `src-tauri/src/state.rs`, `settings.rs`, `store.rs`, `tokens.rs` | **Moved** to `crates/oncode-core` | Logic for the repository registry, snapshot scheduling, folder trust, and token storage; the dependency on Tauri is removed |
+| `src-tauri/src/commands/*` | **Removed** | Only IPC wrappers |
+| `src/` (React, ± 17,000 lines) | **Rewritten** as `app/` | Its behavior is the reference; its code cannot be reused |
+| Pure frontend logic (`scm/lines.ts`, `scm/conflictState.ts`, `graph/rebasePlan.ts`, `app/keybindings.ts`, search matching) | **Translated to Rust** together with its tests | Same rules, different language |
+| `tauri-specta`, `src/ipc/bindings.ts`, CSP, capabilities | **Removed** | There is no IPC boundary or WebView any more |
+| `e2e/` (WebDriver) | **Removed**; its scenarios become a checklist | WebDriver only applies to a WebView |
 
-### 4.4 `oncode-core`: state aplikasi tanpa UI
+### 4.4 `oncode-core`: application state without UI
 
-`oncode-core` memuat semua state yang tidak bergantung pada tampilan, sehingga bisa diuji tanpa membuka jendela:
+`oncode-core` holds all the state that does not depend on the views, so it can be tested without opening a window:
 
-- **Registry repositori** dan **penjadwalan snapshot**: permintaan refresh beruntun digabung; selama aplikasi sendiri menulis, refresh ditahan sampai selesai (aturan dari v0.2).
-- **Workspace**: akar folder, status kepercayaan, pemantau berkas, indeks berkas.
-- **Permintaan ke pengguna**: saat `git` meminta kredensial atau pesan commit lewat `oncode-helper`, `oncode-core` meneruskannya ke UI lewat sebuah kanal dan menunggu jawabannya.
-- **Operasi yang bisa dibatalkan**, pengaturan, data tersimpan, dan penyimpanan token dengan cadangan memori.
+- **Repository registry** and **snapshot scheduling**: consecutive refresh requests are merged; while the app itself is writing, refresh is held back until it finishes (a rule from v0.2).
+- **Workspace**: the folder root, trust status, file watcher, file index.
+- **Requests to the user**: when `git` asks for credentials or a commit message through `oncode-helper`, `oncode-core` forwards the request to the UI over a channel and waits for the answer.
+- **Cancellable operations**, settings, persisted data, and token storage with an in-memory fallback.
 
-`oncode-core` menyiarkan perubahan lewat kanal; lapisan `app` meneruskannya ke entitas GPUI.
+`oncode-core` broadcasts changes over channels; the `app` layer forwards them to GPUI entities.
 
-### 4.5 Model konkurensi
+### 4.5 Concurrency model
 
-GPUI membedakan dua eksekutor, dan pembagian kerjanya tegas:
+GPUI distinguishes two executors, and the division of work is strict:
 
-| Tempat | Yang dikerjakan |
+| Where | What is done there |
 |---|---|
-| **Foreground** (thread utama) | Semua pembaruan entitas dan penggambaran. Tidak boleh ada I/O yang menunggu. |
-| **Background** | Menjalankan `git`, membaca dan menulis berkas, pencarian, permintaan HTTP, parsing keluaran |
+| **Foreground** (main thread) | All entity updates and drawing. No blocking I/O allowed. |
+| **Background** | Running `git`, reading and writing files, search, HTTP requests, output parsing |
 
-Crate backend memakai `tokio`. Karena GPUI punya eksekutornya sendiri, `oncode-core` memiliki satu runtime `tokio` tersendiri; tampilan mengirim pekerjaan ke sana dan menerima hasilnya di thread utama. Pola ini dibuktikan di tahap N0 sebelum fitur dibangun di atasnya.
+The backend crates use `tokio`. Because GPUI has its own executor, `oncode-core` owns a separate `tokio` runtime; the views send work to it and receive the results on the main thread. This pattern was proven in stage N0 before features were built on it.
 
 ```mermaid
 sequenceDiagram
-    participant W as Pemantau berkas
+    participant W as File watcher
     participant C as oncode-core
     participant G as oncode-git
-    participant E as Entitas repositori
-    participant V as Panel Source Control
+    participant E as Repository entity
+    participant V as Source Control panel
 
-    W->>C: Perubahan di working tree atau folder .git
-    Note over C: Digabung dan ditahan selama aplikasi menulis
-    C->>G: snapshot di runtime latar
+    W->>C: Change in the working tree or .git folder
+    Note over C: Merged and held while the app is writing
+    C->>G: snapshot on the background runtime
     G-->>C: RepoSnapshot
-    C-->>E: Kirim ke thread utama
-    E-->>V: Beri tahu pengamat lalu gambar ulang
-    V->>C: Stage satu berkas
-    C->>G: git add di runtime latar
-    G-->>C: Selesai
-    C->>G: snapshot baru
-    C-->>E: RepoSnapshot baru
+    C-->>E: Send to the main thread
+    E-->>V: Notify observers, then redraw
+    V->>C: Stage one file
+    C->>G: git add on the background runtime
+    G-->>C: Done
+    C->>G: new snapshot
+    C-->>E: new RepoSnapshot
 ```
 
-### 4.6 Buffer berkas
+### 4.6 File buffers
 
-Di GPUI, state editor adalah entitas (`Entity<EditorState>`) dan tampilan hanyalah elemen yang merujuknya. Karena itu satu berkas cukup punya **satu** entitas state yang dipakai bersama oleh semua tab dan split yang menampilkannya. Mekanisme sinkronisasi antar-editor di v0.2 tidak diperlukan lagi.
+In GPUI, editor state is an entity (`Entity<EditorState>`) and the view is just an element that refers to it. For that reason one file needs only **one** state entity, shared by all tabs and splits that show it. The cross-editor synchronization mechanism of v0.2 is no longer needed.
 
-Registry buffer (di `app/features/editor`) memetakan path ke entitas, menghitung pemakaian, dan menyimpan isi tersimpan terakhir, encoding, dan akhir baris. Aturan v0.2 tetap: buffer bersih dimuat ulang saat berkas berubah di disk; buffer berisi perubahan ditandai konflik dan pengguna memilih.
+The buffer registry (in `app/features/editor`) maps paths to entities, counts usage, and keeps the last saved content, encoding, and line endings. The v0.2 rules remain: a clean buffer is reloaded when the file changes on disk; a buffer with changes is marked as conflicting and the user chooses.
 
 ---
 
-## 5. Rancangan UI
+## 5. UI Design
 
-### 5.1 Tata letak
+### 5.1 Layout
 
-Tata letak tidak berubah dari v0.2; yang berubah adalah cara menggambarnya.
+The layout is unchanged from v0.2; what changes is how it is drawn.
 
 ```
 ┌────┬──────────────────────┬──────────────────────────────────────────────────────┐
 │ ▣  │ SOURCE CONTROL       │ main.rs ×   lib.rs   README.md ●                      │
 │ ⌕  │                      ├──────────────────────────────────────────────────────┤
-│ ⑂  │  (isi sidebar sesuai │                    Area editor                       │
-│ ◉  │   ikon yang aktif)   │              (tab, bisa di-split)                    │
-│ ⇄  │                      ├──────────────────────────────────────────────────────┤
+│ ⑂  │  (sidebar content    │                    Editor area                       │
+│ ◉  │   follows the active │              (tabs, can be split)                    │
+│ ⇄  │   icon)              ├──────────────────────────────────────────────────────┤
 │ ▭  │                      │ TERMINAL   PROBLEMS   GIT OUTPUT                     │
 │ ⚙  │                      │ $ cargo build                                        │
 ├────┴──────────────────────┴──────────────────────────────────────────────────────┤
@@ -324,384 +324,384 @@ Tata letak tidak berubah dari v0.2; yang berubah adalah cara menggambarnya.
 └──────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-| Area | Komponen `gpui-component` | Catatan |
+| Area | `gpui-component` component | Notes |
 |---|---|---|
-| Kerangka jendela, sidebar, area editor, panel bawah | `dock`, `resizable` | Sidebar dan panel bawah bisa diciutkan |
-| Tab editor dan tab panel | `tab` | Tab pratinjau, penanda belum-disimpan, menu konteks |
-| Explorer, daftar perubahan, hasil pencarian, daftar ref | `tree`, `list` (virtual) | |
-| Command palette, quick open, pemilih branch | `command` | |
-| Dialog konfirmasi, masukan, kredensial | `dialog` | |
-| Menu konteks | `menu` | |
-| Toast | `notification` | |
-| Bilah judul | `TitleBar` | |
+| Window frame, sidebar, editor area, bottom panel | `dock`, `resizable` | The sidebar and bottom panel can be collapsed |
+| Editor tabs and panel tabs | `tab` | Preview tabs, unsaved marker, context menu |
+| Explorer, change list, search results, ref list | `tree`, `list` (virtual) | |
+| Command palette, quick open, branch picker | `command` | |
+| Confirmation, input, and credential dialogs | `dialog` | |
+| Context menus | `menu` | |
+| Toasts | `notification` | |
+| Title bar | `TitleBar` | |
 
-Wireframe rinci untuk panel Source Control, Graph, editor konflik, dan dialog rebase di [rancangan v0.2 bagian 5](arsip/RANCANGAN-v0.2-tauri.md#5-rancangan-uiux) **tetap berlaku**.
+The detailed wireframes for the Source Control panel, Graph, conflict editor, and rebase dialog in [v0.2 design section 5](archive/DESIGN-v0.2-tauri.md#5-uiux-design) **remain valid**.
 
-### 5.2 Hal yang dipelajari dari v0.2 dan dibawa ke rancangan ini
+### 5.2 What was learned from v0.2 and carried into this design
 
-- **Setiap fitur punya pintu masuk yang terlihat.** Terminal di v0.2 awalnya hanya bisa dibuka lewat pintasan; sekarang tombol "Terminal" di status bar dan tombol panel di activity bar adalah bagian dari rancangan.
-- **Graph harus tetap terbaca saat sempit.** Kolom penulis dan hash disembunyikan lebih dulu; subjek commit dan lencana ref selalu terlihat.
-- **Pengaturan bisa dibuka tanpa folder**, agar path Git bisa diperbaiki saat Git tidak ditemukan.
+- **Every feature has a visible entry point.** In v0.2 the terminal could at first only be opened with a shortcut; now the "Terminal" button in the status bar and the panel button in the activity bar are part of the design.
+- **The Graph must stay readable when narrow.** The author and hash columns are hidden first; the commit subject and ref badges are always visible.
+- **Settings can be opened without a folder**, so the Git path can be fixed when Git is not found.
 
-### 5.3 Command, keybinding, dan tema
+### 5.3 Commands, keybindings, and themes
 
-- Registry command dan format keybinding (`Mod+Shift+P`, `keybindings.json`) dipertahankan. GPUI punya sistem aksi dan konteks tombolnya sendiri; registry kita dipetakan ke sana, sehingga berkas pengguna dari v0.2 tetap berlaku.
-- Dua tema bawaan (gelap dan terang) plus mengikuti sistem, didefinisikan lewat `theme` milik `gpui-component`. Warna Git (ditambah, diubah, dihapus, konflik) dan warna jalur graph didefinisikan sekali dan dipakai di editor, daftar, dan terminal.
-
----
-
-## 6. Modul Git
-
-Lapisan Git (`crates/oncode-git`) **tidak berubah**. Ringkasan kontraknya, yang rinciannya ada di [rancangan v0.2 bagian 6](arsip/RANCANGAN-v0.2-tauri.md#6-modul-git) dan di kode beserta ujinya:
-
-| Topik | Yang berlaku |
-|---|---|
-| Runner | Argumen berupa array, lingkungan tetap, antrean tulis per repositori, pembatalan, progres, pencatatan ke Git Output |
-| Status | `git status --porcelain=v2 -z`; operasi yang belum selesai dideteksi dari direktori Git |
-| Staging parsial | Sambung-potong baris dengan sidik isi kedua sisi, ditulis lewat `hash-object` + `update-index` |
-| Autentikasi | `oncode-helper` sebagai `GIT_ASKPASS` dan `SSH_ASKPASS`, socket lokal dengan token sekali pakai |
-| Interactive rebase | `oncode-helper` sebagai editor urutan dan editor pesan |
-| Konflik | Tiga versi dari index digabung ulang dengan `git merge-file --diff3` menjadi segmen |
-| Galat | Diklasifikasi menjadi kode (`pushRejected`, `noUpstream`, `dirtyWorkTree`, …) yang menentukan tawaran aksi di UI |
-| Aksi destruktif | Selalu dengan konfirmasi yang menyebut apa yang hilang; force push memakai `--force-with-lease` |
-
-### 6.1 Satu perubahan: hunk berasal dari Git
-
-Di v0.2, editor web menghitung sendiri perbedaan dua teks, sehingga hunk di layar bisa berbeda dari hunk versi Git. Di versi native, tampilan diff menerima **patch dari `git diff`** ([7.1](#71-tampilan-diff)), sehingga hunk yang terlihat adalah hunk milik Git.
-
-Model staging tetap sambung-potong baris: hunk atau baris yang dipilih diterjemahkan menjadi rentang baris sisi lama dan sisi baru, lalu diterapkan oleh `Repo::apply_splice` yang sudah ada. Sidik isi tetap memastikan diff yang dipakai belum usang. Yang ditambahkan ke `oncode-git` hanya fungsi untuk mengambil patch sebuah berkas dalam bentuk teks.
+- The command registry and the keybinding format (`Mod+Shift+P`, `keybindings.json`) are kept. GPUI has its own action and key-context system; our registry is mapped onto it, so users' files from v0.2 still apply.
+- Two built-in themes (dark and light) plus follow-the-system, defined through `gpui-component`'s `theme`. Git colors (added, modified, deleted, conflict) and graph lane colors are defined once and used in the editor, lists, and terminal.
 
 ---
 
-## 7. Komponen yang Dibangun Sendiri
+## 6. Git Module
 
-Bagian ini memuat pekerjaan yang tidak disediakan pustaka. Inilah inti pekerjaan versi native.
+The Git layer (`crates/oncode-git`) is **unchanged**. A summary of its contract, whose details are in [v0.2 design section 6](archive/DESIGN-v0.2-tauri.md#6-git-module) and in the code and its tests:
 
-### 7.1 Tampilan diff
-
-Dibangun di atas `diff::Diff` milik `gpui-component`, yang menampilkan patch secara baca-saja dalam mode berdampingan atau unified.
-
-| Kebutuhan | Cara memenuhinya |
+| Topic | What applies |
 |---|---|
-| Sumber | Patch teks dari `git diff` untuk working tree, staged, commit, rentang, atau stash |
-| Aksi per hunk (Stage / Unstage / Discard) | Penanda gutter interaktif di awal tiap hunk |
-| Aksi pada baris terpilih | Pilihan baris dari state diff diterjemahkan menjadi rentang baris |
-| Navigasi antarperubahan | Lompat ke hunk berikut / sebelumnya |
-| Berkas biner dan terlalu besar | Tampilan pengganti dengan ukuran kedua sisi dan aksi per berkas |
-| Menyunting | Tidak didukung di dalam diff; tombol "Open File" ([2.3](#23-perbedaan-yang-disengaja-dari-v02)) |
+| Runner | Arguments as an array, fixed environment, per-repository write queue, cancellation, progress, logging to Git Output |
+| Status | `git status --porcelain=v2 -z`; unfinished operations are detected from the Git directory |
+| Partial staging | Line splice with content fingerprints of both sides, written via `hash-object` + `update-index` |
+| Authentication | `oncode-helper` as `GIT_ASKPASS` and `SSH_ASKPASS`, local socket with a one-time token |
+| Interactive rebase | `oncode-helper` as the todo-list editor and message editor |
+| Conflicts | The three versions from the index are re-merged with `git merge-file --diff3` into segments |
+| Errors | Classified into codes (`pushRejected`, `noUpstream`, `dirtyWorkTree`, …) that determine the actions offered in the UI |
+| Destructive actions | Always with a confirmation that says what will be lost; force push uses `--force-with-lease` |
 
-Penerjemahan pilihan menjadi operasi sambung-potong adalah logika murni yang diuji tersendiri, termasuk kasus yang dulu rawan: berkas tanpa newline di akhir, berkas baru, dan pilihan sebagian baris dalam satu hunk.
+### 6.1 One change: hunks come from Git
 
-**Yang perlu dibuktikan di N0:** apakah penanda gutter dan pilihan baris milik `Diff` cukup untuk aksi per hunk dan per baris. Bila tidak, tampilan diff dibangun dari dua `Editor` baca-saja dengan dekorasi baris.
+In v0.2, the web editor computed the difference between two texts itself, so the hunks on screen could differ from Git's hunks. In the native version the diff view receives a **patch from `git diff`** ([7.1](#71-diff-view)), so the hunks you see are Git's own hunks.
 
-### 7.2 Editor konflik
+The staging model is still line splice: the chosen hunk or lines are translated into line ranges on the old and new sides, then applied by the existing `Repo::apply_splice`. The content fingerprint still makes sure the diff used is not stale. All that is added to `oncode-git` is a function to fetch a file's patch as text.
 
-Model dari v0.2 dipertahankan: backend mengembalikan segmen *sudah tergabung* atau *konflik (current, base, incoming)*.
+---
 
-- Tiga panel: Current (baca-saja), Result (bisa disunting), Incoming (baca-saja), masing-masing sebuah `Editor`.
-- **Model rentang konflik** diterjemahkan dari `conflictState.ts` ke Rust: tiap konflik punya rentang di dokumen Result yang ikut bergeser saat teks berubah; memilih sisi mengganti isinya dan menandainya selesai; suntingan manual di dalam rentang juga menandainya selesai.
-- Label panel memakai nama branch atau commit yang sebenarnya.
-- Konflik non-teks (biner, dihapus di satu sisi) memakai tampilan sederhana dengan pilihan per berkas.
+## 7. Self-Built Components
 
-`gpui-component` juga punya tipe untuk konflik di dalam modul diff-nya. Di N0 diperiksa apakah itu bisa menggantikan sebagian pekerjaan ini.
+This section covers the work that no library provides. It is the core of the native version's work.
 
-### 7.3 Graph commit
+### 7.1 Diff view
 
-- Data tidak berubah: `oncode-git` mengalirkan `GraphRow` per halaman, lengkap dengan kolom, warna, dan daftar garis.
-- Tampilan: daftar seragam tervirtualisasi, sehingga hanya baris yang terlihat yang digambar.
-- Tiap baris menggambar potongan graph-nya sendiri dengan primitif gambar GPUI: garis lurus untuk jalur yang lewat, kurva untuk jalur yang menyatu atau bercabang, lingkaran untuk commit (lingkaran kosong untuk merge).
-- Panel ref di kiri dan panel detail di kanan memakai `tree` dan `list`.
-- Menu konteks dan dialog rebase memakai aksi yang sama dengan v0.2.
+Built on `gpui-component`'s `diff::Diff`, which shows a patch read-only in side-by-side or unified mode.
+
+| Need | How it is met |
+|---|---|
+| Source | Text patch from `git diff` for the working tree, staged, a commit, a range, or a stash |
+| Per-hunk actions (Stage / Unstage / Discard) | Interactive gutter marker at the start of each hunk |
+| Actions on selected lines | The line selection from the diff state is translated into line ranges |
+| Navigation between changes | Jump to the next / previous hunk |
+| Binary and oversized files | A replacement view with the size of both sides and per-file actions |
+| Editing | Not supported inside the diff; the "Open File" button ([2.3](#23-intentional-differences-from-v02)) |
+
+Translating a selection into a line-splice operation is pure logic that is tested on its own, including cases that used to be fragile: files without a trailing newline, new files, and a partial line selection within one hunk.
+
+**To be proven in N0:** whether `Diff`'s gutter markers and line selection are enough for per-hunk and per-line actions. If not, the diff view is built from two read-only `Editor`s with line decorations.
+
+### 7.2 Conflict editor
+
+The v0.2 model is kept: the backend returns segments that are either *already merged* or *conflicting (current, base, incoming)*.
+
+- Three panes: Current (read-only), Result (editable), Incoming (read-only), each an `Editor`.
+- The **conflict range model** is translated from `conflictState.ts` to Rust: each conflict has a range in the Result document that shifts as the text changes; choosing a side replaces its content and marks it resolved; a manual edit inside the range also marks it resolved.
+- Pane labels use the actual branch or commit names.
+- Non-text conflicts (binary, deleted on one side) use a simple view with a per-file choice.
+
+`gpui-component` also has a type for conflicts inside its diff module. N0 checks whether it can replace part of this work.
+
+### 7.3 Commit graph
+
+- The data is unchanged: `oncode-git` streams `GraphRow`s per page, complete with column, color, and list of lines.
+- The view: a virtualized uniform list, so only the visible rows are drawn.
+- Each row draws its own slice of the graph using GPUI's drawing primitives: straight lines for passing lanes, curves for lanes that merge or branch, circles for commits (a hollow circle for a merge).
+- The ref panel on the left and the detail panel on the right use `tree` and `list`.
+- Context menus and the rebase dialog use the same actions as v0.2.
 
 ### 7.4 Terminal
 
 ```mermaid
 sequenceDiagram
-    participant U as Pengguna
-    participant V as Tampilan terminal
+    participant U as User
+    participant V as Terminal view
     participant A as alacritty_terminal
     participant P as oncode-terminal
     participant S as Shell
 
-    U->>V: Menekan tombol
-    V->>P: Tulis byte ke PTY
-    P->>S: Masukan
-    S-->>P: Keluaran
-    P-->>A: Byte mentah dari thread pembaca
-    A->>A: Perbarui grid, kursor, scrollback
-    A-->>V: Tandai perlu digambar ulang
-    V->>V: Gambar sel yang terlihat
+    U->>V: Presses a key
+    V->>P: Write bytes to the PTY
+    P->>S: Input
+    S-->>P: Output
+    P-->>A: Raw bytes from the reader thread
+    A->>A: Update grid, cursor, scrollback
+    A-->>V: Mark as needing a redraw
+    V->>V: Draw the visible cells
 ```
 
-- `alacritty_terminal` menangani emulasi: urutan escape, grid, scrollback, seleksi.
-- Tampilannya digambar per sel di sebuah `canvas` (`grid.rs`, `paint.rs`): latar setinggi baris penuh, tiap potongan teks diletakkan di kolomnya dengan lebar huruf dipaksa selebar sel (huruf dari font cadangan tidak menggeser kolom), dan ligatur dimatikan. Garis kotak, blok, dan pemisah powerline digambar sebagai bentuk (`glyphs.rs`) agar menyambung antar baris berapa pun tinggi barisnya, seperti `customGlyphs` di xterm.js. Font dan tinggi baris terminal bisa diatur sendiri (`terminal.fontFamily`, `terminal.lineHeight`).
-- Terminal bisa dibelah berdampingan di panel dan dipindah ke area editor sebagai tab; panel memiliki semua terminal jendela itu dan mematikan yang tidak lagi ada di mana pun (`panel.rs`).
-- PTY, ukuran, dan kendali aliran memakai `oncode-terminal` yang sudah ada.
-- Tombol aplikasi (palet, pintasan panel) tetap sampai ke aplikasi; sisanya ke shell.
-- Pencarian di keluaran dan tautan yang bisa diklik, yang dulu disediakan addon xterm.js, dibuat sendiri di atas grid.
+- `alacritty_terminal` handles emulation: escape sequences, grid, scrollback, selection.
+- The view is drawn per cell in a `canvas` (`grid.rs`, `paint.rs`): the background is the full line height, each text run is placed in its column with the glyph width forced to the cell width (glyphs from a fallback font do not shift columns), and ligatures are turned off. Box-drawing lines, blocks, and powerline separators are drawn as shapes (`glyphs.rs`) so they connect between lines whatever the line height is, like `customGlyphs` in xterm.js. The terminal font and line height can be set separately (`terminal.fontFamily`, `terminal.lineHeight`).
+- Terminals can be split side by side in the panel and moved to the editor area as tabs; the panel owns all the terminals of that window and kills the ones that are no longer anywhere (`panel.rs`).
+- The PTY, size, and flow control use the existing `oncode-terminal`.
+- Application keys (palette, panel shortcuts) still reach the app; the rest go to the shell.
+- Output search and clickable links, which used to be provided by xterm.js addons, are built in-house on top of the grid.
 
-Crate `gpui-terminal` tidak dipakai: belum mendukung scrollback dan seleksi, dan bergantung pada versi GPUI yang berbeda.
+The `gpui-terminal` crate is not used: it does not yet support scrollback and selection, and it depends on a different GPUI version.
 
-### 7.5 Klien LSP
+### 7.5 LSP client
 
-Di v0.2 logika LSP ditangani pustaka JavaScript. Sekarang ditulis dalam Rust.
+In v0.2, LSP logic was handled by a JavaScript library. Now it is written in Rust.
 
 ```mermaid
 sequenceDiagram
     participant E as Editor
-    participant C as Klien LSP
+    participant C as LSP client
     participant M as oncode-lsp
     participant S as Language server
 
-    E->>C: Berkas Rust pertama dibuka
-    C->>M: Jalankan server
-    M->>S: Proses lewat stdio
+    E->>C: First Rust file opened
+    C->>M: Start server
+    M->>S: Process over stdio
     C->>S: initialize
-    S-->>C: Kemampuan server
+    S-->>C: Server capabilities
     C->>S: didOpen
-    E->>C: Minta completion di posisi kursor
+    E->>C: Request completion at the cursor position
     C->>S: textDocument/completion
-    S-->>C: Daftar saran
-    C-->>E: Tampilkan
+    S-->>C: List of suggestions
+    C-->>E: Show
     S-->>C: publishDiagnostics
-    C-->>E: Garis bawah galat dan panel Problems
+    C-->>E: Error underlines and the Problems panel
 ```
 
-- **Lapisan protokol** (`oncode-lsp`): korelasi permintaan dan jawaban, notifikasi, batas waktu, dan sinkronisasi dokumen (`didOpen`, `didChange`, `didClose`), dengan tipe dari `lsp-types`. Lapisan ini tidak bergantung pada GPUI dan diuji dengan server tiruan.
-- **Jembatan ke editor** (`app/features/lsp`): mengimplementasikan trait penyedia milik `Editor` untuk completion, hover, definition, dan code action. Penyedia itu dipegang lewat `Rc`, jadi jembatan berjalan di thread utama dan meneruskan permintaan ke klien di latar.
-- **Di luar trait penyedia:** diagnostics, signature help, find references, rename, dan format tidak punya kait di `Editor`, jadi ditangani jembatan sendiri (termasuk tampilan popup signature help). Rename lintas berkas kini bisa mengubah berkas yang tidak sedang terbuka, karena penyuntingan dilakukan di Rust.
-- **Siklus hidup** mengikuti v0.2: satu server per perintah per proyek, dimulai saat diperlukan, dimulai ulang dengan jeda bila mati (dibatasi), dan dinyatakan "belum terpasang" bila perintahnya tidak ada.
+- **Protocol layer** (`oncode-lsp`): request/response correlation, notifications, timeouts, and document synchronization (`didOpen`, `didChange`, `didClose`), with types from `lsp-types`. This layer does not depend on GPUI and is tested against a mock server.
+- **Bridge to the editor** (`app/features/lsp`): implements the `Editor`'s provider traits for completion, hover, definition, and code actions. Those providers are held through `Rc`, so the bridge runs on the main thread and forwards requests to the client in the background.
+- **Beyond the provider traits:** diagnostics, signature help, find references, rename, and format have no hooks in `Editor`, so the bridge handles them itself (including the signature help popup view). Cross-file rename can now change files that are not open, because editing is done in Rust.
+- **Lifecycle** follows v0.2: one server per command per project, started when needed, restarted with a delay if it dies (bounded), and declared "not installed" if its command does not exist.
 
 ---
 
-## 8. Pengaturan dan Penyimpanan Data
+## 8. Settings and Data Storage
 
-Format berkas **tidak berubah**, sehingga pengguna v0.2 tidak perlu migrasi:
+The file formats are **unchanged**, so v0.2 users need no migration:
 
-| Berkas | Isi |
+| File | Contents |
 |---|---|
-| `settings.json` | Pengaturan bersarang: `editor`, `files`, `workbench`, `git`, `terminal`, `lsp`, `forge` |
-| `.oncode/settings.json` | Penimpaan tingkat proyek; hanya berlaku pada folder yang dipercaya |
-| `keybindings.json` | `{ "<id command>": "<pintasan>" }`; daftar kosong menghapus pintasan |
-| `state.json` | Proyek terakhir, folder yang dipercaya, akun, sesi per proyek |
-| Keychain OS | Token; cadangan di memori bila keychain tidak tersedia |
+| `settings.json` | Nested settings: `editor`, `files`, `workbench`, `git`, `terminal`, `lsp`, `forge` |
+| `.oncode/settings.json` | Project-level overrides; applies only in trusted folders |
+| `keybindings.json` | `{ "<command id>": "<shortcut>" }`; an empty value removes the shortcut |
+| `state.json` | Last project, trusted folders, accounts, per-project session |
+| OS keychain | Tokens; an in-memory fallback when the keychain is unavailable |
 
-Modul `Settings` dan `Store` beserta ujinya dipindahkan dari `src-tauri` ke `oncode-core`. Lokasi direktori data ditentukan sendiri (dulu oleh Tauri) dan harus sama dengan lokasi v0.2 agar data lama terbaca.
-
----
-
-## 9. Keamanan
-
-**Tetap berlaku:**
-
-- **Mode terbatas.** Folder yang belum dipercaya hanya mendapat explorer, editor, dan pencarian. Git, LSP, dan pengaturan proyek yang menentukan perintah dinonaktifkan.
-- **Menjalankan proses.** Hanya `git`, shell terminal, dan language server yang dikonfigurasi; argumen selalu array; nama ref dan path divalidasi.
-- **Rahasia.** Token hanya di keychain atau memori; tidak pernah menjadi argumen, masuk log, atau ditampilkan.
-- **Socket `oncode-helper`** dibatasi untuk pengguna yang sama dan dilindungi token sekali pakai.
-
-**Tidak lagi relevan** karena tidak ada WebView: CSP, capability Tauri, dan sanitasi HTML. Konten dari luar (deskripsi pull request, pesan commit) dirender sebagai teks kaya tanpa kemampuan menjalankan skrip. Tautan di dalamnya tetap hanya dibuka di browser sistem, dan hanya untuk skema `http` dan `https`.
+The `Settings` and `Store` modules and their tests are moved from `src-tauri` to `oncode-core`. The data directory location is now determined by us (previously by Tauri) and must be the same as the v0.2 location so old data can be read.
 
 ---
 
-## 10. Strategi Pengujian
+## 9. Security
 
-### 10.1 Yang berubah
+**Still applies:**
 
-| Uji v0.2 | Jumlah | Nasib |
+- **Restricted mode.** An untrusted folder gets only the explorer, editor, and search. Git, LSP, and project settings that define commands are disabled.
+- **Running processes.** Only `git`, the terminal shell, and the configured language servers; arguments are always arrays; ref names and paths are validated.
+- **Secrets.** Tokens live only in the keychain or memory; they never become arguments, enter logs, or are displayed.
+- **The `oncode-helper` socket** is restricted to the same user and protected by a one-time token.
+
+**No longer relevant** because there is no WebView: CSP, Tauri capabilities, and HTML sanitization. External content (pull request descriptions, commit messages) is rendered as rich text with no ability to run scripts. Links inside it are still opened only in the system browser, and only for the `http` and `https` schemes.
+
+---
+
+## 10. Testing Strategy
+
+### 10.1 What changes
+
+| v0.2 tests | Count | Fate |
 |---|---|---|
-| Uji backend Rust (unit, integrasi terhadap Git sungguhan, property test) | ± 320 | **Tetap** |
-| Uji state aplikasi di `src-tauri` | ± 20 | **Dipindahkan** ke `oncode-core` |
-| Uji frontend (Vitest) | 708 | **Hilang** bersama kode React; logika murninya diterjemahkan beserta ujinya |
-| Uji end-to-end (WebDriver) | 34 | **Hilang**; skenarionya dibangun ulang sebagai uji tampilan GPUI |
+| Rust backend tests (unit, integration against real Git, property tests) | ± 320 | **Kept** |
+| Application state tests in `src-tauri` | ± 20 | **Moved** to `oncode-core` |
+| Frontend tests (Vitest) | 708 | **Gone** along with the React code; the pure logic is translated together with its tests |
+| End-to-end tests (WebDriver) | 34 | **Gone**; the scenarios are rebuilt as GPUI view tests |
 
-Ini harga yang nyata dari penulisan ulang: selama beberapa tahap, cakupan uji lapisan tampilan lebih rendah daripada v0.2.
+This is a real cost of the rewrite: for several stages, test coverage of the view layer is lower than in v0.2.
 
-### 10.2 Tingkat uji versi native
+### 10.2 Test levels of the native version
 
-| Tingkat | Sasaran | Alat |
+| Level | Target | Tool |
 |---|---|---|
-| Unit dan integrasi backend | Seperti v0.2 | `cargo test` |
-| Logika murni UI | Penerjemahan pilihan diff ke rentang baris, model rentang konflik, validasi rencana rebase, keybinding, geometri graph | `cargo test` |
-| State aplikasi | `oncode-core`: penjadwalan snapshot, kepercayaan folder, permintaan kredensial | `cargo test` |
-| Klien LSP | Terhadap server tiruan, dan terhadap `typescript-language-server` bila terpasang | `cargo test` |
-| Tampilan | Alur pengguna dengan masukan yang disimulasikan, tanpa layar | `#[gpui::test]` dengan konteks uji GPUI |
-| Manual | Daftar periksa per OS: tampilan, IME, HiDPI, installer | Dokumen daftar periksa |
+| Backend unit and integration | As in v0.2 | `cargo test` |
+| Pure UI logic | Translating diff selections into line ranges, the conflict range model, rebase plan validation, keybindings, graph geometry | `cargo test` |
+| Application state | `oncode-core`: snapshot scheduling, folder trust, credential requests | `cargo test` |
+| LSP client | Against a mock server, and against `typescript-language-server` when installed | `cargo test` |
+| Views | User flows with simulated input, headless | `#[gpui::test]` with the GPUI test context |
+| Manual | Per-OS checklist: display, IME, HiDPI, installers | Checklist document |
 
-### 10.3 Daftar periksa kesetaraan
+### 10.3 Parity checklist
 
-Setiap skenario end-to-end v0.2 harus punya padanan uji tampilan sebelum rilis:
+Every v0.2 end-to-end scenario must have an equivalent view test before release:
 
-| Kelompok | Skenario |
+| Group | Scenarios |
 |---|---|
-| Kerangka | Mode terbatas sampai dipercaya; layar awal dan pengaturan tanpa folder; `keybindings.json`; tombol terminal dan panel; pemulihan tab |
-| Editor | Buka, sunting, simpan, penanda Git; muat ulang saat berubah dari luar; blame |
-| Pencarian | Menghormati gitignore dan lompat ke kecocokan; ganti di berkas terbuka dan tertutup |
-| Source control | Stage hunk lalu commit; unstage dan discard hunk; stage baris terpilih; untracked; buang ke tempat sampah; Git Output |
-| Konflik | Selesaikan lewat editor konflik lalu lanjutkan; abort |
-| Graph | Riwayat, ref, detail; interactive rebase (squash, reword, drop); pembatalan dialog pesan |
-| Remote | Publish, fetch, pull bercabang, push; ganti dan buat branch; stash |
-| Autentikasi | HTTP dengan dialog username dan password; password salah dan pembatalan; SSH dengan konfirmasi host dan passphrase |
-| LSP | Diagnostics; completion; go to definition lintas berkas |
-| GitHub/GitLab | Login token; login device flow; daftar dan detail; push memakai token akun |
-| Terminal | Menjalankan perintah di folder proyek |
+| Framework | Restricted mode until trusted; welcome screen and settings without a folder; `keybindings.json`; terminal and panel buttons; tab restoration |
+| Editor | Open, edit, save, Git markers; reload on external change; blame |
+| Search | Respects gitignore and jumps to the match; replace in open and closed files |
+| Source control | Stage a hunk then commit; unstage and discard a hunk; stage selected lines; untracked files; move to trash; Git Output |
+| Conflicts | Resolve via the conflict editor then continue; abort |
+| Graph | History, refs, details; interactive rebase (squash, reword, drop); canceling the message dialog |
+| Remote | Publish, fetch, diverged pull, push; switch and create branches; stash |
+| Authentication | HTTP with a username and password dialog; wrong password and cancellation; SSH with host confirmation and passphrase |
+| LSP | Diagnostics; completion; go to definition across files |
+| GitHub/GitLab | Token login; device-flow login; list and details; push using the account token |
+| Terminal | Running a command in the project folder |
 
-Server lokal yang dipakai uji v0.2 (git smart-HTTP dengan Basic auth, `sshd` pribadi, GitHub dan GitLab tiruan) ditulis ulang sebagai perkakas uji Rust dan dipakai lagi.
+The local servers used by the v0.2 tests (git smart-HTTP with Basic auth, a private `sshd`, mock GitHub and GitLab) are rewritten as Rust test tooling and reused.
 
 ---
 
-## 11. Build dan Distribusi
+## 11. Build and Distribution
 
-### 11.1 Prasyarat pengembangan
+### 11.1 Development prerequisites
 
-- Rust (stable). Node.js dan pnpm tidak diperlukan lagi.
+- Rust (stable). Node.js and pnpm are no longer needed.
 - Git ≥ 2.40.
-- **Linux:** pustaka pengembangan untuk Wayland, X11, xkbcommon, dan fontconfig, serta loader Vulkan. Daftar paket persisnya ditetapkan di tahap N0 dan ditulis di `docs/PENGEMBANGAN.md`.
+- **Linux:** development libraries for Wayland, X11, xkbcommon, and fontconfig, plus the Vulkan loader. The exact package list was settled in stage N0 and is written in `docs/DEVELOPMENT.md`.
 - **Windows:** Microsoft C++ Build Tools.
-- **macOS:** Xcode beserta Command Line Tools (GPUI memakai Metal).
+- **macOS:** Xcode with the Command Line Tools (GPUI uses Metal).
 
-### 11.2 Perintah
+### 11.2 Commands
 
-| Tujuan | Perintah |
+| Goal | Command |
 |---|---|
-| Menjalankan | `cargo run -p oncode` |
-| Semua uji | `cargo test --workspace` |
-| Build rilis | `cargo build --release -p oncode -p oncode-helper` |
+| Run | `cargo run -p oncode` |
+| All tests | `cargo test --workspace` |
+| Release build | `cargo build --release -p oncode -p oncode-helper` |
 | Installer | `cargo packager --release` |
 
-### 11.3 Paket rilis
+### 11.3 Release packages
 
-| OS | Format | Catatan |
+| OS | Format | Notes |
 |---|---|---|
 | Linux | AppImage, `.deb` | |
-| Windows | Installer NSIS | Tidak lagi bergantung pada WebView2 |
-| macOS | `.dmg` | Ditandatangani dan dinotarisasi |
+| Windows | NSIS installer | No longer depends on WebView2 |
+| macOS | `.dmg` | Signed and notarized |
 
-`oncode-helper` dikemas di samping binary utama, seperti di v0.2. Pembaruan otomatis dan penandatanganan kode tetap memerlukan kunci dan sertifikat milik pemilik proyek.
+`oncode-helper` is packaged next to the main binary, as in v0.2. Automatic updates and code signing still require keys and certificates owned by the project owner.
 
 ---
 
 ## 12. Roadmap
 
-Rilis native pertama memuat semua fitur. Urutan di bawah adalah **urutan pengerjaan**, bukan urutan rilis.
+The first native release contains all the features. The order below is the **order of work**, not the release order.
 
-| Tahap | Isi | Selesai bila |
+| Stage | Contents | Done when |
 |---|---|---|
-| **N0 Fondasi dan pembuktian** | Commit dan tag versi Tauri (`tauri-v0.2`), lalu hapus `src/`, `src-tauri/`, `e2e/`, dan berkas Node. Buat `app/` dan `oncode-core`. Tiga pembuktian: (1) `Editor` membuka, menyunting, dan menyimpan berkas, termasuk jawaban soal multi-kursor; (2) aplikasi kosong terbangun dan berjalan di Windows; (3) uji tampilan berjalan tanpa layar di CI. Ditambah pembuktian pola runtime `tokio` di samping eksekutor GPUI. | Ketiga pembuktian terjawab; bila salah satunya gagal, rancangan ini ditinjau ulang sebelum lanjut |
-| **N1 Editor dan workspace** | Kerangka jendela, command dan keybinding, explorer, tab dan split, buffer, quick open, pencarian dan penggantian, pengaturan, layar awal, sesi | Bisa dipakai menyunting proyek nyata tanpa kehilangan data |
-| **N2 Git inti** | Panel Source Control, tampilan diff dengan aksi per hunk dan per baris, commit, branch, fetch / pull / push, dialog kredensial, Git Output, mode terbatas | Alur harian lengkap tanpa terminal |
-| **N3 Git lanjut** | Graph, detail commit, dialog rebase, editor konflik, stash, tag, blame, riwayat berkas, reflog, worktree, submodule | Semua skenario Git di daftar periksa lolos |
-| **N4 Terminal** | Tampilan terminal di atas `alacritty_terminal` | Program TUI berjalan benar di tiga OS |
-| **N5 LSP** | Klien JSON-RPC, jembatan ke editor, panel Problems | Skenario LSP lolos terhadap server sungguhan |
-| **N6 GitHub dan GitLab** | Akun, clone dari akun, daftar / detail / checkout / buat pull request | Skenario forge lolos terhadap server tiruan |
-| **N7 Rilis** | Installer tiga OS, pengukuran target [1.2](#12-tujuan), daftar periksa manual | Target kinerja terukur dan tercapai, atau selisihnya dicatat |
+| **N0 Foundation and proof** | Commit and tag the Tauri version (`tauri-v0.2`), then delete `src/`, `src-tauri/`, `e2e/`, and the Node files. Create `app/` and `oncode-core`. Three proofs: (1) `Editor` opens, edits, and saves files, including an answer on multi-cursor; (2) an empty app builds and runs on Windows; (3) view tests run headless in CI. Plus a proof of the `tokio` runtime pattern next to the GPUI executor. | All three proofs answered; if any fails, this design is reviewed before continuing |
+| **N1 Editor and workspace** | Window frame, commands and keybindings, explorer, tabs and splits, buffers, quick open, search and replace, settings, welcome screen, session | Usable for editing a real project without data loss |
+| **N2 Core Git** | Source Control panel, diff view with per-hunk and per-line actions, commit, branches, fetch / pull / push, credential dialog, Git Output, restricted mode | Full daily workflow without a terminal |
+| **N3 Advanced Git** | Graph, commit details, rebase dialog, conflict editor, stash, tags, blame, file history, reflog, worktrees, submodules | All Git scenarios in the checklist pass |
+| **N4 Terminal** | Terminal view on top of `alacritty_terminal` | TUI programs run correctly on three OSes |
+| **N5 LSP** | JSON-RPC client, bridge to the editor, Problems panel | LSP scenarios pass against a real server |
+| **N6 GitHub and GitLab** | Accounts, clone from an account, list / details / checkout / create pull requests | Forge scenarios pass against a mock server |
+| **N7 Release** | Installers for three OSes, measurement of the [1.2](#12-goals) targets, manual checklist | Performance targets measured and met, or the gap recorded |
 
-N4, N5, dan N6 tidak saling bergantung.
+N4, N5, and N6 do not depend on one another.
 
-**Ukuran pekerjaan.** Lapisan tampilan v0.2 berjumlah ± 17.000 baris TypeScript ditambah ± 9.000 baris uji dan ± 1.700 baris uji end-to-end; semuanya ditulis ulang. Berkat komponen siap pakai, versi native diperkirakan tidak lebih besar dari itu, tetapi ini tetap pekerjaan terbesar sejak proyek dimulai. Perkiraan waktu sengaja tidak diberikan sebelum N0 selesai, karena N0-lah yang menunjukkan seberapa banyak yang benar-benar disediakan pustaka.
+**Size of the work.** The v0.2 view layer amounts to ± 17,000 lines of TypeScript plus ± 9,000 lines of tests and ± 1,700 lines of end-to-end tests; all of it is rewritten. Thanks to ready-made components, the native version is expected to be no larger than that, but it is still the largest piece of work since the project began. A time estimate is deliberately not given before N0 is finished, because N0 is what shows how much the libraries really provide.
 
 ---
 
-## 13. Risiko dan Mitigasi
+## 13. Risks and Mitigations
 
-| Risiko | Dampak | Mitigasi |
+| Risk | Impact | Mitigation |
 |---|---|---|
-| GPUI pra-1.0 dan terkunci pada snapshot yang dipilih `gpui-component` | Kenaikan versi bisa merusak banyak kode; pustaka GPUI lain belum tentu cocok | Versi dikunci persis; kenaikan versi sebagai pekerjaan tersendiri; ketergantungan pada pustaka GPUI pihak ketiga dijaga minimal |
-| `Editor` tidak mendukung multi-kursor atau kebutuhan lain (IME, berkas besar) | Fitur editor v0.2 berkurang | Dibuktikan di N0; pilihannya: menerima kekurangan dan mencatatnya, menyumbang ke hulu, atau membuat fork |
-| GPUI di Windows kurang matang | Bug tampilan atau kinerja khusus Windows | Pembuktian N0 mencakup Windows; uji manual Windows di tiap tahap |
-| Membutuhkan GPU | Tidak jalan di mesin tanpa Vulkan atau DirectX 11, mesin virtual, atau sesi jarak jauh | Mendokumentasikan kebutuhan; menguji dengan render perangkat lunak (mis. lavapipe di Linux) |
-| Cakupan uji tampilan turun selama penulisan ulang | Regresi tidak tertangkap | Daftar periksa kesetaraan; logika murni diterjemahkan beserta ujinya lebih dulu; uji backend tetap utuh |
-| Komponen `Diff` tidak cukup lentur untuk aksi per baris | Pekerjaan diff membesar | Dibuktikan di N0; cadangan dua `Editor` baca-saja |
-| Tidak ada aplikasi yang bisa dijalankan sampai N2 | Tidak ada yang bisa dipakai sehari-hari selama itu | Versi Tauri diberi tag sebelum dihapus dan bisa dibangun kembali dari tag itu |
-| Ukuran binary membesar karena grammar tree-sitter | Installer melebihi target | Hanya grammar bahasa umum yang diaktifkan; ukurannya diukur di N7 |
-| Runtime `tokio` berdampingan dengan eksekutor GPUI | Kebuntuan atau pembaruan di thread yang salah | Satu pola jembatan yang dibuktikan di N0 dan dipakai di semua fitur |
+| GPUI is pre-1.0 and locked to the snapshot chosen by `gpui-component` | A version bump can break a lot of code; other GPUI libraries may not be compatible | Versions pinned exactly; version bumps as separate work; dependence on third-party GPUI libraries kept minimal |
+| `Editor` does not support multi-cursor or other needs (IME, large files) | Fewer editor features than v0.2 | Proven in N0; the options: accept the gap and record it, contribute upstream, or fork |
+| GPUI is less mature on Windows | Windows-specific display or performance bugs | The N0 proof covers Windows; manual Windows testing at each stage |
+| Requires a GPU | Does not run on machines without Vulkan or DirectX 11, virtual machines, or remote sessions | Document the requirement; test with software rendering (e.g. lavapipe on Linux) |
+| View test coverage drops during the rewrite | Regressions go uncaught | Parity checklist; pure logic translated together with its tests first; backend tests stay intact |
+| The `Diff` component is not flexible enough for per-line actions | The diff work grows | Proven in N0; fallback of two read-only `Editor`s |
+| No runnable app until N2 | Nothing usable day to day until then | The Tauri version is tagged before deletion and can be rebuilt from that tag |
+| Binary size grows because of the tree-sitter grammars | The installer exceeds the target | Only common-language grammars are enabled; size is measured in N7 |
+| `tokio` runtime alongside the GPUI executor | Deadlocks or updates on the wrong thread | One bridging pattern proven in N0 and used in all features |
 
 ---
 
-## 14. Glosarium
+## 14. Glossary
 
-| Istilah | Arti |
+| Term | Meaning |
 |---|---|
-| **Entitas** | Unit state milik GPUI yang bisa diamati; tampilan digambar ulang saat entitas yang diamatinya berubah |
-| **Eksekutor foreground / background** | Penjadwal tugas GPUI di thread utama dan di thread latar |
-| **GPUI** | Kerangka UI Rust buatan pengembang Zed yang menggambar lewat GPU |
-| **Grammar tree-sitter** | Definisi sintaks sebuah bahasa untuk parser tree-sitter; dasar highlight dan lipat kode |
-| **Hunk** | Satu blok perubahan yang berdekatan dalam sebuah diff |
-| **Native** | Aplikasi yang menggambar antarmukanya sendiri, tanpa mesin browser |
-| **Rope** | Struktur data teks yang efisien untuk penyuntingan berkas besar |
-| **Sambung-potong baris** | Cara staging parsial OnCode: mengganti rentang baris satu sisi dengan rentang baris sisi lain |
-| **Snapshot (repositori)** | Gambaran utuh keadaan repositori pada satu saat |
+| **Entity** | A unit of GPUI-owned state that can be observed; views are redrawn when an entity they observe changes |
+| **Foreground / background executor** | GPUI's task schedulers on the main thread and on background threads |
+| **GPUI** | A Rust UI framework from the creators of Zed that draws through the GPU |
+| **tree-sitter grammar** | A language's syntax definition for the tree-sitter parser; the basis for highlighting and code folding |
+| **Hunk** | One block of adjacent changes in a diff |
+| **Native** | An application that draws its own interface, with no browser engine |
+| **Rope** | A text data structure that is efficient for editing large files |
+| **Line splice** | OnCode's way of partial staging: replacing a range of lines on one side with a range of lines from the other side |
+| **Snapshot (repository)** | A complete picture of the repository's state at one moment |
 
-Istilah Git dan istilah lain yang tidak berubah ada di [glosarium v0.2](arsip/RANCANGAN-v0.2-tauri.md#14-glosarium).
+Git terms and other terms that are unchanged are in the [v0.2 glossary](archive/DESIGN-v0.2-tauri.md#14-glossary).
 
 ---
 
-## 15. Catatan Implementasi
+## 15. Implementation Notes
 
-Bagian ini mencatat apa yang berbeda dari rancangan di atas dan apa yang sudah atau belum terbukti, agar dokumen tetap sesuai dengan kode.
+This section records what differs from the design above and what has or has not been proven, so the document stays in line with the code.
 
-### 15.1 Penyimpangan dari rancangan
+### 15.1 Deviations from the design
 
-| Topik | Rancangan | Implementasi | Alasan |
+| Topic | Design | Implementation | Reason |
 |---|---|---|---|
-| Dependensi UI | `gpui-component` langsung | `gpui-kit` =0.10.0, crate payung resmi yang mengekspor ulang GPUI, `gpui-base`, `gpui-component`, dan ikon | Satu dependensi yang mengunci seluruh keluarga `gpui-pre-*` yang cocok |
-| Struktur kode UI | Modul `app/src/features/<fitur>` | Satu crate per fitur: `crates/oncode-ui` (kerangka) dan `crates/oncode-ui-<fitur>`; `app/` hanya berisi `main` | Kompilasi bertahap jauh lebih cepat, dan fitur bisa dikerjakan serta diuji terpisah |
-| `oncode-diff` | Crate tersendiri di atas `imara-diff` | Tidak dibuat; perbandingan teks memakai `similar` di dalam `oncode-ui-diff` | `similar` sudah menjadi dependensi `gpui-component`; satu crate lebih sedikit |
-| Buffer berkas | Satu `EditorState` dipakai bersama semua split | Satu `EditorState` per tampilan; `Buffer` meneruskan setiap suntingan ke state lain | State editor memuat kursor dan gulir, jadi berbagi state membuat split berkas yang sama tidak berguna |
-| Keybinding | Dipetakan ke sistem aksi GPUI | Penyadap tombol global (`intercept_keystrokes`) yang mencari command di registry | Perilakunya sama persis dengan v0.2 (`when`, penimpaan dari `keybindings.json`) tanpa menyusun ulang keymap GPUI |
-| `SettingsChanged` | — | `oncode-core` menyiarkan pengaturan pengguna sekali; tiap jendela menghitung pengaturan efektifnya sendiri | Tidak ada lagi webview per jendela yang dikirimi event |
-| Data terminal | — | `oncode-core` mengirim byte mentah dari PTY; emulasi dilakukan di UI | Emulator (`alacritty_terminal`) butuh byte, bukan teks |
+| UI dependency | `gpui-component` directly | `gpui-kit` =0.10.0, the official umbrella crate that re-exports GPUI, `gpui-base`, `gpui-component`, and icons | One dependency that pins the whole matching `gpui-pre-*` family |
+| UI code structure | Modules `app/src/features/<feature>` | One crate per feature: `crates/oncode-ui` (framework) and `crates/oncode-ui-<feature>`; `app/` contains only `main` | Incremental compilation is much faster, and features can be worked on and tested separately |
+| `oncode-diff` | A separate crate on top of `imara-diff` | Not created; text comparison uses `similar` inside `oncode-ui-diff` | `similar` is already a dependency of `gpui-component`; one crate fewer |
+| File buffer | One `EditorState` shared by all splits | One `EditorState` per view; `Buffer` forwards every edit to the other states | Editor state holds the cursor and scroll position, so sharing state makes splitting the same file useless |
+| Keybindings | Mapped onto GPUI's action system | A global keystroke interceptor (`intercept_keystrokes`) that looks commands up in the registry | Exactly the same behavior as v0.2 (`when`, overrides from `keybindings.json`) without rebuilding the GPUI keymap |
+| `SettingsChanged` | — | `oncode-core` broadcasts the user settings once; each window computes its own effective settings | There is no longer a webview per window to send events to |
+| Terminal data | — | `oncode-core` sends raw bytes from the PTY; emulation is done in the UI | The emulator (`alacritty_terminal`) needs bytes, not text |
 
-### 15.2 Hasil pembuktian N0
+### 15.2 N0 proof results
 
-| Pembuktian | Hasil |
+| Proof | Result |
 |---|---|
-| Editor membuka, menyunting, menyimpan; multi-kursor | **Terbukti.** Uji tampilan `crates/oncode-ui/tests/editor.rs` membuka berkas, mengetik lewat jalur masukan sungguhan, dan menyimpan ke disk. Multi-kursor dan seleksi kolom adalah fitur bawaan komponen editor. |
-| Aplikasi terbangun dan berjalan di Windows | **Sebagian.** Kompilasi silang dari Linux ke `x86_64-pc-windows-gnu` berhasil menghasilkan `oncode.exe` dan `oncode-helper.exe`, baik debug maupun rilis (rilis: `oncode.exe` 53 MB). Shader DirectX untuk rilis hanya dikompilasi bila build berjalan di Windows (fxc.exe). Build silang memakai salinan `gpui-pre-windows` yang menanam sumber shader dan mengompilasinya saat aplikasi mulai (lihat `.dev-sysroot/env-win.sh`); build di Windows sendiri (CI, `release.yml`) tidak memerlukannya. Percobaan pertama memakai debug-assertions dan gagal di Windows: jalur debug GPUI membaca shader dari path mesin build, sehingga jendela tidak terbuka. Installer pertama juga belum punya ikon; kini `app/build.rs` menyematkan `icons/icon.ico`. Kegagalan membuka jendela dan panic dicatat ke `oncode.log` di folder data (`%APPDATA%\dev.oncode.editor`). Versi perbaikan belum dicoba di Windows. |
-| Uji tampilan tanpa layar | **Terbukti.** `#[gpui_kit::test]` berjalan tanpa server tampilan, dengan backend sungguhan di thread tokio. |
-| Runtime `tokio` di samping eksekutor GPUI | **Terbukti.** Polanya `oncode_ui::spawn_core`; dipakai semua fitur. Satu jebakan: uji tidak boleh menunggu pewaktu GPUI (waktu uji tidak berjalan sendiri). |
-| Menjalankan tanpa GPU | Jendela tampil di Xvfb dengan Mesa lavapipe (Vulkan perangkat lunak). |
+| Editor opens, edits, saves; multi-cursor | **Proven.** The view test `crates/oncode-ui/tests/editor.rs` opens a file, types through the real input path, and saves to disk. Multi-cursor and column selection are built-in features of the editor component. |
+| App builds and runs on Windows | **Partial.** Cross-compiling from Linux to `x86_64-pc-windows-gnu` successfully produced `oncode.exe` and `oncode-helper.exe`, both debug and release (release: `oncode.exe` 53 MB). The DirectX shaders for release are only compiled when the build runs on Windows (fxc.exe). The cross build uses a copy of `gpui-pre-windows` that embeds the shader source and compiles it when the app starts (see `.dev-sysroot/env-win.sh`); a build on Windows itself (CI, `release.yml`) does not need it. The first attempt used debug assertions and failed on Windows: GPUI's debug path reads shaders from the build machine's path, so the window did not open. The first installer also had no icon; now `app/build.rs` embeds `icons/icon.ico`. Window-open failures and panics are logged to `oncode.log` in the data folder (`%APPDATA%\dev.oncode.editor`). The fixed version has not yet been tried on Windows. |
+| Headless view tests | **Proven.** `#[gpui_kit::test]` runs without a display server, with the real backend on a tokio thread. |
+| `tokio` runtime next to the GPUI executor | **Proven.** The pattern is `oncode_ui::spawn_core`; used by all features. One pitfall: tests must not wait on GPUI timers (test time does not advance on its own). |
+| Running without a GPU | The window shows in Xvfb with Mesa lavapipe (software Vulkan). |
 
-### 15.3 Keadaan fitur
+### 15.3 Feature status
 
-Semua crate fitur terpasang di aplikasi (`app/src/main.rs`) dan punya uji tampilan tanpa layar terhadap backend sungguhan. Seluruh workspace lolos tanpa kegagalan (`cargo test --workspace`, 18 November 2026, Linux: 825 uji lolos, 0 gagal). Uji gabungan `app/tests/all_features.rs` menjalankan semua fitur bersamaan dalam satu jendela.
+All feature crates are wired into the app (`app/src/main.rs`) and have headless view tests against the real backend. The whole workspace passes with no failures (`cargo test --workspace`, November 18, 2026, Linux: 825 tests pass, 0 fail). The combined test `app/tests/all_features.rs` runs all features together in one window.
 
-| Fitur | Crate | Padanan skenario end-to-end v0.2 yang sudah diuji |
+| Feature | Crate | Equivalent v0.2 end-to-end scenarios already tested |
 |---|---|---|
-| Kerangka: jendela, tab/split, command palette, quick open, pintasan, `keybindings.json`, sesi | `oncode-ui` | layar awal; `keybindings.json`; pemulihan tab |
-| Editor berkas, simpan, muat ulang dari luar | `oncode-ui` | buka/sunting/simpan; perubahan dari luar |
-| Explorer, layar awal, mode terbatas | `oncode-ui-explorer` | mode terbatas sampai dipercaya; penanda Git di explorer |
-| Pencarian dan penggantian proyek | `oncode-ui-search` | pencarian menghormati gitignore; penggantian di berkas tertutup (disk) dan terbuka (lewat editor) |
-| Diff (stage/unstage/discard per hunk dan baris), editor konflik, penanda gutter, blame | `oncode-ui-diff` | stage satu hunk; unstage hunk dan discard hunk dengan konfirmasi; stage baris terpilih dan tampilan unified; selesaikan konflik lewat editor; blame |
-| Source Control, commit, branch, remote, stash, Git Output, clone, init | `oncode-ui-scm` | stage lewat tombol baris lalu commit; stage/unstage semua; publish lalu sync dengan pull bercabang; stash/pop; buat branch; dialog username/password HTTP (juga password salah dan batal); SSH: konfirmasi host dan passphrase, juga host ditolak; buang berkas untracked ke tempat sampah |
-| Graph, detail commit, interactive rebase, reflog, stash, worktree, submodule | `oncode-ui-graph` | riwayat dan detail; interactive rebase (urutan) |
-| Terminal | `oncode-ui-terminal` | terminal menjalankan perintah; tombol shell tidak direbut pintasan aplikasi |
-| LSP dan Problems | `oncode-lsp`, `oncode-ui-lsp` | diagnostics dan Problems; go to definition lintas berkas; rename berkas terbuka dan tertutup |
-| GitHub/GitLab | `oncode-ui-forge` | login token GitLab, daftar dan detail MR; login device flow GitHub; push memakai token akun |
-| Pengaturan | `oncode-ui-settings` | pengaturan tersimpan; pengaturan tanpa folder |
+| Framework: window, tabs/splits, command palette, quick open, shortcuts, `keybindings.json`, session | `oncode-ui` | welcome screen; `keybindings.json`; tab restoration |
+| File editor, save, reload from outside | `oncode-ui` | open/edit/save; external changes |
+| Explorer, welcome screen, restricted mode | `oncode-ui-explorer` | restricted mode until trusted; Git markers in the explorer |
+| Project search and replace | `oncode-ui-search` | search respects gitignore; replace in closed (disk) and open (via editor) files |
+| Diff (stage/unstage/discard per hunk and line), conflict editor, gutter markers, blame | `oncode-ui-diff` | stage one hunk; unstage a hunk and discard a hunk with confirmation; stage selected lines and the unified view; resolve conflicts via the editor; blame |
+| Source Control, commit, branches, remotes, stash, Git Output, clone, init | `oncode-ui-scm` | stage via the row button then commit; stage/unstage all; publish then sync with a diverged pull; stash/pop; create a branch; HTTP username/password dialog (including wrong password and cancel); SSH: host confirmation and passphrase, and host rejected; move an untracked file to the trash |
+| Graph, commit details, interactive rebase, reflog, stash, worktrees, submodules | `oncode-ui-graph` | history and details; interactive rebase (ordering) |
+| Terminal | `oncode-ui-terminal` | the terminal runs a command; shell keys are not hijacked by app shortcuts |
+| LSP and Problems | `oncode-lsp`, `oncode-ui-lsp` | diagnostics and Problems; go to definition across files; rename in open and closed files |
+| GitHub/GitLab | `oncode-ui-forge` | GitLab token login, MR list and details; GitHub device-flow login; push using the account token |
+| Settings | `oncode-ui-settings` | settings persist; settings without a folder |
 
-### 15.4 Berbeda dari v0.2 atau belum dikerjakan
+### 15.4 Different from v0.2 or not yet done
 
-| Hal | Keterangan |
+| Item | Notes |
 |---|---|
-| Blame | Ditampilkan untuk baris kursor di status bar, bukan sebagai anotasi per baris di gutter: komponen editor tidak menyediakan anotasi per baris. |
-| Garis bawah diagnostics | Hanya tergambar pada berkas yang punya highlighter sintaks (aturan komponen editor); panel Problems dan status bar tetap memuat semuanya. |
-| Signature help | Belum ada; komponen editor tidak punya kaitnya. |
-| Terminal | Tanpa IME (masukan teks lewat `key_char`), tanpa laporan tetikus ke program TUI, pencarian lewat dialog. |
-| Interactive rebase | Urutan diubah dengan tombol naik/turun, tanpa seret. |
-| Graph | Kolom tidak menyembunyikan diri saat sempit. |
-| Uji end-to-end v0.2 | Semua skenario sudah punya padanan berupa uji tampilan tanpa layar, termasuk buang berkas untracked ke tempat sampah (`crates/oncode-ui-scm/tests/trash.rs`). Server ujinya (git smart-HTTP dengan Basic auth, `sshd` pribadi, GitHub/GitLab tiruan) ditulis ulang dalam Rust. |
-| Paket `.deb` | Nama paketnya `on-code` (diturunkan perkakas dari nama produk) dan kolom Maintainer kosong. |
+| Blame | Shown for the cursor line in the status bar, not as a per-line annotation in the gutter: the editor component provides no per-line annotations. |
+| Diagnostics underlines | Drawn only on files that have a syntax highlighter (a rule of the editor component); the Problems panel and status bar still contain everything. |
+| Signature help | Not yet available; the editor component has no hook for it. |
+| Terminal | No IME (text input goes through `key_char`), no mouse reporting to TUI programs, search through a dialog. |
+| Interactive rebase | Order is changed with up/down buttons, without dragging. |
+| Graph | Columns do not hide themselves when narrow. |
+| v0.2 end-to-end tests | Every scenario has an equivalent headless view test, including moving an untracked file to the trash (`crates/oncode-ui-scm/tests/trash.rs`). Its test servers (git smart-HTTP with Basic auth, a private `sshd`, mock GitHub/GitLab) were rewritten in Rust. |
+| `.deb` package | The package name is `on-code` (derived by the tool from the product name) and the Maintainer field is empty. |
 
-### 15.5 Pengukuran
+### 15.5 Measurements
 
-Build rilis, Linux, layar virtual Xvfb dengan Vulkan perangkat lunak (lavapipe), tanpa GPU:
+Release build, Linux, Xvfb virtual display with software Vulkan (lavapipe), no GPU:
 
-| Ukuran | Target | Hasil |
+| Measure | Target | Result |
 |---|---|---|
-| Jendela tampil | < 300 ms | ± 85 ms (± 260 ms pada jalan pertama) |
-| Memori saat diam, proyek kecil | < 150 MB | RSS ± 230 MB, tetapi memori pribadi aplikasi (anonim) hanya ± 58 MB. Sisanya halaman bersama milik renderer perangkat lunak: libLLVM 54 MB, pustaka driver 30 MB, lavapipe/gallium 16 MB, buffer grafis ± 38 MB. Dengan GPU sungguhan renderer itu tidak dimuat; angka akhirnya perlu diukur di sana. |
-| Ukuran binary / paket | installer < 40 MB | binary 67 MB, `.deb` 19 MB, AppImage 19 MB, installer NSIS 11 MB (dari Linux, tanpa tanda tangan) |
+| Window shown | < 300 ms | ± 85 ms (± 260 ms on the first run) |
+| Idle memory, small project | < 150 MB | RSS ± 230 MB, but the app's private (anonymous) memory is only ± 58 MB. The rest is shared pages belonging to the software renderer: libLLVM 54 MB, driver libraries 30 MB, lavapipe/gallium 16 MB, graphics buffers ± 38 MB. With a real GPU that renderer is not loaded; the final figure needs to be measured there. |
+| Binary / package size | installer < 40 MB | binary 67 MB, `.deb` 19 MB, AppImage 19 MB, NSIS installer 11 MB (from Linux, unsigned) |
 
-### 15.6 Belum pernah dijalankan
+### 15.6 Never run yet
 
-Aplikasi di Windows (hanya dikompilasi silang) dan macOS; login dan API terhadap github.com dan gitlab.com sungguhan; keychain sungguhan; language server sungguhan (uji memakai server tiruan); kinerja dengan GPU sungguhan; memasang installer NSIS di Windows; membuka DMG di Mac. DMG Apple Silicon (`OnCode_0.1.0_aarch64.dmg`, 53 MB, tanda tangan ad-hoc, tanpa notarisasi) dibuat dengan kompilasi silang dari Linux memakai macOS SDK pihak ketiga, shader Metal yang dikompilasi saat aplikasi mulai, dan `rust-lld`; belum pernah dibuka di Mac. Belum ada DMG untuk Mac Intel. AppImage sudah dibuat dan dijalankan di Xvfb tanpa pustaka tambahan; jendelanya tampil.
+The app on Windows (only cross-compiled) and macOS; login and API against the real github.com and gitlab.com; a real keychain; real language servers (tests use a mock server); performance with a real GPU; installing the NSIS installer on Windows; opening the DMG on a Mac. The Apple Silicon DMG (`OnCode_0.1.0_aarch64.dmg`, 53 MB, ad-hoc signed, not notarized) was built by cross-compiling from Linux using a third-party macOS SDK, Metal shaders compiled when the app starts, and `rust-lld`; it has never been opened on a Mac. There is no DMG for Intel Macs yet. The AppImage has been built and run in Xvfb without extra libraries; its window shows.

@@ -1,6 +1,6 @@
-//! Uji autentikasi SSH sungguhan terhadap `sshd` pribadi di port acak: konfirmasi sidik jari host
-//! dan passphrase kunci diminta lewat dialog aplikasi (ssh → oncode-helper sebagai SSH_ASKPASS).
-//! `~/.ssh` pengguna tidak disentuh: ssh memakai berkas konfigurasi sementara lewat GIT_SSH_COMMAND.
+//! Tests of real SSH authentication against a private `sshd` on a random port: host fingerprint confirmation
+//! and the key passphrase are asked through app dialogs (ssh → oncode-helper as SSH_ASKPASS).
+//! The user's `~/.ssh` is not touched: ssh uses a temporary config file through GIT_SSH_COMMAND.
 
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
@@ -12,9 +12,9 @@ use oncode_ui::testing::{git, TestApp, TestWindow};
 
 const SSHD: &str = "/usr/sbin/sshd";
 
-/// `GIT_SSH_COMMAND` berlaku untuk seluruh proses uji, jadi uji SSH dijalankan satu per satu.
+/// `GIT_SSH_COMMAND` applies to the whole test process, so the SSH tests run one at a time.
 static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
-const PASSPHRASE: &str = "frasa-rahasia-kunci";
+const PASSPHRASE: &str = "secret-key-passphrase";
 
 struct Sshd {
     port: u16,
@@ -40,8 +40,8 @@ fn start_sshd() -> Option<Sshd> {
     std::fs::create_dir_all(&ssh_dir).unwrap();
     let keygen = |args: &[&str]| assert!(Command::new("ssh-keygen").args(args).status().unwrap().success());
     keygen(&["-q", "-t", "ed25519", "-N", "", "-f", &server.join("host_key").to_string_lossy()]);
-    keygen(&["-q", "-t", "ed25519", "-N", PASSPHRASE, "-f", &ssh_dir.join("id_uji").to_string_lossy()]);
-    std::fs::copy(ssh_dir.join("id_uji.pub"), server.join("authorized_keys")).unwrap();
+    keygen(&["-q", "-t", "ed25519", "-N", PASSPHRASE, "-f", &ssh_dir.join("id_test").to_string_lossy()]);
+    std::fs::copy(ssh_dir.join("id_test.pub"), server.join("authorized_keys")).unwrap();
     let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
     let config = [
         format!("Port {port}"),
@@ -68,7 +68,7 @@ fn start_sshd() -> Option<Sshd> {
         format!(
             "Host *\n  UserKnownHostsFile {}\n  IdentityFile {}\n  IdentitiesOnly yes\n  IdentityAgent none\n",
             ssh_dir.join("known_hosts").display(),
-            ssh_dir.join("id_uji").display()
+            ssh_dir.join("id_test").display()
         ),
     )
     .unwrap();
@@ -84,7 +84,7 @@ fn remote_head(bare: &Path) -> Option<String> {
     output.status.success().then(|| String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
-/// Menunggu dialog lalu mengklik tombol (`ok`/`cancel`) atau mengetik jawaban.
+/// Waits for a dialog, then clicks a button (`ok`/`cancel`) or types the answer.
 async fn answer(window: &TestWindow, cx: &mut TestAppContext, action: Result<&str, &'static str>) {
     for _ in 0..750 {
         let open = window.update(cx, |window, cx| {
@@ -131,32 +131,32 @@ async fn setup(app: &TestApp, sshd: &Sshd, cx: &mut TestAppContext) -> (TestWind
 #[gpui_kit::test]
 async fn ssh_push_confirms_the_host_and_asks_for_the_passphrase(cx: &mut TestAppContext) {
     let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-    let Some(sshd) = start_sshd() else { return eprintln!("sshd tidak tersedia; uji dilewati") };
+    let Some(sshd) = start_sshd() else { return eprintln!("sshd is not available; test skipped") };
     let app = TestApp::new(cx);
     let (window, bare, _bare_dir) = setup(&app, &sshd, cx).await;
 
     assert!(window.run_command(cx, "git.push"));
-    answer(&window, cx, Err("ok")).await; // sidik jari host disetujui
+    answer(&window, cx, Err("ok")).await; // host fingerprint approved
     answer(&window, cx, Ok(PASSPHRASE)).await;
-    window.wait_until(cx, "push lewat SSH berhasil", |_, _| remote_head(&bare).is_some()).await;
+    window.wait_until(cx, "push over SSH succeeded", |_, _| remote_head(&bare).is_some()).await;
     let known = std::fs::read_to_string(sshd.ssh_dir.join("known_hosts")).unwrap_or_default();
-    assert!(known.contains(&format!("[127.0.0.1]:{}", sshd.port)), "host yang disetujui dicatat");
+    assert!(known.contains(&format!("[127.0.0.1]:{}", sshd.port)), "the approved host is recorded");
 }
 
 #[gpui_kit::test]
 async fn rejecting_an_unknown_host_stops_the_push(cx: &mut TestAppContext) {
     let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-    let Some(sshd) = start_sshd() else { return eprintln!("sshd tidak tersedia; uji dilewati") };
+    let Some(sshd) = start_sshd() else { return eprintln!("sshd is not available; test skipped") };
     let app = TestApp::new(cx);
     let (window, bare, _bare_dir) = setup(&app, &sshd, cx).await;
 
     assert!(window.run_command(cx, "git.push"));
-    answer(&window, cx, Err("cancel")).await; // sidik jari host ditolak
+    answer(&window, cx, Err("cancel")).await; // host fingerprint rejected
     for _ in 0..100 {
         std::thread::sleep(std::time::Duration::from_millis(20));
         cx.run_until_parked();
     }
     assert_eq!(remote_head(&bare), None);
     let known = std::fs::read_to_string(sshd.ssh_dir.join("known_hosts")).unwrap_or_default();
-    assert!(!known.contains(&format!("[127.0.0.1]:{}", sshd.port)), "host yang ditolak tidak dicatat");
+    assert!(!known.contains(&format!("[127.0.0.1]:{}", sshd.port)), "the rejected host is not recorded");
 }

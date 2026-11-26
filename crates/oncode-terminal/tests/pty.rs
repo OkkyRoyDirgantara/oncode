@@ -1,4 +1,4 @@
-//! Uji integrasi dengan PTY sungguhan. Hanya untuk Unix karena memakai `/bin/sh`.
+//! Integration tests with a real PTY. Unix only because it uses `/bin/sh`.
 #![cfg(unix)]
 
 use std::sync::mpsc::{self, Receiver};
@@ -17,21 +17,21 @@ struct Output {
 
 impl Output {
     fn text(&self) -> String {
-        String::from_utf8_lossy(&self.bytes.lock().expect("kunci keluaran")).into_owned()
+        String::from_utf8_lossy(&self.bytes.lock().expect("output lock")).into_owned()
     }
 
-    /// Menunggu sampai keluaran memuat `needle`; panik dengan isi keluaran bila tidak muncul.
+    /// Waits until the output contains `needle`; panics with the output content if it does not appear.
     fn wait_for(&self, needle: &str) -> String {
         let deadline = Instant::now() + TIMEOUT;
-        let mut bytes = self.bytes.lock().expect("kunci keluaran");
+        let mut bytes = self.bytes.lock().expect("output lock");
         loop {
             let text = String::from_utf8_lossy(&bytes).into_owned();
             if text.contains(needle) {
                 return text;
             }
             let now = Instant::now();
-            assert!(now < deadline, "`{needle}` tidak muncul di keluaran: {text:?}");
-            bytes = self.changed.wait_timeout(bytes, deadline - now).expect("kunci keluaran").0;
+            assert!(now < deadline, "`{needle}` did not appear in the output: {text:?}");
+            bytes = self.changed.wait_timeout(bytes, deadline - now).expect("output lock").0;
         }
     }
 }
@@ -56,7 +56,7 @@ impl Term {
             .spawn(
                 options,
                 move |data| {
-                    sink.bytes.lock().expect("kunci keluaran").extend_from_slice(&data);
+                    sink.bytes.lock().expect("output lock").extend_from_slice(&data);
                     sink.changed.notify_all();
                 },
                 move |code| {
@@ -68,11 +68,11 @@ impl Term {
     }
 
     fn send(&self, text: &str) {
-        self.manager.write(self.id, text.as_bytes()).expect("tulis ke terminal");
+        self.manager.write(self.id, text.as_bytes()).expect("write to terminal");
     }
 
     fn wait_exit(&self) -> Option<i32> {
-        self.exit.recv_timeout(TIMEOUT).expect("on_exit tidak dipanggil")
+        self.exit.recv_timeout(TIMEOUT).expect("on_exit was not called")
     }
 }
 
@@ -114,15 +114,15 @@ fn resize_is_visible_to_the_child() {
 fn exit_code_is_reported_and_id_removed() {
     let dir = tempdir();
     let term = Term::spawn(sh(dir.path()));
-    term.send("echo sebelum-$((1+1))\n");
+    term.send("echo before-$((1+1))\n");
     term.send("exit 3\n");
     assert_eq!(term.wait_exit(), Some(3));
-    // Semua keluaran sudah terkirim sebelum on_exit.
-    assert!(term.output.text().contains("sebelum-2"));
+    // All output was delivered before on_exit.
+    assert!(term.output.text().contains("before-2"));
     assert!(term.manager.ids().is_empty());
-    // on_exit hanya sekali: pengirim sudah di-drop, tidak ada pesan kedua.
+    // on_exit only once: the sender has been dropped, there is no second message.
     assert!(term.exit.recv_timeout(Duration::from_millis(200)).is_err());
-    let err = term.manager.write(term.id, b"x").expect_err("terminal sudah keluar");
+    let err = term.manager.write(term.id, b"x").expect_err("terminal already exited");
     assert_eq!(err.code, TermErrorCode::NotFound);
 }
 
@@ -139,8 +139,8 @@ fn cwd_is_honoured() {
 fn missing_cwd_is_a_spawn_error() {
     let dir = tempdir();
     let manager = TerminalManager::new();
-    let options = sh(&dir.path().join("tidak-ada"));
-    let err = manager.spawn(options, |_| {}, |_| {}).expect_err("cwd tidak ada");
+    let options = sh(&dir.path().join("does-not-exist"));
+    let err = manager.spawn(options, |_| {}, |_| {}).expect_err("cwd does not exist");
     assert_eq!(err.code, TermErrorCode::SpawnFailed);
     assert!(manager.ids().is_empty());
 }
@@ -150,8 +150,8 @@ fn missing_shell_is_a_spawn_error() {
     let dir = tempdir();
     let manager = TerminalManager::new();
     let mut options = sh(dir.path());
-    options.shell = Some("/tidak/ada/shell-oncode".into());
-    let err = manager.spawn(options, |_| {}, |_| {}).expect_err("shell tidak ada");
+    options.shell = Some("/does/not/exist/shell-oncode".into());
+    let err = manager.spawn(options, |_| {}, |_| {}).expect_err("shell does not exist");
     assert_eq!(err.code, TermErrorCode::SpawnFailed);
     assert!(manager.ids().is_empty());
 }
@@ -160,10 +160,10 @@ fn missing_shell_is_a_spawn_error() {
 fn env_is_passed_to_the_shell() {
     let dir = tempdir();
     let mut options = sh(dir.path());
-    options.env = vec![("ONCODE_UJI".into(), "nilai".into())];
+    options.env = vec![("ONCODE_TEST".into(), "value".into())];
     let term = Term::spawn(options);
-    term.send("echo \"env=$ONCODE_UJI/$TERM/$COLORTERM/$TERM_PROGRAM.\"\n");
-    term.output.wait_for("env=nilai/xterm-256color/truecolor/OnCode.");
+    term.send("echo \"env=$ONCODE_TEST/$TERM/$COLORTERM/$TERM_PROGRAM.\"\n");
+    term.output.wait_for("env=value/xterm-256color/truecolor/OnCode.");
 }
 
 #[test]
@@ -180,50 +180,50 @@ fn args_are_passed_to_the_shell() {
 fn paused_terminal_holds_output_until_resumed() {
     let dir = tempdir();
     let term = Term::spawn(sh(dir.path()));
-    term.send("echo awal-$((1+1))\n");
-    term.output.wait_for("awal-2");
+    term.send("echo start-$((1+1))\n");
+    term.output.wait_for("start-2");
 
-    term.manager.set_paused(term.id, true).expect("jeda");
-    term.send("echo tahan-$((20+3))\n");
+    term.manager.set_paused(term.id, true).expect("pause");
+    term.send("echo hold-$((20+3))\n");
     std::thread::sleep(Duration::from_millis(400));
-    assert!(!term.output.text().contains("tahan-23"), "keluaran bocor saat dijeda");
+    assert!(!term.output.text().contains("hold-23"), "output leaked while paused");
 
-    term.manager.set_paused(term.id, false).expect("lanjut");
-    term.output.wait_for("tahan-23");
+    term.manager.set_paused(term.id, false).expect("resume");
+    term.output.wait_for("hold-23");
 }
 
 #[test]
 fn exit_while_paused_delivers_output_after_resume() {
     let dir = tempdir();
     let term = Term::spawn(sh(dir.path()));
-    term.send("echo awal-$((1+1))\n");
-    term.output.wait_for("awal-2");
+    term.send("echo start-$((1+1))\n");
+    term.output.wait_for("start-2");
 
-    term.manager.set_paused(term.id, true).expect("jeda");
-    term.send("echo akhir-$((30+3)); exit 4\n");
-    assert!(term.exit.recv_timeout(Duration::from_millis(600)).is_err(), "on_exit mendahului keluaran");
+    term.manager.set_paused(term.id, true).expect("pause");
+    term.send("echo final-$((30+3)); exit 4\n");
+    assert!(term.exit.recv_timeout(Duration::from_millis(600)).is_err(), "on_exit came before the output");
 
-    // Proses sudah keluar, tetapi sisa keluaran baru dikirim setelah dilanjutkan.
+    // The process has exited, but the remaining output is only delivered after resuming.
     assert_eq!(term.manager.ids(), vec![term.id]);
-    term.manager.set_paused(term.id, false).expect("lanjut");
+    term.manager.set_paused(term.id, false).expect("resume");
     assert_eq!(term.wait_exit(), Some(4));
-    assert!(term.output.text().contains("akhir-33"));
+    assert!(term.output.text().contains("final-33"));
 }
 
 #[test]
 fn kill_triggers_on_exit() {
     let dir = tempdir();
     let term = Term::spawn(sh(dir.path()));
-    term.send("echo siap-$((1+1))\n");
-    term.output.wait_for("siap-2");
+    term.send("echo ready-$((1+1))\n");
+    term.output.wait_for("ready-2");
     term.manager.kill(term.id);
     assert!(term.manager.ids().is_empty());
     term.wait_exit();
-    // Tidak ada keluaran setelah on_exit.
+    // No output after on_exit.
     let before = term.output.text();
     std::thread::sleep(Duration::from_millis(100));
     assert_eq!(term.output.text(), before);
-    // kill kedua dan id asing tidak apa-apa.
+    // A second kill and an unknown id are fine.
     term.manager.kill(term.id);
     term.manager.kill(9999);
 }
@@ -232,11 +232,11 @@ fn kill_triggers_on_exit() {
 fn kill_stops_a_child_that_ignores_sighup() {
     let dir = tempdir();
     let term = Term::spawn(sh(dir.path()));
-    term.send("trap '' HUP; echo kebal-$((1+1))\n");
-    term.output.wait_for("kebal-2");
+    term.send("trap '' HUP; echo immune-$((1+1))\n");
+    term.output.wait_for("immune-2");
     let started = Instant::now();
     term.manager.kill(term.id);
-    assert_eq!(term.wait_exit(), None, "proses seharusnya dihentikan SIGKILL");
+    assert_eq!(term.wait_exit(), None, "the process should have been stopped by SIGKILL");
     assert!(started.elapsed() < Duration::from_secs(5));
 }
 
@@ -244,9 +244,9 @@ fn kill_stops_a_child_that_ignores_sighup() {
 fn kill_while_paused_still_exits() {
     let dir = tempdir();
     let term = Term::spawn(sh(dir.path()));
-    term.send("echo siap-$((1+1))\n");
-    term.output.wait_for("siap-2");
-    term.manager.set_paused(term.id, true).expect("jeda");
+    term.send("echo ready-$((1+1))\n");
+    term.output.wait_for("ready-2");
+    term.manager.set_paused(term.id, true).expect("pause");
     term.manager.kill(term.id);
     term.wait_exit();
 }
@@ -259,7 +259,7 @@ fn exit_is_reported_even_if_a_background_job_keeps_the_pty_open() {
     term.send("exit 0\n");
     let started = Instant::now();
     assert_eq!(term.wait_exit(), Some(0));
-    assert!(started.elapsed() < Duration::from_millis(2500), "on_exit menunggu proses latar belakang");
+    assert!(started.elapsed() < Duration::from_millis(2500), "on_exit waited for the background process");
 }
 
 #[test]
@@ -286,20 +286,20 @@ fn kill_all_and_drop_stop_every_terminal() {
     a.wait_exit();
     b.wait_exit();
 
-    // Drop pengelola menghentikan terminal yang tersisa.
+    // Dropping the manager stops the remaining terminals.
     let c = Term::spawn(sh(dir.path()));
     let Term { manager: owned, exit, .. } = c;
     drop(owned);
-    exit.recv_timeout(TIMEOUT).expect("on_exit setelah drop");
+    exit.recv_timeout(TIMEOUT).expect("on_exit after drop");
 }
 
 #[test]
 fn large_output_arrives_complete() {
     let dir = tempdir();
     let term = Term::spawn(sh(dir.path()));
-    // 200 KiB lebih: melampaui satu potongan baca dan buffer PTY.
-    term.send("i=0; while [ $i -lt 4000 ]; do echo \"baris-$i-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"; i=$((i+1)); done; echo selesai-$((2*4))\n");
-    let text = term.output.wait_for("selesai-8");
-    assert!(text.contains("baris-0-x"));
-    assert!(text.contains("baris-3999-x"));
+    // Over 200 KiB: exceeds a single read chunk and the PTY buffer.
+    term.send("i=0; while [ $i -lt 4000 ]; do echo \"line-$i-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"; i=$((i+1)); done; echo done-$((2*4))\n");
+    let text = term.output.wait_for("done-8");
+    assert!(text.contains("line-0-x"));
+    assert!(text.contains("line-3999-x"));
 }

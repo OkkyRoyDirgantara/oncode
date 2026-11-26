@@ -1,38 +1,38 @@
-//! Lokasi direktori konfigurasi dan data aplikasi.
+//! Locations of the app's config and data directories.
 //!
-//! Di v0.2 lokasi ini ditentukan Tauri dari identifier aplikasi; di sini diturunkan dengan
-//! aturan yang sama agar `settings.json`, `keybindings.json`, dan `state.json` lama tetap terbaca.
+//! In v0.2 these locations were determined by Tauri from the app identifier; here they are derived
+//! with the same rules so the old `settings.json`, `keybindings.json`, and `state.json` stay readable.
 
 use std::path::PathBuf;
 
-/// Identifier aplikasi v0.2 (`tauri.conf.json`); menjadi nama folder di direktori konfigurasi dan data.
+/// The v0.2 app identifier (`tauri.conf.json`); becomes the folder name in the config and data directories.
 pub const APP_IDENTIFIER: &str = "dev.oncode.editor";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Dirs {
-    /// Memuat `settings.json` dan `keybindings.json`.
+    /// Holds `settings.json` and `keybindings.json`.
     pub config_dir: PathBuf,
-    /// Memuat `state.json`.
+    /// Holds `state.json`.
     pub data_dir: PathBuf,
 }
 
 impl Dirs {
-    /// Lokasi bawaan, sama persis dengan yang dipakai versi Tauri:
+    /// Default locations, exactly the same as what the Tauri version used:
     ///
     /// | OS | `config_dir` | `data_dir` |
     /// |---|---|---|
-    /// | Linux | `$XDG_CONFIG_HOME` atau `~/.config` | `$XDG_DATA_HOME` atau `~/.local/share` |
+    /// | Linux | `$XDG_CONFIG_HOME` or `~/.config` | `$XDG_DATA_HOME` or `~/.local/share` |
     /// | Windows | `%APPDATA%` | `%APPDATA%` |
     /// | macOS | `~/Library/Application Support` | `~/Library/Application Support` |
     ///
-    /// masing-masing ditambah `dev.oncode.editor`. Tidak ada variabel lingkungan khusus OnCode;
-    /// di Linux `XDG_CONFIG_HOME`/`XDG_DATA_HOME` (harus path absolut) tetap dihormati seperti dulu.
-    /// `None` bila OS tidak bisa memberi tahu folder home pengguna.
+    /// each with `dev.oncode.editor` appended. There are no OnCode-specific environment variables;
+    /// on Linux `XDG_CONFIG_HOME`/`XDG_DATA_HOME` (must be absolute paths) are still honored as before.
+    /// `None` if the OS cannot tell the user's home folder.
     pub fn default_for_app() -> Option<Dirs> {
         Self::from_bases(dirs::config_dir(), dirs::data_dir())
     }
 
-    /// Kedua direktori di bawah satu folder (`<base>/config` dan `<base>/data`); untuk uji.
+    /// Both directories under one folder (`<base>/config` and `<base>/data`); for tests.
     pub fn under(base: impl Into<PathBuf>) -> Dirs {
         let base = base.into();
         Dirs { config_dir: base.join("config"), data_dir: base.join("data") }
@@ -55,7 +55,7 @@ impl Dirs {
     }
 }
 
-/// Folder home pengguna.
+/// The user's home folder.
 pub fn home_dir() -> Option<PathBuf> {
     dirs::home_dir()
 }
@@ -72,19 +72,19 @@ mod tests {
         assert_eq!(dirs.settings_path(), PathBuf::from("/home/a/.config/dev.oncode.editor/settings.json"));
         assert_eq!(dirs.keybindings_path(), PathBuf::from("/home/a/.config/dev.oncode.editor/keybindings.json"));
         assert_eq!(dirs.state_path(), PathBuf::from("/home/a/.local/share/dev.oncode.editor/state.json"));
-        // Tanpa folder dasar (home tidak diketahui) tidak ada lokasi bawaan.
+        // Without base folders (home unknown) there is no default location.
         assert_eq!(Dirs::from_bases(None, Some(PathBuf::from("/x"))), None);
         assert_eq!(Dirs::from_bases(Some(PathBuf::from("/x")), None), None);
     }
 
     #[test]
     fn explicit_dirs_override_the_defaults() {
-        let dirs = Dirs::under("/tmp/uji");
-        assert_eq!(dirs.config_dir, PathBuf::from("/tmp/uji/config"));
-        assert_eq!(dirs.data_dir, PathBuf::from("/tmp/uji/data"));
+        let dirs = Dirs::under("/tmp/test");
+        assert_eq!(dirs.config_dir, PathBuf::from("/tmp/test/config"));
+        assert_eq!(dirs.data_dir, PathBuf::from("/tmp/test/data"));
     }
 
-    /// Nilai lingkungan hanya dibaca, tidak diubah, supaya aman dijalankan paralel dengan uji lain.
+    /// Environment values are only read, never changed, so it is safe to run in parallel with other tests.
     #[cfg(target_os = "linux")]
     #[test]
     fn linux_defaults_follow_xdg_like_the_tauri_version() {
@@ -92,7 +92,7 @@ mod tests {
         let xdg = |key: &str, fallback: &str| {
             std::env::var_os(key).map(PathBuf::from).filter(|p| p.is_absolute()).unwrap_or_else(|| home.join(fallback))
         };
-        let dirs = Dirs::default_for_app().expect("lokasi bawaan");
+        let dirs = Dirs::default_for_app().expect("default location");
         assert_eq!(dirs.config_dir, xdg("XDG_CONFIG_HOME", ".config").join("dev.oncode.editor"));
         assert_eq!(dirs.data_dir, xdg("XDG_DATA_HOME", ".local/share").join("dev.oncode.editor"));
     }
@@ -100,7 +100,7 @@ mod tests {
     #[cfg(any(windows, target_os = "macos"))]
     #[test]
     fn config_and_data_share_one_folder_on_windows_and_macos() {
-        let dirs = Dirs::default_for_app().expect("lokasi bawaan");
+        let dirs = Dirs::default_for_app().expect("default location");
         assert_eq!(dirs.config_dir, dirs.data_dir);
         assert!(dirs.config_dir.ends_with("dev.oncode.editor"));
     }

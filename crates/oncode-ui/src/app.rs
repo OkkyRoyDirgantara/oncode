@@ -1,8 +1,8 @@
-//! Jembatan antara `oncode-core` (tokio) dan GPUI.
+//! Bridge between `oncode-core` (tokio) and GPUI.
 //!
-//! Crate backend memakai tokio, sedangkan GPUI punya eksekutornya sendiri. Aturannya:
-//! pekerjaan backend dijalankan di runtime tokio lewat [`spawn_core`], hasilnya ditunggu
-//! dari tugas GPUI. Event dari core diteruskan ke thread utama dan disiarkan lewat [`CoreBus`].
+//! Backend crates use tokio, while GPUI has its own executor. The rule: backend work
+//! runs on the tokio runtime via [`spawn_core`], and its result is awaited from a GPUI
+//! task. Events from the core are forwarded to the main thread and broadcast via [`CoreBus`].
 
 use std::future::Future;
 use std::sync::Arc;
@@ -11,12 +11,12 @@ use gpui_kit::{App, AppContext as _, Entity, EventEmitter, Global, Task};
 use oncode_core::{CoreEvent, Shared};
 use tokio::sync::mpsc::UnboundedReceiver;
 
-/// State global aplikasi.
+/// Global application state.
 pub struct OnCode {
     pub core: Shared,
-    /// Runtime tokio tempat semua pekerjaan backend berjalan; hidup selama aplikasi.
+    /// The tokio runtime where all backend work runs; lives as long as the application.
     pub runtime: Arc<tokio::runtime::Runtime>,
-    /// Event dari core, diisi oleh sink yang dipasang saat `Core` dibuat.
+    /// Events from the core, fed by the sink installed when `Core` is created.
     pub events: Option<UnboundedReceiver<CoreEvent>>,
 }
 
@@ -28,7 +28,7 @@ struct Globals {
 
 impl Global for Globals {}
 
-/// Menyiarkan [`CoreEvent`] di thread utama. Berlangganan dengan `cx.subscribe(&core_bus(cx), ..)`.
+/// Broadcasts [`CoreEvent`] on the main thread. Subscribe with `cx.subscribe(&core_bus(cx), ..)`.
 pub struct CoreBus;
 
 impl EventEmitter<CoreEvent> for CoreBus {}
@@ -57,7 +57,7 @@ pub fn core_bus(cx: &App) -> Entity<CoreBus> {
     cx.global::<Globals>().bus.clone()
 }
 
-/// Menjalankan pekerjaan backend di runtime tokio dan mengembalikan tugas GPUI untuk hasilnya.
+/// Runs backend work on the tokio runtime and returns a GPUI task for its result.
 ///
 /// ```ignore
 /// let task = spawn_core(cx, async move { api::git::git_stage(&core, &root, paths).await });
@@ -69,5 +69,5 @@ where
     F: Future<Output = T> + Send + 'static,
 {
     let handle = cx.global::<Globals>().runtime.spawn(future);
-    cx.background_spawn(async move { handle.await.expect("tugas backend panik") })
+    cx.background_spawn(async move { handle.await.expect("backend task panicked") })
 }

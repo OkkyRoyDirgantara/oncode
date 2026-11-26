@@ -1,7 +1,7 @@
-//! Model editor konflik: rentang tiap konflik di dokumen hasil, pilihan sisi, dan pergeserannya
-//! saat dokumen hasil disunting. Murni state; tampilannya ada di `conflict_tab.rs`.
+//! Conflict editor model: the range of each conflict in the result document, the side choice, and how
+//! ranges shift as the result document is edited. Pure state; the view lives in `conflict_tab.rs`.
 //!
-//! Semua posisi adalah offset byte pada teks yang akhir barisnya sudah dinormalkan menjadi `\n`.
+//! All positions are byte offsets into text whose line endings have been normalized to `\n`.
 
 use std::ops::Range;
 
@@ -28,15 +28,15 @@ pub enum ConflictChoice {
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct InitialResult {
-    /// Isi awal panel Hasil: bagian yang sudah tergabung, dengan sisi current pada tiap konflik.
+    /// Initial content of the Result panel: the already-merged parts, with the current side for each conflict.
     pub text: String,
     pub conflicts: Vec<ConflictRange>,
-    /// Rentang tiap konflik pada berkas sisi current dan incoming, untuk penyorotan.
+    /// Range of each conflict in the current-side and incoming-side files, for highlighting.
     pub current_ranges: Vec<Range<usize>>,
     pub incoming_ranges: Vec<Range<usize>>,
 }
 
-/// Editor memakai `\n` sebagai pemisah baris; panjang dihitung setelah normalisasi.
+/// The editor uses `\n` as the line separator; lengths are computed after normalization.
 pub fn normalize(text: &str) -> String {
     if text.contains('\r') {
         text.replace("\r\n", "\n").replace('\r', "\n")
@@ -45,7 +45,7 @@ pub fn normalize(text: &str) -> String {
     }
 }
 
-/// Menyusun dokumen hasil awal dan posisi konflik dari segmen penggabungan tiga arah.
+/// Builds the initial result document and the conflict positions from three-way merge segments.
 pub fn build_initial_result(segments: &[MergeSegment]) -> InitialResult {
     let mut result = InitialResult::default();
     let (mut current_offset, mut incoming_offset) = (0usize, 0usize);
@@ -79,7 +79,7 @@ pub fn choice_text(conflict: &ConflictRange, choice: ConflictChoice) -> String {
         ConflictChoice::Base => conflict.base.clone(),
         ConflictChoice::Both => {
             let first = &conflict.current;
-            // Pastikan kedua sisi tidak menyatu dalam satu baris.
+            // Make sure the two sides don't merge into a single line.
             if !first.is_empty() && !first.ends_with('\n') && !conflict.incoming.is_empty() {
                 format!("{first}\n{}", conflict.incoming)
             } else {
@@ -89,8 +89,8 @@ pub fn choice_text(conflict: &ConflictRange, choice: ConflictChoice) -> String {
     }
 }
 
-/// Posisi `pos` setelah `[start, old_end)` diganti teks sepanjang `new_end - start`.
-/// `after`: posisi yang berada tepat di titik sisipan pindah ke setelah teks sisipan.
+/// Position `pos` after `[start, old_end)` is replaced by text of length `new_end - start`.
+/// `after`: a position exactly at the insertion point moves to after the inserted text.
 fn map_position(pos: usize, after: bool, start: usize, old_end: usize, new_end: usize) -> usize {
     if pos < start {
         pos
@@ -109,8 +109,8 @@ fn map_position(pos: usize, after: bool, start: usize, old_end: usize, new_end: 
     }
 }
 
-/// Suntingan terkecil yang mengubah `before` menjadi `after`: `(start, old_end, new_end)`.
-/// Dipakai bila editor hanya melaporkan "seluruh dokumen diganti" (mis. setelah komposisi IME).
+/// The smallest edit that turns `before` into `after`: `(start, old_end, new_end)`.
+/// Used when the editor only reports "the whole document was replaced" (e.g. after IME composition).
 pub fn minimal_edit(before: &str, after: &str) -> (usize, usize, usize) {
     let (old, new) = (before.as_bytes(), after.as_bytes());
     let mut prefix = old.iter().zip(new).take_while(|(a, b)| a == b).count();
@@ -128,7 +128,7 @@ pub fn minimal_edit(before: &str, after: &str) -> (usize, usize, usize) {
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ConflictState {
     pub conflicts: Vec<ConflictRange>,
-    /// Konflik yang sedang disorot dan dituju tombol pilihan.
+    /// The conflict currently highlighted and targeted by the choice buttons.
     pub active: usize,
 }
 
@@ -141,9 +141,9 @@ impl ConflictState {
         self.conflicts.iter().filter(|c| !c.resolved).count()
     }
 
-    /// Menggeser rentang setelah suntingan manual: `[start, old_end)` diganti teks yang
-    /// berakhir di `new_end`. Suntingan di dalam (atau menyentuh) sebuah konflik berarti
-    /// pengguna sudah memutuskan isinya.
+    /// Shifts the ranges after a manual edit: `[start, old_end)` is replaced by text that
+    /// ends at `new_end`. An edit inside (or touching) a conflict means the user has
+    /// already decided its content.
     pub fn apply_edit(&mut self, start: usize, old_end: usize, new_end: usize) {
         for conflict in &mut self.conflicts {
             let touched = start <= conflict.to && old_end >= conflict.from;
@@ -155,8 +155,8 @@ impl ConflictState {
         }
     }
 
-    /// Mengganti isi sebuah konflik dengan sisi pilihan dan menandainya selesai.
-    /// Mengembalikan rentang lama dan teks penggantinya untuk diterapkan ke dokumen hasil.
+    /// Replaces the content of a conflict with the chosen side and marks it resolved.
+    /// Returns the old range and its replacement text, to be applied to the result document.
     pub fn choose(&mut self, index: usize, choice: ConflictChoice) -> Option<(Range<usize>, String)> {
         let conflict = self.conflicts.iter().find(|c| c.index == index)?.clone();
         let insert = choice_text(&conflict, choice);
@@ -189,7 +189,7 @@ mod tests {
         ]
     }
 
-    /// Dokumen hasil tiruan: teks dan state yang diperbarui bersama, seperti di tampilan.
+    /// Mock result document: text and state updated together, as in the view.
     struct Doc {
         text: String,
         state: ConflictState,
@@ -223,7 +223,7 @@ mod tests {
         assert_eq!(initial.text, "timeout = 60\nretries = 4\nlog = \"debug\"\na\nb\n");
         let slices: Vec<&str> = initial.conflicts.iter().map(|c| &initial.text[c.from..c.to]).collect();
         assert_eq!(slices, ["retries = 4\n", "a\nb\n"]);
-        // Sisi incoming lebih pendek di konflik kedua; rentangnya dihitung pada berkas incoming.
+        // The incoming side is shorter in the second conflict; its range is computed on the incoming file.
         let incoming_file = "timeout = 60\nretries = 5\nlog = \"debug\"\n";
         let incoming: Vec<&str> = initial.incoming_ranges.iter().map(|r| &incoming_file[r.clone()]).collect();
         assert_eq!(incoming, ["retries = 5\n", ""]);
@@ -254,7 +254,7 @@ mod tests {
         assert_eq!(doc.slice(1), "a\nb\n");
         assert_eq!(doc.state.unresolved(), 1);
 
-        // Sisi incoming kosong (baris dihapus): rentang menjadi kosong tetapi tetap bisa dipilih ulang.
+        // Empty incoming side (lines deleted): the range becomes empty but can still be re-chosen.
         doc.choose(1, ConflictChoice::Incoming);
         assert_eq!(doc.text, "timeout = 60\nretries = 4\nretries = 5\nlog = \"debug\"\n");
         assert_eq!(doc.state.active, 1);
@@ -266,10 +266,10 @@ mod tests {
     #[test]
     fn manual_edits_inside_a_conflict_resolve_it_and_edits_outside_do_not() {
         let (mut doc, initial) = Doc::new();
-        doc.edit(0..0, "# komentar\n");
+        doc.edit(0..0, "# comment\n");
         assert_eq!(doc.state.unresolved(), 2);
         let shifted = doc.state.conflicts[0].clone();
-        assert_eq!(shifted.from, initial.conflicts[0].from + "# komentar\n".len());
+        assert_eq!(shifted.from, initial.conflicts[0].from + "# comment\n".len());
         assert_eq!(doc.slice(0), "retries = 4\n");
 
         doc.edit(shifted.from + 10..shifted.from + 11, "9");
@@ -283,12 +283,12 @@ mod tests {
     fn deleting_across_a_conflict_boundary_clamps_the_range() {
         let (mut doc, initial) = Doc::new();
         let first = initial.conflicts[0].clone();
-        // Hapus dari tengah konflik pertama sampai ke teks setelahnya.
+        // Delete from the middle of the first conflict through to the text after it.
         doc.edit(first.from + 4..first.to + 3, "");
         assert_eq!(doc.slice(0), "retr");
         assert!(doc.state.conflicts[0].resolved);
         assert_eq!(doc.slice(1), "a\nb\n");
-        // Menghapus seluruh konflik kedua menyisakan rentang kosong di posisinya.
+        // Deleting the whole second conflict leaves an empty range at its position.
         let second = doc.state.conflicts[1].clone();
         doc.edit(second.from - 1..second.to, "");
         assert_eq!(doc.slice(1), "");
@@ -300,16 +300,16 @@ mod tests {
         assert_eq!(minimal_edit("abc def", "abc XY def"), (4, 4, 7));
         assert_eq!(minimal_edit("abc def", "abc"), (3, 7, 3));
         assert_eq!(minimal_edit("aaa", "aaaa"), (3, 3, 4));
-        assert_eq!(minimal_edit("sama", "sama"), (4, 4, 4));
-        // Tidak memotong di tengah karakter multibyte.
+        assert_eq!(minimal_edit("same", "same"), (4, 4, 4));
+        // Doesn't cut in the middle of a multibyte character.
         assert_eq!(minimal_edit("é", "è"), (0, 2, 2));
     }
 
     #[test]
     fn both_never_joins_the_two_sides_on_one_line() {
-        let conflict = ConflictRange { index: 0, from: 0, to: 0, resolved: false, current: "tanpa newline".into(), incoming: "kedua\n".into(), base: String::new() };
-        assert_eq!(choice_text(&conflict, ConflictChoice::Both), "tanpa newline\nkedua\n");
-        assert_eq!(choice_text(&ConflictRange { current: "a\n".into(), ..conflict.clone() }, ConflictChoice::Both), "a\nkedua\n");
-        assert_eq!(choice_text(&ConflictRange { base: "asal\n".into(), ..conflict }, ConflictChoice::Base), "asal\n");
+        let conflict = ConflictRange { index: 0, from: 0, to: 0, resolved: false, current: "no newline".into(), incoming: "second\n".into(), base: String::new() };
+        assert_eq!(choice_text(&conflict, ConflictChoice::Both), "no newline\nsecond\n");
+        assert_eq!(choice_text(&ConflictRange { current: "a\n".into(), ..conflict.clone() }, ConflictChoice::Both), "a\nsecond\n");
+        assert_eq!(choice_text(&ConflictRange { base: "origin\n".into(), ..conflict }, ConflictChoice::Base), "origin\n");
     }
 }

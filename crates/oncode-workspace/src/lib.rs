@@ -1,8 +1,8 @@
-//! Lapisan workspace OnCode.
+//! OnCode workspace layer.
 //!
-//! Menyediakan akses berkas, watcher, pencarian teks proyek, dan indeks quick open
-//! (lihat `docs/RANCANGAN.md` bagian 7.1–7.3). Crate ini tidak bergantung pada Tauri
-//! sehingga bisa diuji langsung terhadap direktori sementara.
+//! Provides file access, watcher, project text search, and the quick open index
+//! (see `docs/DESIGN.md` section 7.1–7.3). This crate does not depend on Tauri,
+//! so it can be tested directly against temporary directories.
 
 pub mod error;
 pub mod fs;

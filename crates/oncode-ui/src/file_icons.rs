@@ -1,8 +1,8 @@
-//! Ikon berwarna per bahasa dan jenis berkas (Explorer, tab, Quick Open, Source Control).
+//! Colored icons per language and file type (Explorer, tabs, Quick Open, Source Control).
 //!
-//! Ikonnya berasal dari Material Icon Theme (MIT, lihat `assets/file-icons/LICENSE`), ditanam di
-//! dalam binary dan dimuat lewat [`Assets`]. Ditampilkan dengan `img()` agar warnanya utuh
-//! (elemen `svg()` GPUI hanya menggambar satu warna).
+//! The icons come from Material Icon Theme (MIT, see `assets/file-icons/LICENSE`), embedded
+//! in the binary and loaded through [`Assets`]. They are shown with `img()` so their colors stay
+//! intact (GPUI's `svg()` element only paints a single color).
 
 use std::borrow::Cow;
 
@@ -14,7 +14,7 @@ macro_rules! icons {
     };
 }
 
-/// Semua ikon yang ditanam: (nama tanpa `.svg`, isi berkas).
+/// All embedded icons: (name without `.svg`, file content).
 const ICONS: &[(&str, &[u8])] = icons![
     "android", "audio", "c", "certificate", "changelog", "cmake", "console", "cpp", "csharp", "css", "dart", "database", "diff", "docker", "document",
     "editorconfig", "elixir", "eslint", "exe", "folder-android", "folder-api", "folder-app", "folder-base", "folder-components", "folder-config",
@@ -26,10 +26,10 @@ const ICONS: &[(&str, &[u8])] = icons![
     "typescript-def", "typescript", "video", "vite", "vue", "xml", "yaml", "zig", "zip",
 ];
 
-/// Awalan path aset ikon berkas.
+/// Path prefix of the file icon assets.
 const PREFIX: &str = "file-icons/";
 
-/// Sumber aset aplikasi: ikon berkas milik OnCode, lalu aset bawaan gpui-kit (ikon Lucide, dsb.).
+/// The application's asset source: OnCode's file icons, then gpui-kit's bundled assets (Lucide icons, etc.).
 pub struct Assets;
 
 impl AssetSource for Assets {
@@ -52,7 +52,7 @@ fn asset(name: &str) -> SharedString {
     format!("{PREFIX}{name}.svg").into()
 }
 
-/// Nama ikon untuk nama berkas tertentu (tanpa folder), sebelum melihat ekstensi.
+/// The icon name for a specific file name (without folder), before looking at the extension.
 fn icon_for_name(name: &str) -> Option<&'static str> {
     Some(match name {
         "package.json" => "nodejs",
@@ -93,7 +93,7 @@ fn icon_for_name(name: &str) -> Option<&'static str> {
     })
 }
 
-/// Nama ikon untuk sebuah ekstensi (huruf kecil, tanpa titik).
+/// The icon name for an extension (lowercase, without the dot).
 fn icon_for_extension(extension: &str) -> &'static str {
     match extension {
         "rs" => "rust",
@@ -198,22 +198,22 @@ fn folder_icon_name(path: &str) -> &'static str {
     }
 }
 
-/// Path aset ikon untuk sebuah berkas (nama atau path lengkap).
+/// The icon asset path for a file (name or full path).
 pub fn file_icon_path(path: &str) -> SharedString {
     asset(file_icon_name(path))
 }
 
-/// Path aset ikon untuk sebuah folder (nama atau path lengkap).
+/// The icon asset path for a folder (name or full path).
 pub fn folder_icon_path(path: &str) -> SharedString {
     asset(folder_icon_name(path))
 }
 
-/// Ikon berkas siap pakai (16 px).
+/// A ready-to-use file icon (16 px).
 pub fn file_icon(path: &str) -> Img {
     img(file_icon_path(path)).size(px(16.)).flex_none()
 }
 
-/// Ikon folder siap pakai (16 px).
+/// A ready-to-use folder icon (16 px).
 pub fn folder_icon(path: &str) -> Img {
     img(folder_icon_path(path)).size(px(16.)).flex_none()
 }
@@ -230,7 +230,7 @@ mod tests {
     fn languages_and_special_files_get_their_logo() {
         for (file, icon) in [
             ("src/main.rs", "rust"),
-            ("C:\\proyek\\app.py", "python"),
+            ("C:\\project\\app.py", "python"),
             ("web/App.tsx", "react_ts"),
             ("types/index.d.ts", "typescript-def"),
             ("lib/main.dart", "dart"),
@@ -246,9 +246,9 @@ mod tests {
             ("README.md", "readme"),
             (".env.local", "tune"),
             ("vite.config.ts", "vite"),
-            ("catatan", "document"),
+            ("notes", "document"),
             (".bashrc", "document"),
-            ("arsip.unknown", "document"),
+            ("archive.unknown", "document"),
         ] {
             assert_eq!(name_of(&file_icon_path(file)), icon, "{file}");
         }
@@ -260,10 +260,10 @@ mod tests {
         assert_eq!(name_of(&folder_icon_path("node_modules")), "folder-node");
         assert_eq!(name_of(&folder_icon_path(".github/")), "folder-github");
         assert_eq!(name_of(&folder_icon_path("Tests")), "folder-test");
-        assert_eq!(name_of(&folder_icon_path("fitur")), "folder-base");
+        assert_eq!(name_of(&folder_icon_path("features")), "folder-base");
     }
 
-    /// Setiap ikon yang mungkin dipilih benar-benar tertanam, dan aset gpui-kit tetap terbaca.
+    /// Every icon that might be chosen is really embedded, and gpui-kit's assets can still be read.
     #[test]
     fn every_mapped_icon_is_embedded_and_other_assets_still_load() {
         let names: Vec<&str> = ICONS.iter().map(|(name, _)| *name).collect();
@@ -277,14 +277,14 @@ mod tests {
         ];
         for file in probe {
             let icon = file_icon_name(file);
-            assert!(names.contains(&icon), "{file} → {icon} tidak tertanam");
+            assert!(names.contains(&icon), "{file} → {icon} is not embedded");
             assert!(Assets.load(&file_icon_path(file)).unwrap().is_some_and(|bytes| bytes.starts_with(b"<svg")), "{file}");
         }
-        for folder in ["src", "tests", ".git", ".github", "node_modules", "docs", "images", "assets", "config", "dist", "lib", "components", ".vscode", "public", "scripts", "app", "android", "ios", "target", "utils", "api", "db", ".dart_tool", "lain"] {
+        for folder in ["src", "tests", ".git", ".github", "node_modules", "docs", "images", "assets", "config", "dist", "lib", "components", ".vscode", "public", "scripts", "app", "android", "ios", "target", "utils", "api", "db", ".dart_tool", "other"] {
             assert!(names.contains(&folder_icon_name(folder)), "{folder}");
         }
-        assert_eq!(Assets.load("file-icons/tidak-ada.svg").unwrap(), None);
-        // Ikon Lucide milik gpui-kit tetap dimuat lewat sumber yang sama.
+        assert_eq!(Assets.load("file-icons/does-not-exist.svg").unwrap(), None);
+        // gpui-kit's Lucide icons are still loaded through the same source.
         let lucide = crate::Lucide::File.path();
         assert!(Assets.load(&lucide).unwrap().is_some(), "{lucide}");
         assert!(Assets.list(PREFIX).unwrap().len() >= ICONS.len());

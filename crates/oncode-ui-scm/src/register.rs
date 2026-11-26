@@ -1,5 +1,5 @@
-//! Pendaftaran fitur Source Control ke setiap jendela: sidebar, panel Git Output, item status
-//! bar, dan command (id dan pintasan sama dengan v0.2).
+//! Registers the Source Control feature in every window: the sidebar, the Git Output panel, status
+//! bar items, and commands (ids and shortcuts same as v0.2).
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -20,7 +20,7 @@ use crate::status::{BranchStatus, SyncStatus};
 use crate::store::ScmStore;
 use crate::view::ScmPanel;
 
-/// Command yang bekerja pada repositori jendela ini.
+/// A command that works on this window's repository.
 fn repo_command(id: &'static str, title: &'static str, flow: fn(Git, &mut Window, &mut App)) -> Command {
     Command::new(id, title, move |_: &Value, window: &mut Window, cx: &mut App| match Git::for_window(window, cx) {
         Some(git) => flow(git, window, cx),
@@ -35,7 +35,7 @@ fn run(git: Git, window: &mut Window, cx: &mut App, flow: impl AsyncFnOnce(Git, 
 
 pub(crate) fn setup(workbench: &mut Workbench, window: &mut Window, cx: &mut Context<Workbench>) {
     let env = workbench.env().clone();
-    // Mode terbatas: Git dinonaktifkan sepenuhnya.
+    // Restricted mode: Git is disabled entirely.
     if env.root.is_none() || !env.trusted {
         workbench.register_command(Command::new("git.clone", "Clone Repository…", |_, window, cx| clone_flow(window, cx)).category("Git"));
         return;
@@ -150,7 +150,7 @@ pub(crate) fn setup(workbench: &mut Workbench, window: &mut Window, cx: &mut Con
     }
 }
 
-/// `git init` di folder proyek, lalu workspace dimuat ulang agar repositorinya terbaca.
+/// `git init` in the project folder, then the workspace is reloaded so the repository is picked up.
 fn init_flow(window: &mut Window, cx: &mut App) {
     let Some(workbench) = Workbench::for_window(window, cx) else { return };
     let env = workbench.read(cx).env().clone();
@@ -172,7 +172,7 @@ fn init_flow(window: &mut Window, cx: &mut App) {
         .detach();
 }
 
-/// Clone: URL → folder induk → nama folder, dengan progres; lalu menawarkan untuk membukanya.
+/// Clone: URL → parent folder → folder name, with progress; then offers to open it.
 fn clone_flow(window: &mut Window, cx: &mut App) {
     let core = oncode_ui::core(cx);
     let url = overlay::prompt_text(TextPrompt::new("Clone Repository", "Next").placeholder("https://github.com/owner/repo.git or git@host:owner/repo.git"), window, cx);

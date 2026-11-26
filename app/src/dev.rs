@@ -1,8 +1,8 @@
-//! Alat bantu pengembangan (hanya build debug): menjalankan serangkaian langkah setelah jendela
-//! terbuka, untuk memeriksa tampilan lewat tangkapan layar tanpa masukan manual.
+//! Development helper (debug builds only): runs a series of steps after the window
+//! opens, to check the UI through screenshots without manual input.
 //!
-//! `ONCODE_DEV_SCRIPT` berisi daftar JSON, mis.
-//! `[{"wait":800},{"open":"/proyek/src/main.rs"},{"command":"workbench.togglePanel"}]`.
+//! `ONCODE_DEV_SCRIPT` holds a JSON list, e.g.
+//! `[{"wait":800},{"open":"/project/src/main.rs"},{"command":"workbench.togglePanel"}]`.
 
 use std::time::Duration;
 
@@ -16,7 +16,7 @@ pub fn run_script(cx: &mut App) {
     let steps: Vec<Value> = match serde_json::from_str(&script) {
         Ok(steps) => steps,
         Err(error) => {
-            eprintln!("oncode: ONCODE_DEV_SCRIPT tidak valid: {error}");
+            eprintln!("oncode: invalid ONCODE_DEV_SCRIPT: {error}");
             return;
         }
     };
@@ -58,10 +58,10 @@ pub fn run_script(cx: &mut App) {
                     } else if let Some(id) = step.get("command").and_then(Value::as_str) {
                         let args = step.get("args").cloned().unwrap_or(Value::Null);
                         if !oncode_ui::execute_now(id, &args, window, cx) {
-                            eprintln!("oncode: command tidak dijalankan: {id}");
+                            eprintln!("oncode: command did not run: {id}");
                         }
                     } else if let Some(text) = step.get("type").and_then(Value::as_str) {
-                        // Mengetik ke elemen yang sedang fokus.
+                        // Type into the element that is currently focused.
                         for ch in text.chars() {
                             let keystroke = gpui_kit::Keystroke { modifiers: Default::default(), key: ch.to_string(), key_char: Some(ch.to_string()) };
                             window.dispatch_keystroke(keystroke, cx);

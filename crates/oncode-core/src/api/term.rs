@@ -1,4 +1,4 @@
-//! Terminal terintegrasi: satu PTY per terminal, keluaran dialirkan lewat callback.
+//! Integrated terminal: one PTY per terminal, output streamed through a callback.
 
 use oncode_terminal::SpawnOptions;
 
@@ -8,14 +8,14 @@ use crate::state::Shared;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TermEvent {
-    /// Keluaran PTY apa adanya (bisa terpotong di tengah karakter multi-byte); emulator terminal
-    /// native mengurai byte ini sendiri. Untuk teks, lewatkan ke [`Utf8Stream`].
+    /// PTY output as is (may be cut in the middle of a multi-byte character); the native terminal
+    /// emulator parses these bytes itself. For text, pass it through [`Utf8Stream`].
     Data { data: Vec<u8> },
     Exit { code: Option<i32> },
 }
 
-/// Mengubah aliran byte menjadi teks tanpa memotong karakter multi-byte di batas potongan.
-/// Utilitas terpisah untuk pemakai yang butuh teks dari [`TermEvent::Data`].
+/// Turns a byte stream into text without cutting multi-byte characters at chunk boundaries.
+/// A separate utility for users who need text from [`TermEvent::Data`].
 #[derive(Default)]
 pub struct Utf8Stream {
     pending: Vec<u8>,
@@ -37,12 +37,12 @@ impl Utf8Stream {
                     let valid = start + e.valid_up_to();
                     out.push_str(&String::from_utf8_lossy(&self.pending[start..valid]));
                     match e.error_len() {
-                        // Byte tidak sah: ganti dengan U+FFFD lalu lanjutkan.
+                        // Invalid byte: replace with U+FFFD and continue.
                         Some(len) => {
                             out.push('\u{FFFD}');
                             start = valid + len;
                         }
-                        // Karakter belum lengkap di akhir potongan: simpan untuk potongan berikutnya.
+                        // Incomplete character at the end of the chunk: keep it for the next chunk.
                         None => {
                             start = valid;
                             break;
@@ -56,7 +56,7 @@ impl Utf8Stream {
     }
 }
 
-/// Menjalankan shell di folder proyek jendela ini. `on_event` dipanggil dari thread pembaca PTY.
+/// Runs a shell in this window's project folder. `on_event` is called from the PTY reader thread.
 pub async fn term_spawn(core: &Shared, window: &str, cols: u16, rows: u16, on_event: Callback<TermEvent>) -> AppResult<u32> {
     let root = core.workspace_root(window)?;
     let settings = core.effective_settings(window);
@@ -82,7 +82,7 @@ pub async fn term_spawn(core: &Shared, window: &str, cols: u16, rows: u16, on_ev
     Ok(id)
 }
 
-/// Masukan pengguna (ketikan, tempelan, laporan mouse) sebagai byte mentah.
+/// User input (keystrokes, pastes, mouse reports) as raw bytes.
 pub async fn term_write(core: &Shared, id: u32, data: &[u8]) -> AppResult<()> {
     Ok(core.terminals.write(id, data)?)
 }
@@ -91,7 +91,7 @@ pub async fn term_resize(core: &Shared, id: u32, cols: u16, rows: u16) -> AppRes
     Ok(core.terminals.resize(id, cols.max(2), rows.max(1))?)
 }
 
-/// Kendali aliran: UI menjeda pembacaan PTY saat tertinggal memproses keluaran.
+/// Flow control: the UI pauses PTY reading when it falls behind processing the output.
 pub async fn term_set_paused(core: &Shared, id: u32, paused: bool) -> AppResult<()> {
     Ok(core.terminals.set_paused(id, paused)?)
 }
@@ -121,7 +121,7 @@ mod tests {
     fn replaces_invalid_bytes_and_continues() {
         let mut s = Utf8Stream::default();
         assert_eq!(s.push(&[b'a', 0xFF, b'b']), "a\u{FFFD}b");
-        // Awalan multi-byte yang terpotong menunggu lanjutan.
+        // A truncated multi-byte prefix waits for its continuation.
         assert_eq!(s.push(&[0xE2, 0x82]), "");
         assert_eq!(s.push(&[0xAC, b'!']), "€!");
     }
@@ -142,7 +142,7 @@ mod pty_tests {
         let noop: Callback<TermEvent> = Arc::new(|_| {});
         assert_eq!(term_spawn(&t.core, "w1", 80, 24, noop).await.unwrap_err().code, "noWorkspace");
 
-        let project = t.project("proyek");
+        let project = t.project("project");
         let mut settings = t.core.user_settings();
         settings.terminal.shell = Some("/bin/sh".into());
         t.core.set_user_settings(settings).unwrap();
@@ -163,25 +163,25 @@ mod pty_tests {
         assert_eq!(t.core.with_workspace("w1", |ws| ws.terminals.clone()).unwrap(), vec![id]);
 
         term_resize(&t.core, id, 100, 30).await.unwrap();
-        term_write(&t.core, id, b"echo \"hasil-$((6 * 7))-$(pwd)\"; exit 3\n").await.unwrap();
+        term_write(&t.core, id, b"echo \"result-$((6 * 7))-$(pwd)\"; exit 3\n").await.unwrap();
 
-        // Byte mentah dirangkai menjadi teks dengan utilitas `Utf8Stream`.
+        // Raw bytes are assembled into text with the `Utf8Stream` utility.
         let mut decoder = Utf8Stream::default();
         let mut output = String::new();
         let code = tokio::time::timeout(Duration::from_secs(20), async {
             loop {
-                match rx.recv().await.expect("kanal terminal tertutup sebelum Exit") {
+                match rx.recv().await.expect("terminal channel closed before Exit") {
                     TermEvent::Data { data } => output.push_str(&decoder.push(&data)),
                     TermEvent::Exit { code } => return code,
                 }
             }
         })
         .await
-        .expect("terminal tidak keluar");
+        .expect("terminal did not exit");
         assert_eq!(code, Some(3));
-        assert!(output.contains(&format!("hasil-42-{}", project.display())), "keluaran: {output:?}");
+        assert!(output.contains(&format!("result-42-{}", project.display())), "output: {output:?}");
 
-        // Terminal yang sudah keluar: menulis gagal, mematikan lagi bukan galat.
+        // A terminal that has exited: writing fails, killing again is not an error.
         assert!(term_write(&t.core, id, b"x").await.is_err());
         term_kill(&t.core, "w1", id).await.unwrap();
         assert!(t.core.with_workspace("w1", |ws| ws.terminals.clone()).unwrap().is_empty());

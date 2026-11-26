@@ -1,4 +1,4 @@
-//! Tab daftar sederhana: reflog repositori dan isi sebuah stash.
+//! Simple list tabs: the repository reflog and the contents of a stash.
 
 use gpui_kit::component::menu::{ContextMenuExt as _, PopupMenuItem};
 use gpui_kit::component::spinner::Spinner;
@@ -122,7 +122,7 @@ impl Render for ReflogTab {
     }
 }
 
-/// Isi sebuah stash: berkas yang berubah; klik membuka diff-nya.
+/// The contents of a stash: the changed files; clicking one opens its diff.
 pub struct StashTab {
     ctx: Ctx,
     name: String,
@@ -199,7 +199,7 @@ impl Render for StashTab {
     }
 }
 
-/// Permintaan menampilkan commit di Graph untuk dipakai `run_action`.
+/// A request to show a commit in Graph, for use by `run_action`.
 pub fn reveal_target(oid: String, label: String) -> RevealTarget {
     RevealTarget { oid, label, hunt: true }
 }

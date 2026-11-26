@@ -1,6 +1,6 @@
-//! Titik masuk OnCode: menyiapkan runtime backend, state aplikasi, lalu membuka jendela.
+//! OnCode's entry point: sets up the backend runtime and the application state, then opens the window.
 
-// Di Windows, jangan buka jendela konsol pada build rilis.
+// On Windows, do not open a console window in release builds.
 #![cfg_attr(all(not(debug_assertions), target_os = "windows"), windows_subsystem = "windows")]
 
 #[cfg(debug_assertions)]
@@ -17,19 +17,19 @@ use oncode_ui::OnCode;
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let cwd = std::env::current_dir().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default();
-    // OnCode sudah berjalan (mis. `oncode .` dari terminal): serahkan folder ke proses itu dan
-    // selesai sebelum memuat apa pun.
+    // OnCode is already running (e.g. `oncode .` from a terminal): hand the folder to that process and
+    // finish before loading anything.
     let endpoint = single_instance::enabled().then(single_instance::endpoint);
     if endpoint.as_deref().is_some_and(|endpoint| single_instance::forward(endpoint, &single_instance::Request { cwd: cwd.clone(), args: args.clone() })) {
         return;
     }
-    // Sebelum runtime atau thread lain dibuat (lihat `shell_env`).
+    // Before a runtime or any other thread is created (see `shell_env`).
     shell_env::import_login_path();
     let folder = api::app::folder_argument(&args, &cwd).map(PathBuf::from);
 
-    // Crate backend memakai tokio; GPUI punya eksekutornya sendiri (lihat `oncode_ui::app`).
-    // Empat thread cukup: pekerjaan backend kebanyakan menunggu proses git, disk, atau jaringan.
-    let runtime = Arc::new(tokio::runtime::Builder::new_multi_thread().worker_threads(4).enable_all().thread_name("oncode-backend").build().expect("runtime tokio gagal dibuat"));
+    // The backend crates use tokio; GPUI has its own executor (see `oncode_ui::app`).
+    // Four threads are enough: backend work is mostly waiting on git processes, disk, or the network.
+    let runtime = Arc::new(tokio::runtime::Builder::new_multi_thread().worker_threads(4).enable_all().thread_name("oncode-backend").build().expect("failed to create the tokio runtime"));
     let open_requests = endpoint.as_deref().and_then(|endpoint| single_instance::listen(endpoint, &runtime));
 
     let Some(dirs) = Dirs::default_for_app() else {
@@ -49,20 +49,20 @@ fn main() {
         }),
     );
 
-    // Set ikon lengkap: aset bawaan hanya memuat ± 100 ikon Lucide, sedangkan fitur memakai lebih banyak.
+    // The full icon set: the default assets only contain ± 100 Lucide icons, while the features use more.
     let application = gpui_kit::application().with_assets(oncode_ui::file_icons::Assets);
-    // macOS: ikon di Dock diklik saat tidak ada jendela.
+    // macOS: the Dock icon is clicked while there are no windows.
     application.on_reopen(oncode_ui::app_menu::reopen);
     application.run(move |cx| {
         gpui_kit::init(cx);
-        // Jendela terakhir ditutup: aplikasi selesai (macOS tetap hidup seperti aplikasi lain di sana).
+        // The last window is closed: the application finishes (macOS stays alive like other applications there).
         cx.on_window_closed(|cx, _| {
             if cx.windows().is_empty() && !cfg!(target_os = "macos") {
                 cx.quit();
             }
         })
         .detach();
-        // Terminal dan language server dihentikan sebelum proses berakhir.
+        // Terminals and language servers are stopped before the process ends.
         let (quit_core, quit_runtime) = (core.clone(), runtime.clone());
         cx.on_app_quit(move |_| {
             let (core, runtime) = (quit_core.clone(), quit_runtime.clone());
@@ -72,7 +72,7 @@ fn main() {
         })
         .detach();
         oncode_ui::init(OnCode { core, runtime, events: Some(events_rx) }, cx);
-        // Urutan menentukan urutan pendaftaran command; urutan ikon dan panel diatur lewat `order`.
+        // The order determines the command registration order; the order of icons and panels is set via `order`.
         oncode_ui_explorer::init(cx);
         oncode_ui_search::init(cx);
         oncode_ui_diff::init(cx);
@@ -85,8 +85,8 @@ fn main() {
         oncode_ui_markdown::init(cx);
         cx.activate(true);
         if let Err(error) = oncode_ui::try_open_window(folder, cx) {
-            // Tanpa jendela, aplikasi tidak akan pernah menerima "jendela terakhir ditutup";
-            // catat penyebabnya lalu keluar agar tidak tertinggal sebagai proses tak terlihat.
+            // Without a window, the application would never receive "last window closed";
+            // log the cause and then exit so it does not linger as an invisible process.
             write_log(&log_path, &format!("failed to open a window: {error:#}"));
             eprintln!("oncode: failed to open a window: {error:#}");
             cx.quit();
@@ -106,8 +106,8 @@ fn main() {
     });
 }
 
-/// Menambahkan satu baris bertanggal ke `oncode.log` di folder data. Aplikasi GUI di Windows
-/// tidak punya konsol, jadi galat saat mulai hanya terlihat lewat berkas ini.
+/// Appends a timestamped line to `oncode.log` in the data folder. A GUI application on Windows
+/// has no console, so startup errors are only visible through this file.
 fn write_log(path: &std::path::Path, message: &str) {
     use std::io::Write as _;
     if let Some(parent) = path.parent() {
@@ -119,7 +119,7 @@ fn write_log(path: &std::path::Path, message: &str) {
     }
 }
 
-/// Panic juga dicatat ke `oncode.log`, selain dicetak seperti biasa.
+/// A panic is also recorded to `oncode.log`, in addition to being printed as usual.
 fn install_panic_log(path: PathBuf) {
     let default_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {

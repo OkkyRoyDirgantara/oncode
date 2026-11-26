@@ -1,14 +1,14 @@
 use serde::Serialize;
 
-/// Kode galat yang dipakai UI untuk memilih pesan dan aksi lanjutan.
+/// Error code the UI uses to choose the message and follow-up action.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum TermErrorCode {
-    /// Tidak ada terminal dengan id tersebut (sudah ditutup atau prosesnya sudah keluar).
+    /// There is no terminal with that id (it was closed or its process has already exited).
     NotFound,
-    /// PTY tidak bisa dibuat atau shell gagal dijalankan.
+    /// The PTY could not be created or the shell failed to start.
     SpawnFailed,
-    /// Gagal menulis ke PTY atau mengubah ukurannya.
+    /// Failed to write to the PTY or resize it.
     Io,
 }
 

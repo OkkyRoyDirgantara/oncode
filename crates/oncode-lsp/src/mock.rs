@@ -1,13 +1,13 @@
-//! Language server tiruan untuk pengujian: bahasa mainan yang cukup untuk melatih semua fitur klien.
+//! A mock language server for testing: a toy language that is enough to exercise all of the client's features.
 //!
-//! Aturan "bahasa"-nya:
-//! - pengenal adalah `[A-Za-z_][A-Za-z0-9_]*`; `def nama` mendefinisikan `nama`;
-//! - kata `ERROR`, `WARN`, `INFO`, dan `HINT` menghasilkan diagnostics dengan severity itu;
-//! - berkas proyek adalah berkas `.txt`/`.mock` di bawah folder akar.
+//! The "language" rules:
+//! - an identifier is `[A-Za-z_][A-Za-z0-9_]*`; `def name` defines `name`;
+//! - the words `ERROR`, `WARN`, `INFO`, and `HINT` produce diagnostics with that severity;
+//! - the project's files are the `.txt`/`.mock` files under the root folder.
 //!
-//! Server sengaja ditulis dengan `serde_json::Value` mentah, terpisah dari tipe yang dipakai
-//! klien, supaya bentuk pesan di kabel ikut teruji. Dipakai di dalam proses lewat
-//! [`MockServer::handle`] dan sebagai program stdio lewat [`run_stdio`].
+//! The server is deliberately written with raw `serde_json::Value`, separate from the types the
+//! client uses, so the shape of messages on the wire gets tested too. It is used in-process via
+//! [`MockServer::handle`] and as a stdio program via [`run_stdio`].
 
 use std::collections::BTreeMap;
 use std::io::{Read as _, Write as _};
@@ -22,18 +22,18 @@ use crate::uri::{path_to_uri, uri_key, uri_to_path};
 
 #[derive(Debug, Clone, Default)]
 pub struct MockOptions {
-    /// Memilih UTF-8 sebagai satuan kolom bila klien menawarkannya (bawaan: UTF-16).
+    /// Choose UTF-8 as the column unit if the client offers it (default: UTF-16).
     pub utf8: bool,
-    /// Meminta sinkronisasi penuh, bukan bertahap.
+    /// Ask for full synchronization instead of incremental.
     pub full_sync: bool,
-    /// Tidak pernah menjawab `initialize`.
+    /// Never answer `initialize`.
     pub silent_initialize: bool,
-    /// Keluar dengan kode ini sebelum membaca apa pun (meniru server yang tidak terpasang benar).
+    /// Exit with this code before reading anything (imitating a server that is not installed correctly).
     pub exit_on_start: Option<i32>,
 }
 
 impl MockOptions {
-    /// `--utf8`, `--full-sync`, `--silent-initialize`, `--exit-on-start <kode>`.
+    /// `--utf8`, `--full-sync`, `--silent-initialize`, `--exit-on-start <code>`.
     pub fn from_args(args: &[String]) -> Self {
         let mut options = Self::default();
         let mut args = args.iter();
@@ -64,11 +64,11 @@ pub struct MockServer {
     shutdown: bool,
     exit: Option<i32>,
     next_id: i64,
-    /// Permintaan server→klien yang belum dijawab: id → metode.
+    /// Server→client requests not yet answered: id → method.
     awaiting: BTreeMap<i64, String>,
-    /// Jawaban klien atas permintaan server, sesuai urutan tiba: `{method, result|error}`.
+    /// The client's answers to server requests, in order of arrival: `{method, result|error}`.
     answers: Vec<Value>,
-    /// Metode semua pesan yang diterima dari klien, sesuai urutan.
+    /// The methods of all messages received from the client, in order.
     received: Vec<String>,
     cancelled: Vec<Value>,
 }
@@ -77,7 +77,7 @@ fn is_word_char(ch: char) -> bool {
     ch.is_ascii_alphanumeric() || ch == '_'
 }
 
-/// Rentang byte semua pengenal di `text`.
+/// The byte ranges of all identifiers in `text`.
 fn words(text: &str) -> Vec<(usize, usize)> {
     let mut out = Vec::new();
     let mut start: Option<usize> = None;
@@ -97,12 +97,12 @@ fn words(text: &str) -> Vec<(usize, usize)> {
     out
 }
 
-/// Pengenal yang memuat `offset` atau berakhir tepat di sana.
+/// The identifier that contains `offset` or ends exactly there.
 fn word_at(text: &str, offset: usize) -> Option<(usize, usize)> {
     words(text).into_iter().find(|(start, end)| *start <= offset && offset <= *end)
 }
 
-/// Rentang nama yang didefinisikan dengan `def nama`.
+/// The ranges of names defined with `def name`.
 fn definitions(text: &str) -> Vec<(usize, usize)> {
     let all = words(text);
     all.windows(2).filter(|pair| &text[pair[0].0..pair[0].1] == "def" && text[pair[0].1..pair[1].0].chars().all(|ch| ch == ' ' || ch == '\t')).map(|pair| pair[1]).collect()
@@ -145,12 +145,12 @@ impl MockServer {
         }
     }
 
-    /// Kode keluar bila server memutuskan berhenti (`exit`, atau `mock/crash`).
+    /// The exit code if the server decides to stop (`exit`, or `mock/crash`).
     pub fn exit_code(&self) -> Option<i32> {
         self.exit
     }
 
-    /// Isi dokumen yang sedang terbuka menurut server.
+    /// The contents of a currently open document according to the server.
     pub fn document(&self, uri: &str) -> Option<&str> {
         let key = uri_key(uri);
         self.docs.iter().find(|(open, _)| uri_key(open) == key).map(|(_, doc)| doc.text.as_str())
@@ -161,7 +161,7 @@ impl MockServer {
         self.docs.iter().find(|(open, _)| uri_key(open) == key)
     }
 
-    /// Semua berkas proyek sebagai `(uri, isi)`: dokumen terbuka (isi dari memori) lalu berkas di disk.
+    /// All project files as `(uri, contents)`: open documents (contents from memory) and then files on disk.
     fn workspace(&self) -> Vec<(String, String)> {
         let mut out: Vec<(String, String)> = self.docs.iter().map(|(uri, doc)| (uri.clone(), doc.text.clone())).collect();
         let Some(root) = &self.root else { return out };
@@ -215,7 +215,7 @@ impl MockServer {
         json!({ "jsonrpc": "2.0", "id": self.next_id, "method": method, "params": params })
     }
 
-    /// Posisi permintaan sebagai `(uri terbuka, isi, offset byte)`.
+    /// The position of a request as `(open uri, contents, byte offset)`.
     fn locate(&self, params: &Value) -> Option<(String, String, usize)> {
         let uri = params["textDocument"]["uri"].as_str()?;
         let (uri, doc) = self.doc(uri)?;
@@ -244,7 +244,7 @@ impl MockServer {
             let current = source == text;
             for span in words(&source) {
                 let name = &source[span.0..span.1];
-                // Kata yang sedang diketik bukan saran.
+                // The word being typed is not a suggestion.
                 if name == "def" || (current && span.1 == offset && span.0 == start) {
                     continue;
                 }
@@ -302,7 +302,7 @@ impl MockServer {
         json!({ "documentChanges": changes })
     }
 
-    /// Membuang spasi di akhir baris.
+    /// Removes trailing whitespace at the end of lines.
     fn formatting(&self, params: &Value) -> Value {
         let Some((_, doc)) = params["textDocument"]["uri"].as_str().and_then(|uri| self.doc(uri)) else { return Value::Null };
         let mut edits = Vec::new();
@@ -396,13 +396,13 @@ impl MockServer {
             }
             "textDocument/formatting" => self.formatting(params),
             "textDocument/codeAction" => self.code_actions(params),
-            // Kait uji: keadaan server dan isi dokumen menurut server.
+            // Test hooks: the server's state and the document contents according to the server.
             "mock/document" => match params["uri"].as_str().and_then(|uri| self.doc(uri)) {
                 Some((_, doc)) => json!({ "text": doc.text, "version": doc.version, "languageId": doc.language }),
                 None => Value::Null,
             },
             "mock/state" => json!({ "answers": self.answers, "received": self.received, "cancelled": self.cancelled, "open": self.docs.keys().collect::<Vec<_>>() }),
-            // Tidak pernah dijawab; untuk menguji batas waktu dan pembatalan.
+            // Never answered; for testing timeouts and cancellation.
             "mock/hang" => return Err((0, String::new())),
             _ => return Err((-32601, format!("Method not found: {method}"))),
         })
@@ -414,7 +414,7 @@ impl MockServer {
                 out.push(self.ask("window/workDoneProgress/create", json!({ "token": "mock-progress" })));
                 out.push(self.ask("workspace/configuration", json!({ "items": [{ "section": "mock" }, { "section": "mock.other" }] })));
                 out.push(self.ask("client/registerCapability", json!({ "registrations": [{ "id": "mock-watch", "method": "workspace/didChangeWatchedFiles", "registerOptions": {} }] })));
-                // Seperti server sungguhan, diagnostics seluruh proyek diterbitkan setelah siap.
+                // Like a real server, diagnostics for the whole project are published once ready.
                 for (uri, text) in self.workspace() {
                     if !self.diagnostics_for(&text).is_empty() {
                         out.push(self.publish(&uri, &text, None));
@@ -443,20 +443,20 @@ impl MockServer {
             "textDocument/didClose" => {
                 let Some(uri) = params["textDocument"]["uri"].as_str().and_then(|uri| self.doc(uri).map(|(uri, _)| uri.clone())) else { return };
                 self.docs.remove(&uri);
-                // Kembali ke isi di disk, seperti server yang menganalisis seluruh proyek.
+                // Fall back to the contents on disk, like a server that analyzes the whole project.
                 let on_disk = std::fs::read_to_string(uri_to_path(&uri)).unwrap_or_default();
                 out.push(self.publish(&uri, &on_disk, None));
             }
             "$/cancelRequest" => self.cancelled.push(params["id"].clone()),
             "exit" => self.exit = Some(if self.shutdown { 0 } else { 1 }),
-            // Kait uji: server mati mendadak, atau meminta klien menerapkan suntingan.
+            // Test hooks: the server dies suddenly, or asks the client to apply an edit.
             "mock/crash" => self.exit = Some(params["code"].as_i64().unwrap_or(1) as i32),
             "mock/applyEdit" => out.push(self.ask("workspace/applyEdit", params.clone())),
             _ => {}
         }
     }
 
-    /// Memproses satu pesan dari klien dan mengembalikan pesan-pesan balasan, sesuai urutan.
+    /// Processes a single message from the client and returns the reply messages, in order.
     pub fn handle(&mut self, message: &str) -> Vec<String> {
         let Ok(message) = serde_json::from_str::<Value>(message) else { return Vec::new() };
         let mut out: Vec<Value> = Vec::new();
@@ -495,7 +495,7 @@ impl MockServer {
     }
 }
 
-/// Menjalankan server tiruan di atas stdin/stdout sampai `exit` atau stdin ditutup.
+/// Runs the mock server over stdin/stdout until `exit` or until stdin is closed.
 pub fn run_stdio(args: &[String]) -> i32 {
     let options = MockOptions::from_args(args);
     if let Some(code) = options.exit_on_start {

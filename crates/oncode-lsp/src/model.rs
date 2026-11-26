@@ -1,38 +1,38 @@
-//! Struktur data yang dikirim ke UI. Semua field memakai camelCase di sisi TypeScript.
+//! Data structures sent to the UI. All fields use camelCase on the TypeScript side.
 
 use serde::{Deserialize, Serialize};
 
-/// Cara menjalankan satu language server.
+/// How to run a single language server.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ServerSpec {
-    /// Nama perintah (dicari di PATH) atau path ke program.
+    /// Command name (looked up on PATH) or path to the program.
     pub command: String,
     #[serde(default)]
     pub args: Vec<String>,
-    /// Variabel lingkungan tambahan di atas lingkungan aplikasi.
+    /// Extra environment variables on top of the app's environment.
     #[serde(default)]
     pub env: Vec<(String, String)>,
 }
 
-/// Entri daftar server bawaan untuk satu bahasa.
+/// An entry in the default server list for one language.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ServerDefault {
-    /// Id bahasa LSP, mis. `rust` atau `typescriptreact`.
+    /// LSP language id, e.g. `rust` or `typescriptreact`.
     pub language: String,
     pub spec: ServerSpec,
-    /// Petunjuk pemasangan satu baris untuk status bar.
+    /// One-line installation hint for the status bar.
     pub install_hint: String,
 }
 
-/// Keadaan akhir proses server, dikirim lewat `on_exit`.
+/// Final state of a server process, sent via `on_exit`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ServerExitInfo {
-    /// Kode keluar; `None` bila proses dihentikan oleh sinyal.
+    /// Exit code; `None` if the process was terminated by a signal.
     pub code: Option<i32>,
-    /// Paling banyak 4 KiB terakhir dari stderr server, untuk ditampilkan saat server mati.
+    /// At most the last 4 KiB of the server's stderr, to show when the server dies.
     pub stderr_tail: String,
 }
 
@@ -77,7 +77,7 @@ const TABLE: &[(&[&str], &str, &[&str], &str)] = &[
     (&["sql"], "sqls", &[], "Install sqls with `go install github.com/sqls-server/sqls@latest`."),
 ];
 
-/// Daftar server bawaan per bahasa. Pengaturan pengguna boleh menimpa atau menambahnya.
+/// The default server list per language. User settings may override or extend it.
 pub fn default_servers() -> Vec<ServerDefault> {
     TABLE
         .iter()
@@ -95,7 +95,7 @@ pub fn default_servers() -> Vec<ServerDefault> {
         .collect()
 }
 
-/// Petunjuk pemasangan untuk perintah bawaan, bila dikenal.
+/// The installation hint for a default command, if known.
 pub(crate) fn install_hint_for(command: &str) -> Option<&'static str> {
     TABLE.iter().find(|(_, known, _, _)| *known == command).map(|(_, _, _, hint)| *hint)
 }
@@ -107,7 +107,7 @@ mod tests {
     fn command_line(language: &str) -> String {
         let servers = default_servers();
         let server = servers.iter().find(|s| s.language == language);
-        let server = server.unwrap_or_else(|| panic!("bahasa {language} tidak ada di daftar bawaan"));
+        let server = server.unwrap_or_else(|| panic!("language {language} is not in the default list"));
         std::iter::once(server.spec.command.clone()).chain(server.spec.args.iter().cloned()).collect::<Vec<_>>().join(" ")
     }
 
@@ -139,22 +139,22 @@ mod tests {
             assert!(!server.install_hint.contains('\n'));
         }
         assert!(install_hint_for("gopls").is_some());
-        assert!(install_hint_for("tidak-dikenal").is_none());
+        assert!(install_hint_for("unknown-command").is_none());
     }
 
     #[test]
     fn serde_uses_camel_case_and_defaults() {
-        let spec: ServerSpec = serde_json::from_str(r#"{"command":"gopls"}"#).expect("spec minimal");
+        let spec: ServerSpec = serde_json::from_str(r#"{"command":"gopls"}"#).expect("minimal spec");
         assert_eq!(spec, ServerSpec { command: "gopls".into(), args: vec![], env: vec![] });
 
         let default = &default_servers()[0];
-        let json = serde_json::to_value(default).expect("serialisasi");
+        let json = serde_json::to_value(default).expect("serialization");
         assert_eq!(json["language"], "rust");
         assert_eq!(json["spec"]["command"], "rust-analyzer");
         assert!(json["installHint"].is_string());
 
         let exit = ServerExitInfo { code: Some(1), stderr_tail: "x".into() };
-        let json = serde_json::to_value(&exit).expect("serialisasi");
+        let json = serde_json::to_value(&exit).expect("serialization");
         assert_eq!(json["code"], 1);
         assert_eq!(json["stderrTail"], "x");
     }

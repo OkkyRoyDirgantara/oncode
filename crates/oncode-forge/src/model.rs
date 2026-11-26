@@ -1,13 +1,13 @@
-//! Struktur data yang dikirim ke UI. Semua field memakai camelCase di sisi TypeScript.
+//! Data structures sent to the UI. All fields use camelCase on the TypeScript side.
 
 use serde::{Deserialize, Serialize};
 
 pub use crate::remote::parse_remote_url;
 
-/// Detik sejak epoch Unix. `f64` agar aman diekspor sebagai `number` di TypeScript.
+/// Seconds since the Unix epoch. `f64` so it is safe to export as a `number` in TypeScript.
 pub type Timestamp = f64;
 
-/// Jenis penyedia hosting Git.
+/// The kind of Git hosting provider.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ForgeKind {
     #[serde(rename = "github")]
@@ -17,7 +17,7 @@ pub enum ForgeKind {
 }
 
 impl ForgeKind {
-    /// Nama pendek yang stabil: `"github"` atau `"gitlab"`. Dipakai di id akun.
+    /// A stable short name: `"github"` or `"gitlab"`. Used in the account id.
     pub fn as_str(self) -> &'static str {
         match self {
             ForgeKind::GitHub => "github",
@@ -26,8 +26,8 @@ impl ForgeKind {
     }
 }
 
-/// Satu instance forge. `host` adalah origin web TANPA garis miring di akhir, misalnya
-/// `"https://github.com"`, `"https://gitlab.com"`, atau `"https://git.perusahaan.id"`.
+/// One forge instance. `host` is the web origin WITHOUT a trailing slash, for example
+/// `"https://github.com"`, `"https://gitlab.com"`, or `"https://git.example.com"`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ForgeHost {
@@ -36,8 +36,8 @@ pub struct ForgeHost {
 }
 
 impl ForgeHost {
-    /// Membuat host dari masukan pengguna: spasi dan garis miring di akhir dibuang, dan
-    /// `https://` ditambahkan bila skema tidak ditulis.
+    /// Creates a host from user input: whitespace and trailing slashes are dropped, and
+    /// `https://` is added if no scheme is given.
     pub fn new(kind: ForgeKind, host: &str) -> Self {
         let trimmed = host.trim().trim_end_matches('/');
         let host = if trimmed.contains("://") { trimmed.to_string() } else { format!("https://{trimmed}") };
@@ -54,13 +54,13 @@ impl ForgeHost {
         Self { kind: ForgeKind::GitLab, host: "https://gitlab.com".to_string() }
     }
 
-    /// Origin web tanpa garis miring di akhir.
+    /// The web origin without a trailing slash.
     pub fn web_base(&self) -> &str {
         self.host.trim().trim_end_matches('/')
     }
 
-    /// Nama host saja, huruf kecil, tanpa skema, port, maupun path. Bentuknya sama dengan
-    /// [`RepoRef::host`], sehingga keduanya bisa langsung dibandingkan.
+    /// The hostname only, lowercase, without scheme, port, or path. It has the same form as
+    /// [`RepoRef::host`], so the two can be compared directly.
     pub fn hostname(&self) -> String {
         let rest = match self.host.split_once("://") {
             Some((_, rest)) => rest,
@@ -79,8 +79,8 @@ impl ForgeHost {
         host.trim().to_ascii_lowercase()
     }
 
-    /// Basis REST: github.com → `https://api.github.com`; GitHub Enterprise Cloud dengan
-    /// residensi data (`*.ghe.com`) → `https://api.{host}`; GitHub Enterprise Server →
+    /// REST base: github.com → `https://api.github.com`; GitHub Enterprise Cloud with
+    /// data residency (`*.ghe.com`) → `https://api.{host}`; GitHub Enterprise Server →
     /// `{host}/api/v3`; GitLab → `{host}/api/v4`.
     pub fn api_base(&self) -> String {
         let base = self.web_base();
@@ -99,12 +99,12 @@ impl ForgeHost {
         }
     }
 
-    /// `true` bila `repo` berada di host ini (perbandingan nama host, tanpa port).
+    /// `true` if `repo` is on this host (hostname comparison, without port).
     pub fn matches(&self, repo: &RepoRef) -> bool {
         self.hostname() == repo.host.to_ascii_lowercase()
     }
 
-    /// `true` untuk layanan publik (github.com, gitlab.com), bukan instance sendiri.
+    /// `true` for public services (github.com, gitlab.com), not self-run instances.
     pub fn is_public(&self) -> bool {
         let hostname = self.hostname();
         match self.kind {
@@ -113,8 +113,8 @@ impl ForgeHost {
         }
     }
 
-    /// Halaman web untuk membuat Personal Access Token, dengan nama dan scope yang dibutuhkan
-    /// OnCode sudah terisi. Jalan login lewat browser yang tidak memerlukan aplikasi OAuth.
+    /// Web page for creating a Personal Access Token, with the name and scopes OnCode
+    /// needs already filled in. A browser login route that does not require an OAuth app.
     pub fn token_creation_url(&self) -> String {
         let base = self.web_base();
         match self.kind {
@@ -124,66 +124,66 @@ impl ForgeHost {
     }
 }
 
-/// Repositori di sebuah forge, hasil parse URL remote.
+/// A repository on a forge, the result of parsing a remote URL.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RepoRef {
-    /// Nama host saja, huruf kecil, misalnya `"github.com"`.
+    /// The hostname only, lowercase, for example `"github.com"`.
     pub host: String,
-    /// Pemilik atau namespace. Bisa memuat `/` untuk subgrup GitLab.
+    /// Owner or namespace. May contain `/` for GitLab subgroups.
     pub owner: String,
-    /// Nama repositori tanpa akhiran `.git`.
+    /// Repository name without the `.git` suffix.
     pub name: String,
 }
 
 impl RepoRef {
-    /// `"owner/name"`, bentuk yang dipakai kedua penyedia sebagai nama lengkap.
+    /// `"owner/name"`, the form both providers use as the full name.
     pub fn full_name(&self) -> String {
         format!("{}/{}", self.owner, self.name)
     }
 }
 
-/// Akun yang sedang login di sebuah forge.
+/// An account logged in to a forge.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Account {
-    /// `"{kind}:{hostname}:{username}"`, misalnya `"github:github.com:octocat"`. Dipakai
-    /// juga sebagai kunci token di keychain.
+    /// `"{kind}:{hostname}:{username}"`, for example `"github:github.com:octocat"`. Also used
+    /// as the token key in the keychain.
     pub id: String,
     pub kind: ForgeKind,
-    /// Origin web instance, sama dengan [`ForgeHost::host`].
+    /// The instance's web origin, same as [`ForgeHost::host`].
     pub host: String,
     pub username: String,
-    /// Nama tampilan; sama dengan `username` bila pengguna tidak mengisinya.
+    /// Display name; same as `username` if the user did not set one.
     pub display_name: String,
     pub avatar_url: Option<String>,
 }
 
 impl Account {
-    /// Menyusun id akun dari bagian-bagiannya.
+    /// Builds the account id from its parts.
     pub fn make_id(host: &ForgeHost, username: &str) -> String {
         format!("{}:{}:{}", host.kind.as_str(), host.hostname(), username)
     }
 
-    /// Host forge tempat akun ini berada.
+    /// The forge host this account lives on.
     pub fn forge_host(&self) -> ForgeHost {
         ForgeHost { kind: self.kind, host: self.host.clone() }
     }
 }
 
-/// Repositori di akun pengguna, untuk dialog clone.
+/// A repository on the user's account, for the clone dialog.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RemoteRepo {
-    /// `"owner/name"`; di GitLab memuat seluruh jalur subgrup.
+    /// `"owner/name"`; on GitLab it contains the whole subgroup path.
     pub full_name: String,
     pub description: String,
-    /// Di GitLab, visibilitas `internal` juga dihitung privat.
+    /// On GitLab, `internal` visibility also counts as private.
     pub private: bool,
     pub fork: bool,
     pub clone_url_https: String,
     pub clone_url_ssh: String,
-    /// Kosong bila repositori belum punya commit.
+    /// Empty if the repository has no commits yet.
     pub default_branch: String,
     pub updated_at: Timestamp,
     pub web_url: String,
@@ -197,11 +197,11 @@ pub enum PrState {
     Merged,
 }
 
-/// Pull request (GitHub) atau merge request (GitLab).
+/// A pull request (GitHub) or merge request (GitLab).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PullRequest {
-    /// Nomor PR di GitHub, `iid` MR di GitLab.
+    /// The PR number on GitHub, the MR `iid` on GitLab.
     pub number: u32,
     pub title: String,
     pub state: PrState,
@@ -213,7 +213,7 @@ pub struct PullRequest {
     pub head_sha: String,
     pub updated_at: Timestamp,
     pub web_url: String,
-    /// `true` bila branch sumber berada di repositori lain (fork).
+    /// `true` if the source branch is in another repository (a fork).
     pub is_cross_repo: bool,
 }
 
@@ -221,17 +221,17 @@ pub struct PullRequest {
 #[serde(rename_all = "camelCase")]
 pub struct PullRequestDetail {
     pub pull_request: PullRequest,
-    /// Deskripsi dalam Markdown mentah; UI yang merender dan menyanitasinya.
+    /// Description in raw Markdown; the UI renders and sanitizes it.
     pub body: String,
     pub reviewers: Vec<String>,
     pub labels: Vec<String>,
-    /// `None` selama penyedia masih menghitung apakah bisa di-merge.
+    /// `None` while the provider is still computing whether it can be merged.
     pub mergeable: Option<bool>,
     pub commits: u32,
     pub changed_files: u32,
-    /// GitLab tidak menyediakan jumlah baris lewat REST, sehingga nilainya selalu 0 di sana.
+    /// GitLab does not provide line counts via REST, so the value is always 0 there.
     pub additions: u32,
-    /// Lihat catatan pada `additions`.
+    /// See the note on `additions`.
     pub deletions: u32,
 }
 
@@ -247,7 +247,7 @@ pub enum CheckState {
     Neutral,
 }
 
-/// Satu pemeriksaan CI pada sebuah commit.
+/// A single CI check on a commit.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Check {
@@ -256,34 +256,34 @@ pub struct Check {
     pub url: Option<String>,
 }
 
-/// Filter daftar PR/MR di sidebar.
+/// Filter for the PR/MR list in the sidebar.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum PrFilter {
-    /// Semua yang masih terbuka.
+    /// Everything that is still open.
     Open,
-    /// Yang masih terbuka dan dibuat oleh akun ini.
+    /// Still open and created by this account.
     Mine,
-    /// Yang masih terbuka dan menunggu review dari akun ini.
+    /// Still open and awaiting review from this account.
     ReviewRequested,
-    /// Terbuka, tertutup, maupun sudah di-merge.
+    /// Open, closed, and already merged.
     All,
 }
 
-/// Masukan untuk membuat PR/MR.
+/// Input for creating a PR/MR.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NewPullRequest {
     pub title: String,
     pub body: String,
-    /// Di GitHub, PR dari fork ditulis `"pemilik:branch"`.
+    /// On GitHub, a PR from a fork is written `"owner:branch"`.
     pub source_branch: String,
     pub target_branch: String,
     pub draft: bool,
 }
 
-/// Satu halaman hasil. `next_page` diisi bila masih ada halaman berikutnya; nilainya
-/// dikirim kembali apa adanya sebagai argumen `page`.
+/// One page of results. `next_page` is set if there is a next page; its value
+/// is sent back as-is as the `page` argument.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Page<T> {
@@ -306,8 +306,8 @@ mod tests {
         assert_eq!(ForgeHost::github().api_base(), "https://api.github.com");
         assert_eq!(ForgeHost::new(ForgeKind::GitHub, "https://GitHub.com/").api_base(), "https://api.github.com");
         assert_eq!(
-            ForgeHost::new(ForgeKind::GitHub, "https://ghe.perusahaan.id").api_base(),
-            "https://ghe.perusahaan.id/api/v3"
+            ForgeHost::new(ForgeKind::GitHub, "https://ghe.example.com").api_base(),
+            "https://ghe.example.com/api/v3"
         );
         assert_eq!(
             ForgeHost::new(ForgeKind::GitHub, "https://octocorp.ghe.com").api_base(),
@@ -315,22 +315,22 @@ mod tests {
         );
         assert_eq!(ForgeHost::gitlab().api_base(), "https://gitlab.com/api/v4");
         assert_eq!(
-            ForgeHost::new(ForgeKind::GitLab, "https://git.perusahaan.id/").api_base(),
-            "https://git.perusahaan.id/api/v4"
+            ForgeHost::new(ForgeKind::GitLab, "https://git.example.com/").api_base(),
+            "https://git.example.com/api/v4"
         );
-        // Instance GitLab di bawah sub-path tetap utuh.
+        // A GitLab instance under a sub-path is kept intact.
         assert_eq!(
-            ForgeHost::new(ForgeKind::GitLab, "https://perusahaan.id/gitlab").api_base(),
-            "https://perusahaan.id/gitlab/api/v4"
+            ForgeHost::new(ForgeKind::GitLab, "https://example.com/gitlab").api_base(),
+            "https://example.com/gitlab/api/v4"
         );
     }
 
     #[test]
     fn host_normalization() {
-        let host = ForgeHost::new(ForgeKind::GitLab, "  git.perusahaan.id/ ");
-        assert_eq!(host.host, "https://git.perusahaan.id");
-        assert_eq!(host.hostname(), "git.perusahaan.id");
-        assert_eq!(ForgeHost::new(ForgeKind::GitLab, "http://Git.Lokal:8080/").hostname(), "git.lokal");
+        let host = ForgeHost::new(ForgeKind::GitLab, "  git.example.com/ ");
+        assert_eq!(host.host, "https://git.example.com");
+        assert_eq!(host.hostname(), "git.example.com");
+        assert_eq!(ForgeHost::new(ForgeKind::GitLab, "http://Git.Local:8080/").hostname(), "git.local");
         assert_eq!(ForgeHost::github().hostname(), "github.com");
         assert_eq!(ForgeHost::new(ForgeKind::GitLab, "https://[::1]:8443").hostname(), "[::1]");
     }
@@ -339,13 +339,13 @@ mod tests {
     fn token_creation_url_prefills_name_and_scopes() {
         assert_eq!(ForgeHost::github().token_creation_url(), "https://github.com/settings/tokens/new?description=OnCode&scopes=repo,read:user");
         assert_eq!(
-            ForgeHost::new(ForgeKind::GitLab, "git.contoh.id/").token_creation_url(),
-            "https://git.contoh.id/-/user_settings/personal_access_tokens?name=OnCode&scopes=api,read_user"
+            ForgeHost::new(ForgeKind::GitLab, "git.example.com/").token_creation_url(),
+            "https://git.example.com/-/user_settings/personal_access_tokens?name=OnCode&scopes=api,read_user"
         );
-        // Instance di bawah sub-path tetap memakai path dasarnya.
+        // An instance under a sub-path keeps using its base path.
         assert_eq!(
-            ForgeHost::new(ForgeKind::GitLab, "https://contoh.id/gitlab").token_creation_url(),
-            "https://contoh.id/gitlab/-/user_settings/personal_access_tokens?name=OnCode&scopes=api,read_user"
+            ForgeHost::new(ForgeKind::GitLab, "https://example.com/gitlab").token_creation_url(),
+            "https://example.com/gitlab/-/user_settings/personal_access_tokens?name=OnCode&scopes=api,read_user"
         );
     }
 
@@ -353,9 +353,9 @@ mod tests {
     fn only_github_com_and_gitlab_com_are_public() {
         assert!(ForgeHost::github().is_public());
         assert!(ForgeHost::gitlab().is_public());
-        assert!(!ForgeHost::new(ForgeKind::GitLab, "git.contoh.id").is_public());
-        assert!(!ForgeHost::new(ForgeKind::GitHub, "ghe.contoh.id").is_public());
-        // Jenis yang tidak cocok dengan host-nya bukan layanan publik.
+        assert!(!ForgeHost::new(ForgeKind::GitLab, "git.example.com").is_public());
+        assert!(!ForgeHost::new(ForgeKind::GitHub, "ghe.example.com").is_public());
+        // A kind that does not match its host is not a public service.
         assert!(!ForgeHost::new(ForgeKind::GitLab, "github.com").is_public());
     }
 
@@ -371,8 +371,8 @@ mod tests {
     fn account_id_format() {
         assert_eq!(Account::make_id(&ForgeHost::github(), "octocat"), "github:github.com:octocat");
         assert_eq!(
-            Account::make_id(&ForgeHost::new(ForgeKind::GitLab, "https://Git.Perusahaan.id:8443"), "budi"),
-            "gitlab:git.perusahaan.id:budi"
+            Account::make_id(&ForgeHost::new(ForgeKind::GitLab, "https://Git.Example.com:8443"), "alice"),
+            "gitlab:git.example.com:alice"
         );
     }
 
@@ -385,10 +385,10 @@ mod tests {
             PrFilter::ReviewRequested
         );
         let input: NewPullRequest = serde_json::from_value(serde_json::json!({
-            "title": "Judul", "body": "", "sourceBranch": "fitur", "targetBranch": "main", "draft": true
+            "title": "Title", "body": "", "sourceBranch": "feature", "targetBranch": "main", "draft": true
         }))
         .expect("json");
-        assert_eq!(input.source_branch, "fitur");
+        assert_eq!(input.source_branch, "feature");
         let page = Page::new(vec![1u32, 2], Some(2));
         assert_eq!(serde_json::to_value(&page).expect("json"), serde_json::json!({ "items": [1, 2], "nextPage": 2 }));
     }

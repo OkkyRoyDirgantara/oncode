@@ -1,4 +1,4 @@
-//! Pembantu bersama untuk tes integrasi dengan server HTTP tiruan.
+//! Shared helpers for integration tests with a mock HTTP server.
 #![allow(dead_code)]
 
 use oncode_forge::{ForgeError, ForgeErrorCode, RepoRef};
@@ -8,17 +8,17 @@ pub fn repo(host: &str, owner: &str, name: &str) -> RepoRef {
     RepoRef { host: host.to_string(), owner: owner.to_string(), name: name.to_string() }
 }
 
-/// Semua permintaan yang diterima server tiruan sejauh ini.
+/// All requests the mock server has received so far.
 pub async fn received(server: &MockServer) -> Vec<Request> {
     server.received_requests().await.unwrap_or_default()
 }
 
-/// Nilai parameter query `name` pada permintaan, sudah di-decode.
+/// The value of query parameter `name` on the request, already decoded.
 pub fn query_value(request: &Request, name: &str) -> Option<String> {
     request.url.query_pairs().find(|(key, _)| key == name).map(|(_, value)| value.into_owned())
 }
 
-/// Nilai field `name` pada badan form-urlencoded, sudah di-decode.
+/// The value of field `name` in a form-urlencoded body, already decoded.
 pub fn form_value(request: &Request, name: &str) -> Option<String> {
     let body = String::from_utf8_lossy(&request.body).into_owned();
     let url = wiremock::http::Url::parse(&format!("http://form.invalid/?{body}")).ok()?;
@@ -29,18 +29,18 @@ pub fn header<'a>(request: &'a Request, name: &str) -> Option<&'a str> {
     request.headers.get(name).and_then(|value| value.to_str().ok())
 }
 
-/// Memastikan galat berkode `code` dan pesannya tidak memuat `secret`.
+/// Ensures the error has code `code` and its message does not contain `secret`.
 pub fn assert_error(err: &ForgeError, code: ForgeErrorCode, secret: &str) {
-    assert_eq!(err.code, code, "pesan: {}", err.message);
+    assert_eq!(err.code, code, "message: {}", err.message);
     assert!(!err.message.is_empty());
-    assert!(!err.message.contains(secret), "rahasia bocor di pesan galat: {}", err.message);
-    assert!(!format!("{err:?}").contains(secret), "rahasia bocor di Debug galat");
+    assert!(!err.message.contains(secret), "secret leaked in error message: {}", err.message);
+    assert!(!format!("{err:?}").contains(secret), "secret leaked in error Debug");
 }
 
-/// Alamat lokal yang pasti tertutup: port dipesan lalu langsung dilepas.
+/// A local address that is guaranteed to be closed: a port is reserved and then released right away.
 pub fn closed_port_uri() -> String {
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind port sementara");
-    let port = listener.local_addr().expect("alamat lokal").port();
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind temporary port");
+    let port = listener.local_addr().expect("local address").port();
     drop(listener);
     format!("http://127.0.0.1:{port}")
 }

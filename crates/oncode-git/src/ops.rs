@@ -1,5 +1,5 @@
-//! Operasi Git sehari-hari sampai tingkat lanjut. Setiap operasi tulis mengambil
-//! giliran lewat [`Repo::lock`] sehingga tidak ada dua operasi tulis yang bersamaan.
+//! Git operations from everyday to advanced. Every write operation takes its
+//! turn through [`Repo::lock`] so that no two write operations run at the same time.
 
 use std::path::Path;
 use std::sync::Arc;
@@ -36,7 +36,7 @@ impl Repo {
         Ok(self.run(Cmd::new(["rev-parse", "--verify", "--end-of-options", rev])).await?.trimmed())
     }
 
-    /// Leluhur bersama terdekat dua revisi, atau `None` bila riwayatnya tidak berhubungan.
+    /// The nearest common ancestor of two revisions, or `None` if their histories are unrelated.
     pub async fn merge_base(&self, a: &str, b: &str) -> Result<Option<String>> {
         let (a, b) = (check_ref(a)?, check_ref(b)?);
         let out = self.run(Cmd::new(["merge-base", "--end-of-options", a, b]).ok_codes(&[0, 1])).await?;
@@ -77,8 +77,8 @@ impl Repo {
         self.run(cmd.write()).await.map(drop)
     }
 
-    /// Mengembalikan berkas terlacak di working tree ke isi index. Berkas untracked
-    /// tidak disentuh; pemanggil memindahkannya ke tempat sampah.
+    /// Restores tracked files in the working tree to the index content. Untracked files
+    /// are not touched; the caller moves them to the trash.
     pub async fn discard(&self, paths: &[String]) -> Result<()> {
         let paths = check_paths(paths)?;
         let _guard = self.lock().await;
@@ -87,7 +87,7 @@ impl Repo {
 
     // ----- Commit -----
 
-    /// Membuat commit dari isi index dan mengembalikan hash-nya.
+    /// Creates a commit from the index content and returns its hash.
     pub async fn commit(&self, message: &str, options: &CommitOptions) -> Result<String> {
         if message.trim().is_empty() {
             return Err(GitError::invalid("Commit message is empty"));
@@ -105,27 +105,27 @@ impl Repo {
         Ok(self.run(Cmd::new(["rev-parse", "HEAD"])).await?.trimmed())
     }
 
-    /// Membatalkan commit terakhir; perubahannya kembali ke index.
+    /// Undoes the last commit; its changes go back to the index.
     pub async fn undo_last_commit(&self) -> Result<()> {
         let _guard = self.lock().await;
         self.run(Cmd::new(["reset", "--soft", "HEAD~1"]).write()).await.map(drop)
     }
 
-    /// Pesan commit terakhir (untuk mengisi kotak commit saat amend).
+    /// The last commit message (to fill the commit box when amending).
     pub async fn last_commit_message(&self) -> Result<String> {
         let out = self.run(Cmd::new(["log", "-1", "--format=%B"]).ok_codes(&[0, 128])).await?;
         Ok(out.text().trim_end().to_string())
     }
 
-    /// Subjek `limit` commit terakhir, terbaru lebih dulu; kosong pada repositori tanpa commit.
+    /// Subjects of the last `limit` commits, newest first; empty in a repository with no commits.
     pub async fn recent_subjects(&self, limit: u32) -> Result<Vec<String>> {
         let out = self.run(Cmd::new(["log".to_string(), format!("--max-count={limit}"), "--format=%s".to_string()]).ok_codes(&[0, 128])).await?;
         Ok(out.text().lines().map(str::trim).filter(|line| !line.is_empty()).map(String::from).collect())
     }
 
-    /// Perubahan yang di-stage (untuk menulis pesan commit): ringkasan `--stat` dan patch-nya.
-    /// Patch yang lebih panjang dari `max_bytes` dipotong di batas karakter dan `truncated` diisi.
-    /// Pengaturan diff milik pengguna (alat diff eksternal, warna) tidak dipakai.
+    /// Staged changes (for writing a commit message): the `--stat` summary and the patch.
+    /// A patch longer than `max_bytes` is cut at a character boundary and `truncated` is set.
+    /// The user's diff settings (external diff tool, colors) are not used.
     pub async fn staged_diff(&self, max_bytes: usize) -> Result<StagedDiff> {
         let base = ["diff", "--cached", "--no-color", "--no-ext-diff", "-M"];
         let stat = self.run(Cmd::new(base).args(["--stat"])).await?.text();
@@ -221,14 +221,14 @@ impl Repo {
         self.run(Cmd::new(["switch", "--end-of-options", branch]).write()).await.map(drop)
     }
 
-    /// Checkout sebuah commit atau tag tanpa branch (HEAD terlepas).
+    /// Checks out a commit or tag without a branch (detached HEAD).
     pub async fn switch_detached(&self, rev: &str) -> Result<()> {
         let rev = check_ref(rev)?;
         let _guard = self.lock().await;
         self.run(Cmd::new(["switch", "--detach", "--end-of-options", rev]).write()).await.map(drop)
     }
 
-    /// Membuat branch lokal yang melacak branch remote (mis. `origin/fitur` → `fitur`) lalu pindah ke sana.
+    /// Creates a local branch that tracks a remote branch (e.g. `origin/feature` → `feature`) and switches to it.
     pub async fn switch_tracking(&self, remote_branch: &str) -> Result<()> {
         let remote_branch = check_ref(remote_branch)?;
         let _guard = self.lock().await;
@@ -252,14 +252,14 @@ impl Repo {
         self.run(Cmd::new(["branch", "-m", "--end-of-options", old, new]).write()).await.map(drop)
     }
 
-    /// Menghapus branch lokal. Tanpa `force`, branch yang belum di-merge ditolak (`BranchNotMerged`).
+    /// Deletes a local branch. Without `force`, a branch that has not been merged is rejected (`BranchNotMerged`).
     pub async fn delete_branch(&self, name: &str, force: bool) -> Result<()> {
         let name = check_ref(name)?;
         let _guard = self.lock().await;
         self.run(Cmd::new(["branch", if force { "-D" } else { "-d" }, "--end-of-options", name]).write()).await.map(drop)
     }
 
-    /// Jumlah commit yang hanya ada di branch ini (tidak di HEAD maupun remote mana pun).
+    /// Number of commits that exist only on this branch (not in HEAD or any remote).
     pub async fn unmerged_count(&self, branch: &str) -> Result<u32> {
         let branch = check_ref(branch)?;
         let out = self.run(Cmd::new(["rev-list", "--count", "--not", "HEAD", "--remotes", "--not", "--end-of-options", branch])).await?;
@@ -278,7 +278,7 @@ impl Repo {
         self.run(full.write()).await.map(drop)
     }
 
-    // ----- Merge, rebase, dan operasi berlanjut -----
+    // ----- Merge, rebase, and continuable operations -----
 
     pub async fn merge(&self, rev: &str, mode: MergeMode) -> Result<()> {
         let rev = check_ref(rev)?;
@@ -293,7 +293,7 @@ impl Repo {
         self.run(cmd.args(["--end-of-options", rev]).write().context(self.ctx(EditorMode::AcceptDefault))).await.map(drop)
     }
 
-    /// Rebase branch aktif ke atas `onto`.
+    /// Rebases the active branch onto `onto`.
     pub async fn rebase(&self, onto: &str) -> Result<()> {
         let onto = check_ref(onto)?;
         let _guard = self.lock().await;
@@ -302,8 +302,8 @@ impl Repo {
             .map(drop)
     }
 
-    /// Daftar commit yang akan disusun ulang bila rebase interaktif dimulai dari `base`
-    /// (`None` = dari commit pertama).
+    /// The commits that would be rearranged if an interactive rebase starts from `base`
+    /// (`None` = from the first commit).
     pub async fn rebase_plan(&self, base: Option<&str>) -> Result<RebasePlan> {
         let range = match base {
             Some(base) => format!("{}..HEAD", check_ref(base)?),
@@ -327,7 +327,7 @@ impl Repo {
         })
     }
 
-    /// Menjalankan rebase interaktif dengan susunan dari UI.
+    /// Runs an interactive rebase with the arrangement from the UI.
     pub async fn rebase_interactive(&self, base: Option<&str>, items: &[RebaseTodoItem]) -> Result<()> {
         let todo = build_todo(items)?;
         let base = base.map(check_ref).transpose()?;
@@ -341,7 +341,7 @@ impl Repo {
         self.run(cmd.write().context(context)).await.map(drop)
     }
 
-    /// Melanjutkan, melewati, atau membatalkan operasi yang sedang berhenti.
+    /// Continues, skips, or aborts an operation that is currently stopped.
     pub async fn operation(&self, action: OperationAction) -> Result<()> {
         let Some(operation) = detect_operation(self.git_dir()) else {
             return Err(GitError::invalid("No operation is in progress"));
@@ -376,13 +376,13 @@ impl Repo {
             Some(remote) => cmd.args(["--end-of-options", check_ref(remote)?]),
             None => cmd.arg("--all"),
         };
-        // Fetch tidak mengubah working tree, jadi tidak perlu menunggu antrean tulis.
+        // Fetch does not change the working tree, so it does not need to wait in the write queue.
         let mut cmd = cmd.cancel(cancel).progress(progress);
         cmd.log = true;
         self.run(cmd).await.map(drop)
     }
 
-    /// Mengambil satu refspec dari remote, mis. `refs/pull/12/head:pr/12` untuk checkout pull request.
+    /// Fetches a single refspec from a remote, e.g. `refs/pull/12/head:pr/12` to check out a pull request.
     pub async fn fetch_refspec(&self, remote: &str, refspec: &str, cancel: Option<CancellationToken>, progress: Option<ProgressFn>) -> Result<()> {
         let (remote, refspec) = (check_ref(remote)?, check_ref(refspec)?);
         let mut cmd = Cmd::new(["fetch", "--progress", "--end-of-options", remote, refspec]).cancel(cancel).progress(progress);
@@ -500,7 +500,7 @@ impl Repo {
         self.run(cmd.write()).await.map(drop)
     }
 
-    /// Menerapkan stash; `pop` juga menghapusnya bila berhasil.
+    /// Applies a stash; `pop` also removes it on success.
     pub async fn stash_apply(&self, name: &str, pop: bool) -> Result<()> {
         let name = check_ref(name)?;
         let _guard = self.lock().await;
@@ -529,7 +529,7 @@ impl Repo {
 
     // ----- Tag -----
 
-    /// Membuat tag; dengan `message` menjadi annotated tag.
+    /// Creates a tag; with `message` it becomes an annotated tag.
     pub async fn tag_create(&self, name: &str, rev: Option<&str>, message: Option<&str>) -> Result<()> {
         let name = check_ref(name)?;
         let rev = rev.map(check_ref).transpose()?;
@@ -574,7 +574,7 @@ impl Repo {
             .unwrap_or(false)
     }
 
-    /// Menerapkan satu atau beberapa commit ke branch aktif, dari yang pertama diberikan.
+    /// Applies one or more commits to the active branch, starting from the first one given.
     pub async fn cherry_pick(&self, oids: &[String]) -> Result<()> {
         if oids.is_empty() {
             return Err(GitError::invalid("No commits selected"));
@@ -609,9 +609,9 @@ impl Repo {
             ResetMode::Mixed => "--mixed",
             ResetMode::Hard => "--hard",
         };
-        // Bukan `--end-of-options`: sebelum Git 2.44, `reset` membacanya sebagai revisi dan gagal
-        // ("option '--end-of-options' must come before non-option arguments"). `check_ref` sudah
-        // menolak nilai berawalan `-`, dan `--` di belakang memastikan `rev` dibaca sebagai revisi.
+        // Not `--end-of-options`: before Git 2.44, `reset` reads it as a revision and fails
+        // ("option '--end-of-options' must come before non-option arguments"). `check_ref` already
+        // rejects values starting with `-`, and the trailing `--` ensures `rev` is read as a revision.
         self.run(Cmd::new(["reset", flag, rev, "--"]).write()).await.map(drop)
     }
 
@@ -622,8 +622,8 @@ impl Repo {
         Ok(parse_worktrees(&out.stdout, &self.root_string()))
     }
 
-    /// Menambah worktree di `path`. `new_branch` membuat branch baru dari `rev`;
-    /// tanpa itu `rev` (branch yang ada) di-checkout.
+    /// Adds a worktree at `path`. `new_branch` creates a new branch from `rev`;
+    /// without it, `rev` (an existing branch) is checked out.
     pub async fn worktree_add(&self, path: &Path, new_branch: Option<&str>, rev: Option<&str>) -> Result<()> {
         let rev = rev.map(check_ref).transpose()?;
         let _guard = self.lock().await;
@@ -659,7 +659,7 @@ impl Repo {
         Ok(parse_submodules(&out.text()))
     }
 
-    /// `git submodule update`; daftar path kosong berarti semua submodule.
+    /// `git submodule update`; an empty path list means all submodules.
     pub async fn submodule_update(&self, paths: &[String], init: bool, cancel: Option<CancellationToken>, progress: Option<ProgressFn>) -> Result<()> {
         let paths = check_paths(paths)?;
         let _guard = self.lock().await;
@@ -675,7 +675,7 @@ impl Repo {
         self.run(Cmd::new(["submodule", "sync", "--recursive"]).write()).await.map(drop)
     }
 
-    // ----- Reflog dan konfigurasi -----
+    // ----- Reflog and configuration -----
 
     pub async fn reflog(&self, limit: u32) -> Result<Vec<ReflogEntry>> {
         let out = self
@@ -716,7 +716,7 @@ impl Repo {
 }
 
 impl Git {
-    /// Meng-clone `url` ke direktori `dest` (harus belum ada atau kosong).
+    /// Clones `url` into the directory `dest` (must not exist yet or must be empty).
     pub async fn clone_repo(
         self: &Arc<Self>,
         url: &str,
@@ -739,13 +739,13 @@ impl Git {
         self.run(parent, cmd).await.map(drop)
     }
 
-    /// Menjadikan `path` repositori baru.
+    /// Turns `path` into a new repository.
     pub async fn init(self: &Arc<Self>, path: &Path) -> Result<()> {
         self.run(path, Cmd::new(["init"]).write()).await.map(drop)
     }
 }
 
-/// Mengurai `%(upstream:track)`: `[ahead 1, behind 2]`, `[gone]`, atau kosong.
+/// Parses `%(upstream:track)`: `[ahead 1, behind 2]`, `[gone]`, or empty.
 fn parse_track(track: &str) -> (u32, u32, bool) {
     let inner = track.trim().trim_start_matches('[').trim_end_matches(']');
     if inner == "gone" {
@@ -763,7 +763,7 @@ fn parse_track(track: &str) -> (u32, u32, bool) {
     (ahead, behind, false)
 }
 
-/// Menyusun isi berkas todo dari pilihan pengguna dan menolak susunan yang tidak sah.
+/// Builds the todo file content from the user's choices and rejects invalid arrangements.
 pub fn build_todo(items: &[RebaseTodoItem]) -> Result<String> {
     let mut todo = String::new();
     let mut has_base = false;
@@ -787,7 +787,7 @@ pub fn build_todo(items: &[RebaseTodoItem]) -> Result<String> {
     Ok(todo)
 }
 
-/// Mengurai `git worktree list --porcelain -z`.
+/// Parses `git worktree list --porcelain -z`.
 pub fn parse_worktrees(raw: &[u8], current_root: &str) -> Vec<Worktree> {
     let mut worktrees = Vec::new();
     let mut current: Option<Worktree> = None;
@@ -834,7 +834,7 @@ pub fn parse_worktrees(raw: &[u8], current_root: &str) -> Vec<Worktree> {
     worktrees
 }
 
-/// Mengurai `git submodule status`: `<tanda><oid> <path> [(<describe>)]`.
+/// Parses `git submodule status`: `<marker><oid> <path> [(<describe>)]`.
 pub fn parse_submodules(text: &str) -> Vec<Submodule> {
     text.lines()
         .filter(|l| l.len() > 2)

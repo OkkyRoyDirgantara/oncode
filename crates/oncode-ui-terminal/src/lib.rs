@@ -1,5 +1,5 @@
-//! Terminal terintegrasi: panel bawah `terminal`, tombol status bar, dan command-nya.
-//! Emulasi oleh `alacritty_terminal`; tampilannya digambar sendiri (lihat `view.rs`).
+//! Integrated terminal: the bottom `terminal` panel, the status bar button, and its commands.
+//! Emulation is done by `alacritty_terminal`; the rendering is custom-drawn (see `view.rs`).
 
 pub mod emulator;
 pub mod flow;
@@ -26,28 +26,28 @@ pub use layout::{Layout, PanelDrop, SessionId};
 pub use panel::{fresh_session_id, panel, session_tab, tab_session, TerminalPanel, TAB_KIND};
 pub use view::{SessionEvent, TerminalSession};
 
-/// Id panel bawah terminal.
+/// Id of the terminal bottom panel.
 pub const PANEL_ID: &str = "terminal";
 
-/// Mendaftarkan fitur ini. Dipanggil sekali dari `app/src/main.rs` setelah `oncode_ui::init`.
+/// Registers this feature. Called once from `app/src/main.rs` after `oncode_ui::init`.
 pub fn init(cx: &mut App) {
-    // Root gpui-kit mengikat Tab/Shift+Tab ke perpindahan fokus, dan binding aksi dijalankan
-    // sebelum penangan `keydown`. Di dalam terminal kedua tombol itu milik shell (pelengkapan,
-    // Shift+Tab mundur), jadi binding Root dinonaktifkan untuk konteks terminal.
+    // The gpui-kit Root binds Tab/Shift+Tab to focus movement, and action bindings run before the
+    // `keydown` handler. Inside the terminal both keys belong to the shell (completion,
+    // Shift+Tab goes backwards), so the Root binding is disabled for the terminal context.
     cx.bind_keys([KeyBinding::new("tab", NoAction, Some(view::KEY_CONTEXT)), KeyBinding::new("shift-tab", NoAction, Some(view::KEY_CONTEXT))]);
     oncode_ui::register_tab_kind(cx, TAB_KIND, panel::TerminalKind);
     oncode_ui::register_feature(cx, setup);
 }
 
-/// Argumen command dari tombol di bilah panel: sasarannya terminal aktif panel, bukan terminal
-/// yang terakhir difokus (yang bisa saja ada di area editor).
+/// Command argument from a button in the panel bar: the target is the panel's active terminal, not
+/// the terminal that was focused last (which may well be in the editor area).
 fn panel_only(args: &Value) -> bool {
     args.get("panel").and_then(Value::as_bool).unwrap_or(false)
 }
 
 fn setup(workbench: &mut Workbench, window: &mut Window, cx: &mut Context<Workbench>) {
     let env = workbench.env().clone();
-    // Shell berjalan di folder proyek; tanpa folder tidak ada terminal (sama dengan v0.2).
+    // The shell runs in the project folder; without a folder there is no terminal (same as v0.2).
     if env.root.is_none() {
         return;
     }
@@ -106,8 +106,8 @@ fn setup(workbench: &mut Workbench, window: &mut Window, cx: &mut Context<Workbe
     workbench.register_command(
         Command::new("terminal.split", "Split Terminal", with_panel(split))
             .category("Terminal")
-            // Seperti VS Code: Cmd+\ di macOS (mengalahkan "Split Editor" saat terminal fokus),
-            // Ctrl+Shift+5 di tempat lain (Ctrl+\ milik shell).
+            // Like VS Code: Cmd+\ on macOS (overrides "Split Editor" while the terminal is focused),
+            // Ctrl+Shift+5 elsewhere (Ctrl+\ belongs to the shell).
             .key(if cfg!(target_os = "macos") { "Mod+\\" } else { "Ctrl+Shift+5" })
             .keys_when(terminal_focused),
     );
@@ -120,7 +120,7 @@ fn setup(workbench: &mut Workbench, window: &mut Window, cx: &mut Context<Workbe
     workbench.register_command(
         Command::new("terminal.moveToEditor", "Move Terminal into Editor Area", with_panel(|_, terminal, args, window, cx| {
             terminal.update(cx, |terminal, cx| {
-                // Terminal panel yang aktif; dari palet, yang fokus bila ada di panel.
+                // The panel's active terminal; from the palette, the focused one if it is in the panel.
                 let id = terminal.focused(window, cx).filter(|id| !panel_only(args) && terminal.layout().contains(*id)).or(terminal.layout().active);
                 if let Some(id) = id {
                     terminal.move_to_editor(id, window, cx);
@@ -132,7 +132,7 @@ fn setup(workbench: &mut Workbench, window: &mut Window, cx: &mut Context<Workbe
     );
     workbench.register_command(
         Command::new("terminal.moveToPanel", "Move Terminal into Panel", with_panel(|workbench, terminal, _, window, cx| {
-            // Terminal area editor yang fokus, yang terakhir difokus, atau tab aktif bila terminal.
+            // The focused editor-area terminal, the one focused last, or the active tab if it is a terminal.
             let active_tab = workbench.model().active().and_then(|(_, tab)| tab_session(tab));
             let target = {
                 let terminal = terminal.read(cx);
@@ -186,8 +186,8 @@ fn setup(workbench: &mut Workbench, window: &mut Window, cx: &mut Context<Workbe
     );
 }
 
-/// Menampilkan terminal (membuat sesi pertama bila belum ada), atau menyembunyikan panelnya bila
-/// terminal sudah terlihat dan fokus.
+/// Shows the terminal (creating the first session if there is none), or hides its panel if the
+/// terminal is already visible and focused.
 fn toggle(workbench: &mut Workbench, terminal: Entity<TerminalPanel>, _: &Value, window: &mut Window, cx: &mut Context<Workbench>) {
     let showing = workbench.active_panel().is_some_and(|id| id.as_ref() == PANEL_ID);
     let focused = terminal.read(cx).visible_sessions().iter().any(|session| session.read(cx).focus_handle_is_focused(window));
@@ -199,8 +199,8 @@ fn toggle(workbench: &mut Workbench, terminal: Entity<TerminalPanel>, _: &Value,
     terminal.update(cx, |terminal, cx| terminal.ensure_session(window, cx));
 }
 
-/// Membelah terminal yang fokus (atau aktif): di panel, terminal baru di sampingnya; di area
-/// editor, tab terminal baru di grup sebelah.
+/// Splits the focused (or active) terminal: in the panel, a new terminal beside it; in the editor
+/// area, a new terminal tab in the adjacent group.
 fn split(workbench: &mut Workbench, terminal: Entity<TerminalPanel>, args: &Value, window: &mut Window, cx: &mut Context<Workbench>) {
     let target = terminal.read(cx).target(panel_only(args), window, cx);
     if let Some(id) = target.filter(|id| terminal.read(cx).is_in_editor(*id)) {
@@ -215,7 +215,7 @@ fn split(workbench: &mut Workbench, terminal: Entity<TerminalPanel>, args: &Valu
     terminal.update(cx, |terminal, cx| terminal.split(target, window, cx));
 }
 
-/// Tombol di bilah tab panel: terminal baru, belah, pindah ke area editor, dan matikan.
+/// Buttons in the panel's tab bar: new terminal, split, move to the editor area, and kill.
 fn panel_actions(_: &mut Window, _: &mut App) -> AnyElement {
     let button = |id: &'static str, icon: Lucide, tooltip: &'static str, command: &'static str| {
         Button::new(id).ghost().xsmall().icon(Icon::new(icon)).tooltip(tooltip).on_click(move |_, window, cx| {
@@ -231,7 +231,7 @@ fn panel_actions(_: &mut Window, _: &mut App) -> AnyElement {
         .into_any_element()
 }
 
-/// Tombol "Terminal" di status bar.
+/// The "Terminal" button in the status bar.
 struct TerminalButton;
 
 impl Render for TerminalButton {

@@ -1,8 +1,8 @@
-//! Registry command per jendela. Setiap aksi terdaftar di sini agar bisa dijalankan dari
-//! command palette, menu, dan keyboard.
+//! The per-window command registry. Every action is registered here so it can be run from the
+//! command palette, menus, and keyboard.
 //!
-//! Penangan command menerima `(&Value, &mut Window, &mut App)` dan **tidak** dipanggil selagi
-//! entitas `Workbench` dipinjam, sehingga boleh memperbarui entitas mana pun.
+//! A command handler receives `(&Value, &mut Window, &mut App)` and is **not** called while the
+//! `Workbench` entity is borrowed, so it may update any entity.
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
@@ -21,14 +21,14 @@ pub struct Command {
     pub id: SharedString,
     pub title: SharedString,
     pub category: Option<SharedString>,
-    /// Pintasan bawaan dalam bentuk kanonis (lihat [`keys::canonical_keybinding`]).
+    /// Default shortcuts in canonical form (see [`keys::canonical_keybinding`]).
     pub keybindings: Vec<String>,
-    /// Command hanya aktif (dan hanya menangkap pintasan) bila ini mengembalikan true.
+    /// The command is only active (and only captures shortcuts) when this returns true.
     pub when: Option<WhenFn>,
-    /// Syarat tambahan khusus pintasan keyboard, mis. "editor sedang fokus". Menu dan command
-    /// palette hanya memakai `when`, sehingga command tetap bisa dipilih dari sana.
+    /// An extra condition specific to keyboard shortcuts, e.g. "the editor is focused". Menus and the
+    /// command palette only use `when`, so the command can still be picked from there.
     pub keys_when: Option<WhenFn>,
-    /// Tidak ditampilkan di command palette.
+    /// Not shown in the command palette.
     pub hidden: bool,
     pub run: RunFn,
 }
@@ -43,7 +43,7 @@ impl Command {
         self
     }
 
-    /// Menambah pintasan bawaan, mis. `"Mod+Shift+P"`; `Mod` = Ctrl di Linux/Windows, Cmd di macOS.
+    /// Adds a default shortcut, e.g. `"Mod+Shift+P"`; `Mod` = Ctrl on Linux/Windows, Cmd on macOS.
     pub fn key(mut self, binding: &str) -> Self {
         let canonical = keys::canonical_keybinding(binding);
         if !canonical.is_empty() {
@@ -57,7 +57,7 @@ impl Command {
         self
     }
 
-    /// Pintasan keyboard command ini hanya berlaku bila `when` juga mengembalikan true.
+    /// This command's keyboard shortcuts only apply if `when` also returns true.
     pub fn keys_when(mut self, when: impl Fn(&Window, &App) -> bool + 'static) -> Self {
         self.keys_when = Some(Rc::new(when));
         self
@@ -68,7 +68,7 @@ impl Command {
         self
     }
 
-    /// Judul lengkap untuk command palette, mis. "Git: Commit".
+    /// The full title for the command palette, e.g. "Git: Commit".
     pub fn label(&self) -> String {
         match &self.category {
             Some(category) => format!("{category}: {}", self.title),
@@ -95,13 +95,13 @@ impl CommandRegistry {
         self.commands.get(id)
     }
 
-    /// Semua command menurut urutan pendaftaran.
+    /// All commands in registration order.
     pub fn all(&self) -> Vec<Command> {
         self.order.iter().filter_map(|id| self.commands.get(id).cloned()).collect()
     }
 }
 
-/// Penimpaan pintasan dari `keybindings.json`; berlaku untuk semua jendela.
+/// Shortcut overrides from `keybindings.json`; applies to all windows.
 #[derive(Default)]
 struct Overrides(BTreeMap<String, Vec<String>>);
 
@@ -112,9 +112,9 @@ struct Registries(HashMap<WindowId, Rc<RefCell<CommandRegistry>>>);
 
 impl Global for Registries {}
 
-/// Penyaring pintasan: dipanggil sebelum sebuah command dijalankan lewat pintasan keyboard.
-/// Hasil `true` menahan command itu, sehingga tombolnya diteruskan ke elemen yang sedang fokus.
-/// Dipakai terminal agar Ctrl+W, Ctrl+S, dan sejenisnya sampai ke shell.
+/// A shortcut filter: called before a command is run via a keyboard shortcut.
+/// Returning `true` holds that command back, so the key is passed on to the focused element.
+/// Used by the terminal so Ctrl+W, Ctrl+S, and the like reach the shell.
 pub type KeyShield = Rc<dyn Fn(&KeyPress, &Command, &Window, &App) -> bool>;
 
 #[derive(Default)]
@@ -122,7 +122,7 @@ struct Shields(Vec<KeyShield>);
 
 impl Global for Shields {}
 
-/// Mendaftarkan penyaring pintasan (lihat [`KeyShield`]); berlaku untuk semua jendela.
+/// Registers a shortcut filter (see [`KeyShield`]); applies to all windows.
 pub fn register_key_shield(cx: &mut App, shield: impl Fn(&KeyPress, &Command, &Window, &App) -> bool + 'static) {
     cx.default_global::<Shields>().0.push(Rc::new(shield));
 }
@@ -130,7 +130,7 @@ pub fn register_key_shield(cx: &mut App, shield: impl Fn(&KeyPress, &Command, &W
 pub(crate) fn install(cx: &mut App) {
     cx.set_global(Overrides::default());
     cx.set_global(Registries::default());
-    // Dijalankan sebelum mekanisme tombol lain, seperti penangan `keydown` fase capture di versi web.
+    // Runs before any other key mechanism, like a capture-phase `keydown` handler in the web version.
     cx.intercept_keystrokes(|event, window, cx| {
         let keystroke = &event.keystroke;
         let press = KeyPress {
@@ -141,7 +141,7 @@ pub(crate) fn install(cx: &mut App) {
             key: keystroke.key.clone(),
         };
         let Some(binding) = keys::keybinding_from_press(&press) else { return };
-        // Elemen yang fokus (mis. terminal) boleh menahan tombol untuk dirinya sendiri.
+        // The focused element (e.g. the terminal) may hold a key back for itself.
         let (command, bound) = match_keybinding(&binding, window, cx);
         let command = command.filter(|command| {
             if key_captured(&press, window, cx) {
@@ -162,10 +162,10 @@ pub(crate) fn install(cx: &mut App) {
     .detach();
 }
 
-/// Pintasan yang baru saja ditolak keyboard padahal terikat ke sebuah command (mis. `keys_when`
-/// tidak terpenuhi, atau tombolnya ditahan terminal). Di macOS, AppKit lalu menawarkan tombol yang
-/// sama ke menu bar; menu memeriksa ini lewat [`declined_by_keyboard`] agar keputusan keyboard
-/// tetap berlaku. Dihapus begitu event yang sedang diproses selesai.
+/// A shortcut that the keyboard just declined even though it is bound to a command (e.g. `keys_when`
+/// is not satisfied, or the terminal held the key). On macOS, AppKit then offers the same key to the
+/// menu bar; the menu checks this via [`declined_by_keyboard`] so the keyboard's decision still
+/// applies. Cleared as soon as the event being processed finishes.
 #[derive(Default)]
 struct Declined {
     binding: Option<String>,
@@ -179,7 +179,7 @@ fn decline(binding: String, cx: &mut App) {
     declined.serial += 1;
     declined.binding = Some(binding);
     let serial = declined.serial;
-    // Tugas foreground baru berjalan setelah event ini selesai diproses, termasuk oleh menu bar.
+    // A foreground task only runs after this event has finished processing, including by the menu bar.
     cx.spawn(async move |cx| {
         cx.update(|cx| {
             let declined = cx.default_global::<Declined>();
@@ -191,14 +191,14 @@ fn decline(binding: String, cx: &mut App) {
     .detach();
 }
 
-/// Apakah salah satu pintasan `command` baru saja ditolak keyboard (lihat [`Declined`]).
+/// Whether one of `command`'s shortcuts was just declined by the keyboard (see [`Declined`]).
 pub fn declined_by_keyboard(command: &Command, cx: &App) -> bool {
     let Some(binding) = cx.try_global::<Declined>().and_then(|declined| declined.binding.as_ref()) else { return false };
     keybindings_for(command, cx).iter().any(|b| b == binding)
 }
 
-/// Penahan tombol: bila elemen dengan `FocusHandle` ini fokus dan fungsinya mengembalikan `true`,
-/// pintasan aplikasi tidak dijalankan dan tombolnya diteruskan ke elemen itu.
+/// A key capture: if the element with this `FocusHandle` is focused and its function returns `true`,
+/// the application shortcut is not run and the key is passed on to that element.
 pub type CaptureFn = Rc<dyn Fn(&KeyPress, &Window, &App) -> bool>;
 
 #[derive(Default)]
@@ -206,7 +206,7 @@ struct Captures(Vec<(WeakFocusHandle, CaptureFn)>);
 
 impl Global for Captures {}
 
-/// Mendaftarkan penahan tombol untuk sebuah elemen (dilepas otomatis saat `FocusHandle`-nya hilang).
+/// Registers a key capture for an element (released automatically when its `FocusHandle` is gone).
 pub fn capture_keys(handle: &FocusHandle, capture: impl Fn(&KeyPress, &Window, &App) -> bool + 'static, cx: &mut App) {
     let captures = &mut cx.default_global::<Captures>().0;
     captures.retain(|(handle, _)| handle.upgrade().is_some());
@@ -233,7 +233,7 @@ fn registry_for(window: &Window, cx: &App) -> Option<Rc<RefCell<CommandRegistry>
     cx.try_global::<Registries>()?.0.get(&window.window_handle().window_id()).cloned()
 }
 
-/// Semua command jendela ini.
+/// All commands of this window.
 pub fn all(window: &Window, cx: &App) -> Vec<Command> {
     registry_for(window, cx).map(|r| r.borrow().all()).unwrap_or_default()
 }
@@ -242,7 +242,7 @@ pub fn get(id: &str, window: &Window, cx: &App) -> Option<Command> {
     registry_for(window, cx).and_then(|r| r.borrow().get(id).cloned())
 }
 
-/// Pintasan yang berlaku untuk sebuah command (penimpaan pengguna didahulukan).
+/// The shortcuts that apply to a command (user overrides take precedence).
 pub fn keybindings_for(command: &Command, cx: &App) -> Vec<String> {
     match cx.try_global::<Overrides>().and_then(|o| o.0.get(command.id.as_ref())) {
         Some(custom) => custom.clone(),
@@ -250,19 +250,19 @@ pub fn keybindings_for(command: &Command, cx: &App) -> Vec<String> {
     }
 }
 
-/// Menerapkan isi `keybindings.json`. Daftar kosong menghapus pintasan bawaan.
+/// Applies the content of `keybindings.json`. An empty list removes the default shortcuts.
 pub fn set_keybinding_overrides(overrides: BTreeMap<String, Vec<String>>, cx: &mut App) {
     cx.set_global(Overrides(overrides));
     cx.refresh_windows();
 }
 
-/// Command aktif yang terikat pada pintasan ini; yang didaftarkan terakhir menang.
+/// The active command bound to this shortcut; the one registered last wins.
 pub fn command_for_keybinding(binding: &str, window: &Window, cx: &App) -> Option<Command> {
     match_keybinding(binding, window, cx).0
 }
 
-/// Seperti [`command_for_keybinding`], ditambah apakah pintasan ini terikat ke command mana pun
-/// (juga yang sedang tidak aktif).
+/// Like [`command_for_keybinding`], plus whether this shortcut is bound to any command
+/// (including inactive ones).
 fn match_keybinding(binding: &str, window: &Window, cx: &App) -> (Option<Command>, bool) {
     let (mut found, mut bound) = (None, false);
     for command in all(window, cx) {
@@ -278,8 +278,8 @@ fn match_keybinding(binding: &str, window: &Window, cx: &App) -> (Option<Command
     (found, bound)
 }
 
-/// Menjalankan command sekarang juga. Jangan dipanggil selagi entitas `Workbench` dipinjam
-/// (mis. dari dalam `workbench.update(..)`); pakai [`execute`] untuk itu.
+/// Runs a command right now. Do not call it while the `Workbench` entity is borrowed
+/// (e.g. from inside `workbench.update(..)`); use [`execute`] for that.
 pub fn execute_now(id: &str, args: &Value, window: &mut Window, cx: &mut App) -> bool {
     let Some(command) = get(id, window, cx) else { return false };
     if command.when.as_ref().is_some_and(|when| !when(window, cx)) {
@@ -289,7 +289,7 @@ pub fn execute_now(id: &str, args: &Value, window: &mut Window, cx: &mut App) ->
     true
 }
 
-/// Menjadwalkan command setelah pembaruan yang sedang berjalan selesai. Aman dipanggil dari mana saja.
+/// Schedules a command after the update in progress finishes. Safe to call from anywhere.
 pub fn execute(id: impl Into<SharedString>, args: Value, window: &mut Window, cx: &mut App) {
     let id = id.into();
     window.defer(cx, move |window, cx| {

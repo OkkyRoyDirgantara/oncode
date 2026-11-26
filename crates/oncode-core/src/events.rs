@@ -1,4 +1,4 @@
-//! Event yang disiarkan `oncode-core` ke UI lewat [`EventSink`].
+//! Events broadcast by `oncode-core` to the UI through [`EventSink`].
 
 use std::sync::Arc;
 
@@ -7,63 +7,63 @@ use serde::Serialize;
 
 use crate::settings::Settings;
 
-/// Penerima event. Dipanggil dari thread mana pun (runtime tokio, pemantau berkas), jadi
-/// harus cepat dan tidak boleh memblokir; UI biasanya hanya meneruskannya ke thread utama.
+/// Event receiver. Called from any thread (tokio runtime, file watcher), so it
+/// must be fast and must not block; the UI usually just forwards it to the main thread.
 pub type EventSink = Arc<dyn Fn(CoreEvent) + Send + Sync>;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum CoreEvent {
-    /// Keadaan sebuah repositori berubah; UI cukup menggambar ulang dari snapshot ini.
+    /// The state of a repository changed; the UI can simply redraw from this snapshot.
     RepoChanged { root: String, snapshot: RepoSnapshot },
-    /// Branch, tag, atau HEAD berubah; daftar ref dan graph perlu dimuat ulang.
+    /// A branch, tag, or HEAD changed; the ref list and graph need to be reloaded.
     RefsChanged { root: String },
-    /// Berkas di folder proyek jendela `window` berubah dari luar aplikasi.
+    /// Files in the project folder of window `window` changed from outside the app.
     FsChanged {
-        /// Label jendela yang dituju.
+        /// Label of the target window.
         window: String,
         paths: Vec<String>,
-        /// Terlalu banyak perubahan untuk dirinci; muat ulang semuanya.
+        /// Too many changes to itemize; reload everything.
         overflow: bool,
     },
-    /// Satu perintah git yang dijalankan aplikasi, untuk panel Git Output.
+    /// A single git command run by the app, for the Git Output panel.
     GitOutput { entry: GitLogEntry },
-    /// Git membutuhkan jawaban pengguna; dijawab lewat `api::app::prompt_respond`.
+    /// Git needs a user answer; answered through `api::app::prompt_respond`.
     Prompt {
-        /// Jendela yang folder proyeknya memuat repositori peminta; `None` = tampilkan di jendela mana saja.
+        /// The window whose project folder contains the requesting repository; `None` = show in any window.
         window: Option<String>,
         request: PromptRequest,
     },
-    /// Pengaturan tingkat pengguna berubah. Pengaturan efektif per jendela (dengan penimpaan
-    /// proyek) diambil lewat `api::app::settings_get`.
+    /// User-level settings changed. The effective per-window settings (with project
+    /// overrides) are fetched through `api::app::settings_get`.
     SettingsChanged { settings: Settings },
-    /// Daftar akun GitHub/GitLab berubah (login atau logout).
+    /// The list of GitHub/GitLab accounts changed (login or logout).
     AccountsChanged,
-    /// Pemberitahuan dari backend yang ditampilkan UI sebagai toast.
+    /// A notification from the backend that the UI shows as a toast.
     Notice { kind: NoticeKind, message: String },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum PromptKind {
-    /// Username atau teks biasa.
+    /// Username or plain text.
     Text,
-    /// Password, token, atau passphrase: masukan disembunyikan.
+    /// Password, token, or passphrase: the input is hidden.
     Secret,
-    /// Pertanyaan ya/tidak (mis. sidik jari host SSH).
+    /// Yes/no question (e.g. SSH host fingerprint).
     Confirm,
-    /// Pesan commit multi-baris.
+    /// Multi-line commit message.
     Message,
 }
 
-/// Isi [`CoreEvent::Prompt`].
+/// Payload of [`CoreEvent::Prompt`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PromptRequest {
     pub id: String,
     pub kind: PromptKind,
-    /// Teks pertanyaan dari git/ssh.
+    /// Question text from git/ssh.
     pub prompt: String,
-    /// Isi awal (untuk pesan commit).
+    /// Initial content (for commit messages).
     pub initial: String,
     pub repo: Option<String>,
 }

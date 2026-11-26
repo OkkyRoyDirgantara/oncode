@@ -1,4 +1,4 @@
-//! Tampilan tab berkas: editor kode di atas sebuah [`Buffer`].
+//! The file tab view: a code editor on top of a [`Buffer`].
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -18,7 +18,7 @@ use super::language::language_for_path;
 use crate::overlay::{self, Choice};
 use crate::workbench::{Env, TabContent, WorkbenchEvent};
 
-/// Nama font yang benar-benar terpasang untuk nilai `editor.fontFamily` (daftar ala CSS).
+/// The font name that is actually installed for an `editor.fontFamily` value (a CSS-style list).
 #[derive(Default)]
 struct FontCache(std::collections::HashMap<String, Option<SharedString>>);
 
@@ -55,21 +55,21 @@ pub struct FileView {
     buffer: Entity<Buffer>,
     state: Entity<EditorState>,
     settings: EditorSettings,
-    /// Hint ujung baris yang tergambar di frame terakhir beserta letaknya (untuk uji).
+    /// The end-of-line hint painted in the last frame, with its position (for tests).
     painted_hint: Rc<RefCell<Option<(SharedString, Bounds<Pixels>)>>>,
     _subscriptions: Vec<Subscription>,
 }
 
-/// Letak ujung sebuah baris di layar, dari tata letak editor frame ini.
+/// Where the end of a line is on screen, from the editor layout of this frame.
 struct LineEnd {
     origin: Point<Pixels>,
     line_height: Pixels,
-    /// Area teks editor yang terlihat; hint dipotong di sini.
+    /// The visible text area of the editor; the hint is clipped here.
     clip: Bounds<Pixels>,
 }
 
-/// Ujung baris `row` (mulai dari 0) dalam koordinat jendela, atau `None` bila baris itu tidak
-/// terlihat. Dipanggil setelah prepaint editor, sehingga ikut posisi gulir frame yang sama.
+/// The end of line `row` (starting at 0) in window coordinates, or `None` if that line is not
+/// visible. Called after the editor's prepaint, so it follows the scroll position of the same frame.
 fn line_end(state: &mut EditorState, row: usize, window: &mut Window, cx: &mut Context<EditorState>) -> Option<LineEnd> {
     if !state.visible_row_range()?.contains(&row) {
         return None;
@@ -87,7 +87,7 @@ fn line_end(state: &mut EditorState, row: usize, window: &mut Window, cx: &mut C
     let start = text.offset_to_offset_utf16(start);
     let line_start = state.bounds_for_range(start..start, text_bounds, window, cx)?;
     let line_end = state.bounds_for_range(end..end, text_bounds, window, cx)?;
-    // Awal area teks (setelah gutter) tidak ikut bergulir mendatar.
+    // The start of the text area (after the gutter) does not scroll horizontally.
     let gutter = line_start.origin.x - text_bounds.origin.x;
     let left = input.origin.x + gutter;
     if line_end.origin.x < left {
@@ -101,7 +101,7 @@ impl FileView {
     pub fn new(path: &str, env: Env, buffers: Entity<Buffers>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let buffer = buffers.update(cx, |buffers, cx| buffers.open(path, window, cx));
         let settings = EditorSettings::default();
-        // Pengaturan efektif dibaca dari core: `Workbench` sedang dipinjam saat tab dibangun.
+        // The effective settings are read from the core: `Workbench` is borrowed while tabs are built.
         let extra_languages = env.core.effective_settings(&env.window).extensions.extra_languages;
         let highlighter = language_for_path(path).highlighter_with(extra_languages);
         let state = cx.new(|cx| {
@@ -114,7 +114,7 @@ impl FileView {
                 .tab_size(TabSize { tab_size: settings.tab_size as usize, hard_tabs: !settings.insert_spaces })
         });
         buffer.update(cx, |buffer, cx| buffer.attach(&state, window, cx));
-        // Ctrl+klik/F12 tanpa language server; hub LSP menimpanya saat `editor_created` bila ada server.
+        // Ctrl+click/F12 without a language server; the LSP hub overrides it on `editor_created` if there is a server.
         super::symbols::attach(&state, &env, path, cx);
         buffers.update(cx, |buffers, cx| buffers.editor_created(buffer.clone(), state.clone(), cx));
 
@@ -130,9 +130,9 @@ impl FileView {
                 BuffersEvent::LineHintsChanged => cx.notify(),
                 _ => {}
             }),
-            // Hint ujung baris mengikuti baris kursor.
+            // The end-of-line hint follows the cursor line.
             cx.observe(&state, |_, _, cx| cx.notify()),
-            // Mulai menyunting menjadikan tab pratinjau sebagai tab tetap.
+            // Starting to edit turns a preview tab into a permanent tab.
             cx.subscribe_in(&state, window, |this, _, event: &InputEvent, window, cx| {
                 if matches!(event, InputEvent::Change) {
                     let id = format!("file:{}", this.buffer.read(cx).path());
@@ -153,7 +153,7 @@ impl FileView {
         }
 
         let mut this = Self { env, buffers, buffer, state, settings, painted_hint: Rc::default(), _subscriptions: subscriptions };
-        // `Workbench` sedang dipinjam saat tab dibangun; pengaturan dibaca setelahnya.
+        // `Workbench` is borrowed while tabs are built; the settings are read afterwards.
         cx.defer_in(window, |this, window, cx| {
             if let Some(workbench) = this.env.workbench.upgrade() {
                 let settings = workbench.read(cx).settings().editor.clone();
@@ -186,7 +186,7 @@ impl FileView {
         cx.notify();
     }
 
-    /// Melompat ke posisi yang menunggu untuk berkas ini, bila ada dan isinya sudah dimuat.
+    /// Jumps to the pending position for this file, if there is one and its content has been loaded.
     fn apply_reveal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !self.buffer.read(cx).is_ready() {
             return;
@@ -202,7 +202,7 @@ impl FileView {
             let text = state.text().clone();
             let line_start = text.line_start_offset(line as usize);
             let line_text = text.slice_line(line as usize).to_string();
-            // Kolom dihitung dalam karakter; editor memakai offset byte.
+            // The column is counted in characters; the editor uses byte offsets.
             let byte_at = |chars: u32| line_text.char_indices().nth(chars as usize).map_or(line_text.len(), |(index, _)| index);
             let start = line_start + byte_at(reveal.column);
             state.set_cursor_position(text.offset_to_position(start), window, cx);
@@ -214,12 +214,12 @@ impl FileView {
         });
     }
 
-    /// Hint ujung baris yang tergambar di frame terakhir dan batasnya di jendela.
+    /// The end-of-line hint painted in the last frame and its bounds in the window.
     pub fn painted_line_hint(&self) -> Option<(SharedString, Bounds<Pixels>)> {
         self.painted_hint.borrow().clone()
     }
 
-    /// Hint untuk baris kursor dari penyedia yang terpasang (mis. inline blame).
+    /// The hint for the cursor line from the installed provider (e.g. inline blame).
     fn cursor_line_hint(&self, cx: &App) -> Option<(usize, SharedString)> {
         let buffer = self.buffer.read(cx);
         if buffer.is_large() {
@@ -230,7 +230,7 @@ impl FileView {
         Some((row as usize, hint))
     }
 
-    /// Lapisan di atas editor yang menggambar hint di ujung baris kursor, sedikit berjarak dari teks.
+    /// A layer on top of the editor that paints the hint at the end of the cursor line, slightly spaced from the text.
     fn line_hint_layer(&self, row: usize, text: SharedString, family: SharedString, font_size: Pixels, color: Hsla) -> impl IntoElement {
         let state = self.state.clone();
         let painted = self.painted_hint.clone();
@@ -253,7 +253,7 @@ impl FileView {
         .size_full()
     }
 
-    /// Posisi kursor (baris dan kolom mulai dari 1) dan jumlah karakter terpilih.
+    /// The cursor position (line and column starting at 1) and the number of selected characters.
     pub fn cursor_info(&self, cx: &App) -> (u32, u32, usize) {
         let state = self.state.read(cx);
         let Position { line, character } = state.cursor_position();
@@ -340,7 +340,7 @@ impl Render for FileView {
     }
 }
 
-/// Isi tab untuk jenis `file`.
+/// The tab content for the `file` kind.
 pub struct FileTab {
     pub view: Entity<FileView>,
     pub buffer: Entity<Buffer>,

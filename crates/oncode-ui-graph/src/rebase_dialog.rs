@@ -1,4 +1,4 @@
-//! Dialog interactive rebase: susun ulang commit, pilih aksi per commit, lalu jalankan.
+//! Interactive rebase dialog: reorder commits, pick an action per commit, then run it.
 
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
@@ -16,7 +16,7 @@ use crate::rebase_plan::{action_hint, move_item, set_action, validate_plan, REBA
 pub struct RebaseDialog {
     ctx: Ctx,
     base: Option<String>,
-    /// Dari yang tertua (atas) ke yang terbaru.
+    /// From the oldest (top) to the newest.
     items: Vec<RebaseTodoItem>,
     published: u32,
     running: bool,
@@ -165,7 +165,7 @@ impl Render for RebaseDialog {
     }
 }
 
-/// Memuat rencana rebase dari `base` (atau dari commit pertama) lalu membuka dialognya.
+/// Loads the rebase plan from `base` (or from the first commit) and then opens its dialog.
 pub fn open(ctx: Ctx, base: Option<String>, window: &mut Window, cx: &mut App) {
     let core = ctx.core(cx);
     let (root, plan_base) = (ctx.root.clone(), base.clone());

@@ -1,16 +1,16 @@
-//! Menu konteks untuk commit dan ref sebagai data murni: label, keadaan nonaktif, dan aksi.
-//! Tampilan mengubahnya menjadi `PopupMenu`; aksinya dijalankan `actions::run_action`.
+//! Context menus for commits and refs as plain data: labels, disabled state, and actions.
+//! The view turns them into a `PopupMenu`; their actions are run by `actions::run_action`.
 
 use oncode_git::{Branch, Commit, GraphRow, Head, RefKind, RemoteBranch, RepoSnapshot, ResetMode, Stash, Tag};
 
 use crate::format::short_oid;
 use crate::refs::is_ancestor_of_head;
 
-/// Aksi yang dipicu sebuah item menu (atau tombol) pada repositori tertentu.
+/// An action triggered by a menu item (or button) on a specific repository.
 #[derive(Debug, Clone, PartialEq)]
 pub enum GitAction {
     CheckoutBranch(String),
-    /// Nama lengkap branch remote, mis. `origin/main`.
+    /// The full name of a remote branch, e.g. `origin/main`.
     CheckoutRemote(String),
     CheckoutDetached(String),
     CreateBranch(String),
@@ -18,13 +18,13 @@ pub enum GitAction {
     CherryPick(Vec<String>),
     Revert { oid: String, subject: String },
     Reset { rev: String, mode: ResetMode },
-    /// `None` = dari commit pertama repositori.
+    /// `None` = from the repository's first commit.
     InteractiveRebase { base: Option<String> },
     Merge(String),
     RebaseOnto(String),
     RenameBranch(String),
     DeleteBranch(String),
-    /// `branch: None` = branch aktif.
+    /// `branch: None` = the active branch.
     Push { branch: Option<String>, set_upstream: bool },
     SetUpstream(String),
     DeleteRemoteBranch(String),
@@ -34,7 +34,7 @@ pub enum GitAction {
     StashApply { name: String, pop: bool },
     StashBranch(String),
     StashDrop { name: String, message: String },
-    /// Pilih commit ini bersama HEAD untuk melihat daftar berkas yang berbeda.
+    /// Select this commit together with HEAD to see the list of files that differ.
     CompareWithHead(String),
     ShowInGraph { oid: String, label: String },
     Copy { text: String, what: &'static str },
@@ -73,7 +73,7 @@ impl MenuEntry {
     }
 }
 
-/// Item berlabel `label`, untuk uji dan untuk menjalankan aksi dari keyboard.
+/// The item labeled `label`, for tests and for running actions from the keyboard.
 pub fn find<'a>(entries: &'a [MenuEntry], label: &str) -> Option<(&'a GitAction, bool)> {
     entries.iter().find_map(|entry| match entry {
         MenuEntry::Item { label: l, disabled, action, .. } if l == label => Some((action, *disabled)),
@@ -84,11 +84,11 @@ pub fn find<'a>(entries: &'a [MenuEntry], label: &str) -> Option<(&'a GitAction,
 pub struct CommitMenuContext<'a> {
     pub snapshot: Option<&'a RepoSnapshot>,
     pub commit: &'a Commit,
-    /// Baris yang sudah dimuat, untuk memeriksa apakah commit ini leluhur HEAD.
+    /// The rows already loaded, to check whether this commit is an ancestor of HEAD.
     pub rows: &'a [GraphRow],
-    /// Daftar disaring, sehingga hubungan leluhur tidak bisa disimpulkan dari daftar.
+    /// The list is filtered, so ancestry cannot be inferred from the list.
     pub filtered: bool,
-    /// Commit terpilih lain yang ikut di-cherry-pick (urut dari yang tertua).
+    /// Other selected commits that are cherry-picked along with it (ordered oldest first).
     pub selection: Option<&'a [String]>,
 }
 
@@ -129,7 +129,7 @@ pub fn commit_menu(context: &CommitMenuContext) -> Vec<MenuEntry> {
         MenuEntry::new("Reset Current Branch to Here (Mixed)…", reset(ResetMode::Mixed)).disabled(is_head),
         MenuEntry::new("Reset Current Branch to Here (Hard)…", reset(ResetMode::Hard)).danger(),
         MenuEntry::Separator,
-        // Rebase menyusun ulang commit SETELAH commit ini; hanya masuk akal untuk leluhur HEAD.
+        // Rebase rearranges the commits AFTER this commit; it only makes sense for ancestors of HEAD.
         MenuEntry::new("Interactive Rebase from Here…", GitAction::InteractiveRebase { base: Some(oid.clone()) }).disabled(is_head || ancestor == Some(false)),
         MenuEntry::Separator,
         MenuEntry::new("Compare with HEAD", GitAction::CompareWithHead(oid.clone())).disabled(is_head || head_oid.is_none()),
@@ -173,7 +173,7 @@ pub fn remote_branch_menu(branch: &RemoteBranch) -> Vec<MenuEntry> {
     ]
 }
 
-/// `remote`: remote pertama repositori, untuk tawaran mendorong tag.
+/// `remote`: the repository's first remote, for the offer to push the tag.
 pub fn tag_menu(tag: &Tag, remote: Option<&str>) -> Vec<MenuEntry> {
     let name = tag.name.clone();
     let mut entries = vec![MenuEntry::new("Checkout (detached)", GitAction::CheckoutDetached(name.clone()))];
@@ -200,7 +200,7 @@ pub fn stash_menu(stash: &Stash) -> Vec<MenuEntry> {
     ]
 }
 
-/// Menu konteks untuk entri reflog (atau commit mana pun yang hanya dikenal lewat hash).
+/// Context menu for a reflog entry (or any commit known only by its hash).
 pub fn reflog_menu(oid: &str) -> Vec<MenuEntry> {
     let oid = oid.to_string();
     vec![
@@ -225,7 +225,7 @@ mod tests {
     }
 
     fn is_disabled(entries: &[MenuEntry], label: &str) -> bool {
-        find(entries, label).unwrap_or_else(|| panic!("tidak ada item {label}")).1
+        find(entries, label).unwrap_or_else(|| panic!("no item {label}")).1
     }
 
     #[test]
@@ -238,7 +238,7 @@ mod tests {
         assert_eq!(
             labels(&menu),
             [
-                // Branch aktif (main) tidak ditawarkan untuk checkout.
+                // The active branch (main) is not offered for checkout.
                 "Checkout Branch feature",
                 "Checkout (detached)",
                 "Create Branch Here…",
@@ -254,7 +254,7 @@ mod tests {
                 "Copy Subject",
             ]
         );
-        assert!(labels(&menu).iter().all(|l| !is_disabled(&menu, l)), "tidak ada yang nonaktif untuk leluhur HEAD");
+        assert!(labels(&menu).iter().all(|l| !is_disabled(&menu, l)), "nothing is disabled for an ancestor of HEAD");
         assert_eq!(find(&menu, "Checkout Branch feature").unwrap().0, &GitAction::CheckoutBranch("feature".into()));
         assert_eq!(find(&menu, "Cherry-pick").unwrap().0, &GitAction::CherryPick(vec![oid(3)]));
         assert_eq!(find(&menu, "Revert…").unwrap().0, &GitAction::Revert { oid: oid(3), subject: "Commit 3".into() });
@@ -273,7 +273,7 @@ mod tests {
         for label in ["Cherry-pick", "Reset Current Branch to Here (Soft)…", "Reset Current Branch to Here (Mixed)…", "Interactive Rebase from Here…", "Compare with HEAD"] {
             assert!(is_disabled(&menu, label), "{label}");
         }
-        // Reset hard ke HEAD tetap berguna (membuang perubahan), begitu juga checkout detached dari sebuah branch.
+        // A hard reset to HEAD is still useful (it discards changes), and so is a detached checkout from a branch.
         assert!(!is_disabled(&menu, "Reset Current Branch to Here (Hard)…"));
         assert!(!is_disabled(&menu, "Checkout (detached)"));
 
@@ -286,7 +286,7 @@ mod tests {
     #[test]
     fn rebase_is_disabled_for_commits_that_are_not_ancestors_unless_the_list_is_filtered() {
         use crate::testing::row;
-        // HEAD = 2 → 3 → 4; commit 1 ada di branch lain.
+        // HEAD = 2 → 3 → 4; commit 1 is on another branch.
         let rows = vec![row(2, &[3]), row(1, &[4]), row(3, &[4]), row(4, &[])];
         let mut snapshot = snapshot();
         snapshot.head_oid = Some(oid(2));
@@ -294,7 +294,7 @@ mod tests {
         let menu = commit_menu(&CommitMenuContext { snapshot: Some(&snapshot), commit: &side, rows: &rows, filtered: false, selection: None });
         assert!(is_disabled(&menu, "Interactive Rebase from Here…"));
         let menu = commit_menu(&CommitMenuContext { snapshot: Some(&snapshot), commit: &side, rows: &rows, filtered: true, selection: None });
-        assert!(!is_disabled(&menu, "Interactive Rebase from Here…"), "daftar tersaring: tidak bisa disimpulkan, jadi diizinkan");
+        assert!(!is_disabled(&menu, "Interactive Rebase from Here…"), "filtered list: cannot be inferred, so it is allowed");
     }
 
     #[test]
@@ -304,7 +304,7 @@ mod tests {
         let selection = vec![oid(4), oid(2)];
         let menu = commit_menu(&CommitMenuContext { snapshot: Some(&snapshot), commit: &rows[2].commit, rows: &rows, filtered: false, selection: Some(&selection) });
         assert_eq!(find(&menu, "Cherry-pick 2 Commits").unwrap().0, &GitAction::CherryPick(vec![oid(4), oid(2)]));
-        // Commit di luar pilihan: hanya commit itu.
+        // A commit outside the selection: only that commit.
         let menu = commit_menu(&CommitMenuContext { snapshot: Some(&snapshot), commit: &rows[5].commit, rows: &rows, filtered: false, selection: Some(&selection) });
         assert_eq!(find(&menu, "Cherry-pick").unwrap().0, &GitAction::CherryPick(vec![oid(5)]));
     }

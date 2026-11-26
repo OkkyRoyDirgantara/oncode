@@ -1,12 +1,12 @@
-//! Pengelola PTY: menjalankan shell, meneruskan masukan/keluaran, dan mengatur siklus hidupnya.
+//! PTY manager: runs shells, forwards input/output, and manages their lifecycle.
 //!
-//! Tiap terminal memakai dua thread:
-//! - *pembaca* membaca PTY per potongan hingga 64 KiB dan memanggil `on_data`;
-//! - *penunggu* menunggu proses anak keluar, memastikan sisa keluaran terkirim, lalu memanggil `on_exit`.
+//! Each terminal uses two threads:
+//! - the *reader* reads the PTY in chunks of up to 64 KiB and calls `on_data`;
+//! - the *waiter* waits for the child process to exit, makes sure the remaining output is delivered, then calls `on_exit`.
 //!
-//! Keterbatasan di Unix: bila shell sudah keluar tetapi proses latar belakangnya masih memegang PTY,
-//! thread pembaca baru berakhir (dan PTY baru dibebaskan) saat proses itu menulis sesuatu atau selesai.
-//! `on_exit` tidak ikut tertunda; keluaran yang datang setelahnya dibuang.
+//! Limitation on Unix: if the shell has exited but its background processes still hold the PTY,
+//! the reader thread only ends (and the PTY is only released) when such a process writes something or finishes.
+//! `on_exit` is not delayed by this; output that arrives afterwards is discarded.
 
 use std::collections::HashMap;
 use std::io::{Read, Write};
@@ -22,47 +22,47 @@ use serde::Deserialize;
 use crate::error::{Result, TermError};
 use crate::shell::default_shell;
 
-/// Ukuran maksimum satu potongan keluaran yang diteruskan ke `on_data`.
+/// Maximum size of a single output chunk forwarded to `on_data`.
 const READ_CHUNK: usize = 64 * 1024;
-/// Setelah proses anak keluar, pembaca dianggap selesai bila tidak ada keluaran baru selama ini.
-/// Diperlukan karena proses latar belakang bisa menahan PTY tetap terbuka sehingga EOF tidak pernah tiba.
+/// After the child process exits, the reader is considered finished if there is no new output for this long.
+/// Needed because a background process can keep the PTY open so EOF never arrives.
 const DRAIN_IDLE: Duration = Duration::from_millis(250);
-/// Jeda antara SIGHUP dan SIGKILL saat terminal ditutup paksa.
+/// Delay between SIGHUP and SIGKILL when a terminal is force-closed.
 #[cfg(unix)]
 const KILL_GRACE: Duration = Duration::from_millis(300);
 
 const DEFAULT_COLS: u16 = 80;
 const DEFAULT_ROWS: u16 = 24;
 
-/// Di Windows pembaca harus terus menguras pipa keluaran setelah terminal ditutup, sebab
-/// `ClosePseudoConsole` pada versi Windows lama menunggu sampai keluaran habis dibaca.
-/// Di Unix pembaca langsung berhenti agar PTY segera dibebaskan.
+/// On Windows the reader must keep draining the output pipe after the terminal is closed, because
+/// `ClosePseudoConsole` on older Windows versions waits until the output has been read.
+/// On Unix the reader stops immediately so the PTY is released right away.
 const DRAIN_AFTER_CLOSE: bool = cfg!(windows);
 
-/// Opsi untuk [`TerminalManager::spawn`].
+/// Options for [`TerminalManager::spawn`].
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SpawnOptions {
-    /// Program shell. `None` (atau string kosong) berarti [`default_shell`].
+    /// The shell program. `None` (or an empty string) means [`default_shell`].
     #[serde(default)]
     pub shell: Option<String>,
-    /// Argumen tambahan untuk shell.
+    /// Extra arguments for the shell.
     #[serde(default)]
     pub args: Vec<String>,
-    /// Folder kerja awal. String kosong berarti folder home pengguna.
+    /// Initial working folder. An empty string means the user's home folder.
     pub cwd: String,
-    /// Lebar terminal dalam kolom. `0` berarti 80.
+    /// Terminal width in columns. `0` means 80.
     pub cols: u16,
-    /// Tinggi terminal dalam baris. `0` berarti 24.
+    /// Terminal height in rows. `0` means 24.
     pub rows: u16,
-    /// Variabel lingkungan tambahan. `TERM=xterm-256color`, `COLORTERM=truecolor` dan
-    /// `TERM_PROGRAM=OnCode` selalu dipasang lebih dulu; entri di sini boleh menimpanya.
+    /// Extra environment variables. `TERM=xterm-256color`, `COLORTERM=truecolor` and
+    /// `TERM_PROGRAM=OnCode` are always set first; entries here may override them.
     #[serde(default)]
     pub env: Vec<(String, String)>,
 }
 
-/// Mengunci mutex dan mengabaikan status *poisoned*: callback pengguna yang panik
-/// tidak boleh membuat seluruh pengelola terminal ikut macet.
+/// Locks a mutex and ignores the *poisoned* state: a user callback that panics
+/// must not make the whole terminal manager hang.
 fn lock<T: ?Sized>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
@@ -76,55 +76,55 @@ fn pty_size(cols: u16, rows: u16) -> PtySize {
     }
 }
 
-/// Kode keluar proses; `None` bila proses dihentikan oleh sinyal atau statusnya tidak terbaca.
+/// The process exit code; `None` if the process was stopped by a signal or its status could not be read.
 fn exit_code(status: std::io::Result<ExitStatus>) -> Option<i32> {
     let status = status.ok()?;
     if status.signal().is_some() {
         return None;
     }
-    // Kode keluar Windows (mis. 0xC000013A) sengaja dibungkus ke i32.
+    // Windows exit codes (e.g. 0xC000013A) are deliberately wrapped into an i32.
     Some(status.exit_code() as i32)
 }
 
 #[derive(Default)]
 struct Flow {
-    /// UI meminta pembacaan dijeda.
+    /// The UI asked for reading to be paused.
     paused: bool,
-    /// Terminal ditutup lewat `kill`; sisa keluaran dibuang.
+    /// The terminal was closed through `kill`; remaining output is discarded.
     closed: bool,
 }
 
 #[derive(Default)]
 struct ReaderProgress {
-    /// Jumlah potongan yang sudah diteruskan ke `on_data`.
+    /// Number of chunks already forwarded to `on_data`.
     chunks: u64,
-    /// Thread pembaca sudah berakhir.
+    /// The reader thread has ended.
     done: bool,
 }
 
 struct Session {
-    /// `None` setelah proses anak keluar (PTY sudah dibebaskan).
+    /// `None` after the child process exits (the PTY has been released).
     master: Mutex<Option<Box<dyn MasterPty + Send>>>,
-    /// `None` setelah proses anak keluar.
+    /// `None` after the child process exits.
     writer: Mutex<Option<Box<dyn Write + Send>>>,
     killer: Mutex<Box<dyn ChildKiller + Send + Sync>>,
     #[cfg(unix)]
     pid: Option<u32>,
     flow: Mutex<Flow>,
     flow_cv: Condvar,
-    /// `true` setelah proses anak selesai ditunggu. Sinyal hanya dikirim sambil memegang kunci ini
-    /// dan hanya bila nilainya `false`, supaya tidak mengenai PID yang sudah dipakai proses lain.
+    /// `true` once the child process has been waited on. Signals are only sent while holding this lock
+    /// and only if its value is `false`, so they never hit a PID already reused by another process.
     exited: Mutex<bool>,
     exited_cv: Condvar,
     reader: Mutex<ReaderProgress>,
     reader_cv: Condvar,
-    /// `true` sejak `on_exit` akan dipanggil. Dipegang selama `on_data` berjalan sehingga
-    /// tidak ada keluaran yang dikirim setelah `on_exit`.
+    /// `true` from the point `on_exit` is about to be called. Held while `on_data` runs so
+    /// no output is delivered after `on_exit`.
     delivery_closed: Mutex<bool>,
 }
 
 impl Session {
-    /// Menunggu sampai tidak dijeda. Mengembalikan `false` bila terminal sudah ditutup.
+    /// Waits until not paused. Returns `false` if the terminal has been closed.
     fn wait_until_resumed(&self) -> bool {
         let mut flow = lock(&self.flow);
         while flow.paused && !flow.closed {
@@ -138,8 +138,8 @@ impl Session {
         self.flow_cv.notify_all();
     }
 
-    /// Menutup terminal: membuang sisa keluaran dan menghentikan proses anak.
-    /// `on_exit` tetap dipanggil oleh thread penunggu begitu proses benar-benar berakhir.
+    /// Closes the terminal: discards remaining output and stops the child process.
+    /// `on_exit` is still called by the waiter thread once the process has actually ended.
     fn terminate(self: &Arc<Self>) {
         lock(&self.flow).closed = true;
         self.flow_cv.notify_all();
@@ -150,7 +150,7 @@ impl Session {
             if *exited {
                 return;
             }
-            // Unix: SIGHUP (seperti menutup jendela terminal). Windows: TerminateProcess.
+            // Unix: SIGHUP (like closing a terminal window). Windows: TerminateProcess.
             let _ = lock(&self.killer).kill();
         }
 
@@ -166,7 +166,7 @@ impl Session {
         }
     }
 
-    /// Mengirim SIGKILL bila proses masih hidup setelah `grace` (mis. mengabaikan SIGHUP).
+    /// Sends SIGKILL if the process is still alive after `grace` (e.g. it ignores SIGHUP).
     #[cfg(unix)]
     fn force_kill_after(&self, grace: Duration) {
         let exited = lock(&self.exited);
@@ -177,17 +177,17 @@ impl Session {
         if *exited {
             return;
         }
-        // PID 0 atau negatif berarti "grup proses" bagi kill(2); jangan pernah dikirimi sinyal.
+        // PID 0 or negative means "process group" to kill(2); never send a signal to it.
         let pid = self.pid.and_then(|pid| libc::pid_t::try_from(pid).ok()).filter(|pid| *pid > 0);
         if let Some(pid) = pid {
-            // SAFETY: kill(2) tidak menyentuh memori; kunci `exited` menjamin proses belum di-reap.
+            // SAFETY: kill(2) does not touch memory; the `exited` lock guarantees the process has not been reaped.
             unsafe {
                 libc::kill(pid, libc::SIGKILL);
             }
         }
     }
 
-    /// Dipanggil thread penunggu setelah proses anak keluar: menunggu pembaca menghabiskan sisa keluaran.
+    /// Called by the waiter thread after the child process exits: waits for the reader to finish the remaining output.
     fn wait_for_drain(&self) {
         let mut progress = lock(&self.reader);
         let mut last_chunks = progress.chunks;
@@ -204,7 +204,7 @@ impl Session {
                 return;
             }
             if paused || progress.chunks != last_chunks {
-                // Selama dijeda UI belum siap menerima; jangan dihitung sebagai diam.
+                // While paused the UI is not ready to receive; do not count it as idle.
                 last_chunks = progress.chunks;
                 last_change = Instant::now();
             } else if last_change.elapsed() >= DRAIN_IDLE {
@@ -219,7 +219,7 @@ impl Session {
     }
 }
 
-/// Menandai pembaca selesai walaupun `on_data` panik.
+/// Marks the reader as finished even if `on_data` panics.
 struct ReaderDoneGuard(Arc<Session>);
 
 impl Drop for ReaderDoneGuard {
@@ -242,7 +242,7 @@ fn reader_loop(mut reader: Box<dyn Read + Send>, session: Arc<Session>, on_data:
             Err(err) if err.kind() == std::io::ErrorKind::Interrupted => continue,
             Err(_) => break,
         };
-        // Potongan yang terbaca tepat saat dijeda ditahan sampai dilanjutkan.
+        // A chunk read exactly while paused is held until resumed.
         if !session.wait_until_resumed() {
             if DRAIN_AFTER_CLOSE {
                 continue;
@@ -275,12 +275,12 @@ fn wait_loop(
     *lock(&session.exited) = true;
     session.exited_cv.notify_all();
 
-    // Membebaskan PTY. Di Windows inilah yang membuat pembaca menerima EOF.
+    // Release the PTY. On Windows this is what makes the reader receive EOF.
     let master = lock(&session.master).take();
     drop(master);
 
-    // Terminal tetap terdaftar selama sisa keluaran belum terkirim supaya UI masih bisa
-    // melanjutkan (`set_paused(false)`) terminal yang sedang dijeda.
+    // The terminal stays registered while remaining output is undelivered so the UI can still
+    // resume (`set_paused(false)`) a terminal that is paused.
     session.wait_for_drain();
     if let Some(registry) = registry.upgrade() {
         let removed = lock(&registry.sessions).remove(&id);
@@ -305,8 +305,8 @@ impl Registry {
     }
 }
 
-/// Pengelola semua terminal milik satu aplikasi. Aman dipakai dari banyak thread di balik `Arc`.
-/// Saat di-drop, semua terminal dihentikan.
+/// Manager of all terminals owned by one application. Safe to use from many threads behind an `Arc`.
+/// When dropped, all terminals are stopped.
 #[derive(Default)]
 pub struct TerminalManager {
     registry: Arc<Registry>,
@@ -317,12 +317,12 @@ impl TerminalManager {
         Self::default()
     }
 
-    /// Menjalankan shell di PTY baru dan mengembalikan id terminalnya.
+    /// Runs a shell in a new PTY and returns the id of its terminal.
     ///
-    /// `on_data` menerima byte mentah keluaran dari thread pembaca khusus, per potongan hingga 64 KiB
-    /// (potongan bisa terputus di tengah karakter UTF-8). `on_exit` dipanggil tepat satu kali dengan
-    /// kode keluar begitu proses berakhir, setelah semua keluaran terkirim; nilainya `None` bila
-    /// proses dihentikan oleh sinyal. Saat `on_exit` dipanggil, id sudah tidak ada di [`Self::ids`].
+    /// `on_data` receives the raw output bytes from a dedicated reader thread, in chunks of up to 64 KiB
+    /// (a chunk can be cut in the middle of a UTF-8 character). `on_exit` is called exactly once with
+    /// the exit code once the process ends, after all output has been delivered; its value is `None` if
+    /// the process was stopped by a signal. When `on_exit` is called, the id is no longer in [`Self::ids`].
     pub fn spawn(
         &self,
         options: SpawnOptions,
@@ -337,7 +337,7 @@ impl TerminalManager {
             .map(str::to_string)
             .unwrap_or_else(default_shell);
 
-        // portable-pty diam-diam memakai folder home bila cwd tidak ada; lebih baik gagal dengan jelas.
+        // portable-pty silently uses the home folder if cwd does not exist; better to fail clearly.
         if !options.cwd.is_empty() && !Path::new(&options.cwd).is_dir() {
             return Err(TermError::spawn_failed(format!(
                 "Terminal working directory not found: {}",
@@ -374,7 +374,7 @@ impl TerminalManager {
             .slave
             .spawn_command(command)
             .map_err(|err| TermError::spawn_failed(format!("Failed to start shell `{shell}`: {err:#}")))?;
-        // Sisi slave harus ditutup di proses ini agar EOF tiba saat proses anak keluar.
+        // The slave side must be closed in this process so EOF arrives when the child process exits.
         drop(pair.slave);
 
         let session = Arc::new(Session {
@@ -409,7 +409,7 @@ impl TerminalManager {
         });
 
         if let Err(err) = waiter_thread {
-            // Tanpa thread penunggu tidak ada yang memanggil `on_exit`; batalkan seluruhnya.
+            // Without the waiter thread nothing calls `on_exit`; cancel everything.
             let removed = lock(&self.registry.sessions).remove(&id);
             drop(removed);
             session.terminate();
@@ -419,7 +419,7 @@ impl TerminalManager {
         Ok(id)
     }
 
-    /// Menulis masukan (ketikan pengguna, tempelan) ke terminal.
+    /// Writes input (user keystrokes, pasted text) to the terminal.
     pub fn write(&self, id: u32, data: &[u8]) -> Result<()> {
         let session = self.registry.get(id)?;
         let mut writer = lock(&session.writer);
@@ -430,7 +430,7 @@ impl TerminalManager {
             .map_err(|err| TermError::io("Failed to write to terminal", err))
     }
 
-    /// Mengubah ukuran terminal; proses di dalamnya menerima SIGWINCH.
+    /// Resizes the terminal; the process inside receives SIGWINCH.
     pub fn resize(&self, id: u32, cols: u16, rows: u16) -> Result<()> {
         let session = self.registry.get(id)?;
         let master = lock(&session.master);
@@ -440,18 +440,18 @@ impl TerminalManager {
             .map_err(|err| TermError::io("Failed to resize terminal", format!("{err:#}")))
     }
 
-    /// Kendali aliran: selama dijeda thread pembaca berhenti membaca PTY sehingga proses anak
-    /// tertahan saat menulis keluaran. Keluaran yang tertahan dikirim setelah dilanjutkan.
+    /// Flow control: while paused the reader thread stops reading the PTY so the child process
+    /// blocks when writing output. Held-back output is delivered after resuming.
     pub fn set_paused(&self, id: u32, paused: bool) -> Result<()> {
         self.registry.get(id)?.set_paused(paused);
         Ok(())
     }
 
-    /// Menghentikan proses anak dan membebaskan PTY. Id yang tidak dikenal bukan galat.
+    /// Stops the child process and releases the PTY. An unknown id is not an error.
     ///
-    /// Id langsung hilang dari [`Self::ids`]; `on_exit` menyusul begitu proses benar-benar berakhir.
-    /// Di Unix proses dikirimi SIGHUP, lalu SIGKILL bila masih hidup setelah jeda singkat.
-    /// Sisa keluaran yang belum terkirim dibuang.
+    /// The id disappears from [`Self::ids`] immediately; `on_exit` follows once the process has actually ended.
+    /// On Unix the process is sent SIGHUP, then SIGKILL if it is still alive after a short delay.
+    /// Remaining undelivered output is discarded.
     pub fn kill(&self, id: u32) {
         let session = lock(&self.registry.sessions).remove(&id);
         if let Some(session) = session {
@@ -459,7 +459,7 @@ impl TerminalManager {
         }
     }
 
-    /// Menghentikan semua terminal.
+    /// Stops all terminals.
     pub fn kill_all(&self) {
         let sessions: Vec<Arc<Session>> = lock(&self.registry.sessions).drain().map(|(_, session)| session).collect();
         for session in sessions {
@@ -467,7 +467,7 @@ impl TerminalManager {
         }
     }
 
-    /// Id semua terminal yang masih hidup, terurut naik.
+    /// The ids of all terminals that are still alive, in ascending order.
     pub fn ids(&self) -> Vec<u32> {
         let mut ids: Vec<u32> = lock(&self.registry.sessions).keys().copied().collect();
         ids.sort_unstable();
@@ -488,7 +488,7 @@ mod tests {
     #[test]
     fn spawn_options_deserialize_from_camel_case_with_defaults() {
         let options: SpawnOptions =
-            serde_json::from_str(r#"{"cwd":"/tmp","cols":120,"rows":40}"#).expect("opsi minimal");
+            serde_json::from_str(r#"{"cwd":"/tmp","cols":120,"rows":40}"#).expect("minimal options");
         assert_eq!(
             options,
             SpawnOptions { shell: None, args: vec![], cwd: "/tmp".into(), cols: 120, rows: 40, env: vec![] }
@@ -497,7 +497,7 @@ mod tests {
         let options: SpawnOptions = serde_json::from_str(
             r#"{"shell":"/bin/zsh","args":["-l"],"cwd":"/x","cols":80,"rows":24,"env":[["A","1"],["B","2"]]}"#,
         )
-        .expect("opsi lengkap");
+        .expect("full options");
         assert_eq!(options.shell.as_deref(), Some("/bin/zsh"));
         assert_eq!(options.args, vec!["-l".to_string()]);
         assert_eq!(options.env, vec![("A".into(), "1".into()), ("B".into(), "2".into())]);
@@ -516,7 +516,7 @@ mod tests {
         assert_eq!(exit_code(Ok(ExitStatus::with_exit_code(0))), Some(0));
         assert_eq!(exit_code(Ok(ExitStatus::with_exit_code(3))), Some(3));
         assert_eq!(exit_code(Ok(ExitStatus::with_signal("Hangup"))), None);
-        assert_eq!(exit_code(Err(std::io::Error::other("gagal"))), None);
+        assert_eq!(exit_code(Err(std::io::Error::other("failed"))), None);
     }
 
     #[test]

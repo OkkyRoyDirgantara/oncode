@@ -1,10 +1,10 @@
-//! Pembantu uji logika murni: pembuat data palsu.
+//! Test helpers for pure logic: fake data builders.
 
 use oncode_git::{Branch, Commit, Edge, EdgeKind, GraphRow, Head, RepoSnapshot, Signature};
 
 pub const ROOT: &str = "/work/repo";
 
-/// Hash 40 karakter yang mudah dikenali: `oid(3)` diawali `0003`.
+/// A 40-character hash that is easy to recognize: `oid(3)` starts with `0003`.
 pub fn oid(n: usize) -> String {
     format!("{n:04x}{}", "a".repeat(36))
 }
@@ -20,7 +20,7 @@ pub fn row(n: usize, parents: &[usize]) -> GraphRow {
     GraphRow { commit, column: 0, color: 0, edges: Vec::new() }
 }
 
-/// Baris lurus di jalur 0: commit `from` … `from + count - 1` (yang terbaru lebih dulu).
+/// Straight rows in lane 0: commits `from` … `from + count - 1` (the newest first).
 pub fn linear_rows(from: usize, count: usize) -> Vec<GraphRow> {
     (0..count)
         .map(|i| {

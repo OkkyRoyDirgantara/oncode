@@ -3,7 +3,7 @@ name = "oncode-git"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Lapisan Git OnCode: runner git CLI, parser, model, layout graph"
+description = "OnCode Git layer: git CLI runner, parsers, model, graph layout"
 
 [dependencies]
 serde.workspace = true

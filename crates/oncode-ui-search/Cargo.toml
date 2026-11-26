@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
-description = "Pencarian dan penggantian teks di seluruh proyek untuk OnCode"
+description = "Project-wide text search and replace for OnCode"
 
 [dependencies]
 oncode-core = { path = "../oncode-core" }
@@ -14,10 +14,10 @@ serde.workspace = true
 serde_json.workspace = true
 oncode-workspace = { path = "../oncode-workspace" }
 tokio.workspace = true
-# Mesin regex yang sama dengan backend (`oncode-workspace`), agar penggantian di editor identik.
+# The same regex engine as the backend (`oncode-workspace`), so replacements in the editor are identical.
 grep-matcher = "0.1"
 grep-regex = "0.1"
-# Versi yang sama dengan `oncode-ui`; dipakai untuk menyunting `EditorState` (`apply_lsp_edits`).
+# The same version as `oncode-ui`; used to edit `EditorState` (`apply_lsp_edits`).
 lsp-types = { version = "0.97", features = ["proposed"] }
 
 [dev-dependencies]

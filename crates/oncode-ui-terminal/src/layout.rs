@@ -1,22 +1,22 @@
-//! Susunan terminal di panel: kelompok-kelompok terminal yang tampil berdampingan (split), seperti
-//! VS Code. Panel menampilkan satu kelompok, yaitu kelompok terminal aktif. Murni (tanpa GPUI).
+//! The terminal layout in the panel: groups of terminals shown side by side (split), like
+//! VS Code. The panel shows one group, the active terminal's group. Pure (no GPUI).
 
-/// Id sesi terminal, unik di seluruh aplikasi.
+/// A terminal session id, unique across the whole application.
 pub type SessionId = u64;
 
-/// Tempat terminal ditaruh di panel.
+/// Where a terminal is placed in the panel.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PanelDrop {
-    /// Kelompok sendiri, sebelum kelompok yang memuat terminal ini (`None` = paling akhir).
+    /// Its own group, before the group containing this terminal (`None` = last).
     Alone(Option<SessionId>),
-    /// Berdampingan dengan terminal ini: di kanannya (`true`) atau kirinya (`false`).
+    /// Side by side with this terminal: to its right (`true`) or its left (`false`).
     Beside(SessionId, bool),
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Layout {
     pub groups: Vec<Vec<SessionId>>,
-    /// Terminal aktif; kelompoknya yang tampil di panel.
+    /// The active terminal; its group is the one shown in the panel.
     pub active: Option<SessionId>,
 }
 
@@ -29,23 +29,23 @@ impl Layout {
         self.groups.is_empty()
     }
 
-    /// Indeks kelompok yang memuat terminal ini.
+    /// The index of the group containing this terminal.
     pub fn group_of(&self, id: SessionId) -> Option<usize> {
         self.groups.iter().position(|group| group.contains(&id))
     }
 
-    /// Semua terminal menurut urutan daftar (kelompok demi kelompok).
+    /// All terminals in list order (group by group).
     pub fn order(&self) -> Vec<SessionId> {
         self.groups.iter().flatten().copied().collect()
     }
 
-    /// Kelompok terminal aktif.
+    /// The active terminal's group.
     pub fn active_group(&self) -> &[SessionId] {
         self.active.and_then(|id| self.group_of(id)).map_or(&[], |index| &self.groups[index])
     }
 
-    /// Mencabut terminal. Kelompok yang kosong dibuang; bila terminal itu aktif, penggantinya
-    /// tetangganya di kelompok yang sama, atau kelompok berikutnya/sebelumnya.
+    /// Removes a terminal. An empty group is dropped; if that terminal was active, its replacement is
+    /// its neighbor in the same group, or the next/previous group.
     pub fn remove(&mut self, id: SessionId) -> bool {
         let Some(group) = self.group_of(id) else { return false };
         let index = self.groups[group].iter().position(|x| *x == id).unwrap_or(0);
@@ -62,8 +62,8 @@ impl Layout {
         true
     }
 
-    /// Menaruh terminal (memindahkannya bila sudah ada di panel) lalu menjadikannya aktif.
-    /// Menaruh terminal di dekat dirinya sendiri tidak mengubah apa pun.
+    /// Places a terminal (moving it if it is already in the panel) and then makes it active.
+    /// Placing a terminal next to itself changes nothing.
     pub fn place(&mut self, id: SessionId, drop: PanelDrop) {
         let target = match drop {
             PanelDrop::Alone(target) => target,
@@ -90,7 +90,7 @@ impl Layout {
         self.active = Some(id);
     }
 
-    /// Mengeluarkan terminal dari kelompoknya menjadi kelompok sendiri, tepat setelah kelompok itu.
+    /// Takes a terminal out of its group into its own group, right after that group.
     pub fn unsplit(&mut self, id: SessionId) {
         let Some(group) = self.group_of(id) else { return };
         if self.groups[group].len() < 2 {
@@ -101,7 +101,7 @@ impl Layout {
         self.active = Some(id);
     }
 
-    /// Terminal berikut (`delta` 1) atau sebelumnya (-1) dari yang aktif, berputar.
+    /// The terminal after (`delta` 1) or before (-1) the active one, wrapping around.
     pub fn cycle(&self, delta: isize) -> Option<SessionId> {
         let order = self.order();
         if order.is_empty() {
@@ -137,7 +137,7 @@ mod tests {
         assert_eq!(l, layout(&[&[2], &[1], &[3]], 2));
         l.place(2, PanelDrop::Alone(None));
         assert_eq!(l, layout(&[&[1], &[3], &[2]], 2));
-        // Terminal dari luar panel (area editor).
+        // A terminal from outside the panel (the editor area).
         l.place(9, PanelDrop::Alone(Some(3)));
         assert_eq!(l, layout(&[&[1], &[9], &[3], &[2]], 9));
     }
@@ -178,7 +178,7 @@ mod tests {
         l.unsplit(1);
         assert_eq!(l, layout(&[&[2], &[1], &[3]], 1));
         l.unsplit(3);
-        assert_eq!(l, layout(&[&[2], &[1], &[3]], 1), "terminal sendirian tidak berubah");
+        assert_eq!(l, layout(&[&[2], &[1], &[3]], 1), "a lone terminal does not change");
     }
 
     #[test]

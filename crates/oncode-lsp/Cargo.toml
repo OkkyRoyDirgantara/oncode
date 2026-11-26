@@ -4,14 +4,14 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
-description = "LSP OnCode: pengelola proses language server, pembingkaian JSON-RPC lewat stdio, dan klien protokol LSP"
+description = "OnCode LSP: language server process manager, JSON-RPC framing over stdio, and LSP protocol client"
 
 [dependencies]
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
-# Versi yang sama dengan yang dipakai gpui-component untuk kait LSP editor.
+# The same version that gpui-component uses for the editor's LSP hooks.
 lsp-types = { version = "0.97", features = ["proposed"] }
 
 [dev-dependencies]
@@ -20,7 +20,7 @@ tempfile.workspace = true
 tokio = { workspace = true, features = ["test-util"] }
 
 [features]
-# Language server tiruan (`oncode_lsp::mock`) untuk uji crate ini dan uji tampilan.
+# Mock language server (`oncode_lsp::mock`) for this crate's tests and view tests.
 mock = []
 
 [[example]]

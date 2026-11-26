@@ -1,5 +1,5 @@
-//! Penggantian: berkas yang terbuka diubah lewat editornya (agar undo berfungsi dan tanda
-//! "belum disimpan" benar), sisanya ditulis backend.
+//! Replacement: open files are changed through their editor (so undo works and the
+//! "unsaved" indicator is correct), the rest are written by the backend.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -15,13 +15,13 @@ use oncode_workspace::{OpenedFile, SearchQuery};
 use crate::matcher::{apply_edits, compute_edits, LineMatcher, MatchKey, MatchOptions, Pick, TextEdit};
 use crate::model::ReplaceOutcome;
 
-/// Kecocokan mana di sebuah berkas yang diganti.
+/// Which matches in a file get replaced.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Picked {
     All,
-    /// Semua kecuali yang disingkirkan pengguna.
+    /// All except those the user dismissed.
     Except(Vec<MatchKey>),
-    /// Hanya satu kecocokan ini.
+    /// Only this one match.
     Only(MatchKey),
 }
 
@@ -37,19 +37,19 @@ impl Picked {
 
 #[derive(Debug, Clone)]
 pub(crate) struct Target {
-    /// Path relatif terhadap folder proyek, dengan garis miring.
+    /// Path relative to the project folder, with forward slashes.
     pub path: String,
     pub picked: Picked,
 }
 
 pub(crate) struct Performed {
     pub outcome: ReplaceOutcome,
-    /// Teks yang disisipkan oleh penggantian pertama pada berkas terakhir yang diolah di sini
-    /// (dipakai untuk memperbarui daftar setelah satu kecocokan diganti).
+    /// The text inserted by the first replacement in the last file processed here
+    /// (used to update the list after a single match is replaced).
     pub inserted: Option<String>,
 }
 
-/// Path absolut sebuah hasil pencarian, dengan pemisah milik platform.
+/// Absolute path of a search result, using the platform's separator.
 pub(crate) fn absolute_path(root: &Path, relative: &str) -> String {
     let mut path = PathBuf::from(root);
     path.extend(relative.split('/').filter(|part| !part.is_empty()));
@@ -64,7 +64,7 @@ struct OpenBuffer {
     read_only: bool,
 }
 
-/// Buffer untuk `path` yang sudah siap dan punya editor; selain itu berkas dianggap tertutup.
+/// The buffer for `path` if it is ready and has an editor; otherwise the file is considered closed.
 fn open_buffer(env: &Env, path: &str, cx: &gpui_kit::App) -> Option<OpenBuffer> {
     let workbench = env.workbench.upgrade()?;
     let registry = buffers(workbench.read(cx))?;
@@ -81,8 +81,8 @@ fn open_buffer(env: &Env, path: &str, cx: &gpui_kit::App) -> Option<OpenBuffer> 
     Some(OpenBuffer { buffer, state, snapshot, was_dirty, read_only })
 }
 
-/// Menerapkan semua suntingan sebagai SATU perubahan pada editor (buffer menyebarkannya ke
-/// editor lain), sehingga satu undo membatalkan semuanya. Mengembalikan jumlah penggantian.
+/// Applies all edits as ONE change on the editor (the buffer propagates it to the
+/// other editors), so a single undo reverts them all. Returns the number of replacements.
 fn apply_to_editor(state: &mut EditorState, edits: &[TextEdit], window: &mut Window, cx: &mut Context<EditorState>) -> usize {
     let (Some(first), Some(last)) = (edits.first(), edits.last()) else { return 0 };
     let text = state.text().clone();
@@ -90,7 +90,7 @@ fn apply_to_editor(state: &mut EditorState, edits: &[TextEdit], window: &mut Win
     if span.end > text.len() {
         return 0;
     }
-    // Teks baru untuk rentang dari kecocokan pertama sampai terakhir; bagian di antaranya disalin apa adanya.
+    // The new text for the range from the first match to the last; the parts in between are copied as they are.
     let mut new_text = String::new();
     let mut at = span.start;
     for edit in edits {
@@ -103,8 +103,8 @@ fn apply_to_editor(state: &mut EditorState, edits: &[TextEdit], window: &mut Win
     edits.len()
 }
 
-/// Untuk berkas tertutup yang hanya sebagian kecocokannya diganti: backend hanya bisa mengganti
-/// seluruh isi berkas, jadi berkas dibaca, diubah, dan disimpan lagi dengan encoding aslinya.
+/// For a closed file where only some of the matches are replaced: the backend can only replace
+/// the whole file content, so the file is read, changed, and saved again with its original encoding.
 async fn replace_on_disk(env: &Env, path: String, matcher: Arc<LineMatcher>, replacement: String, interpolate: bool, picked: Picked, cx: &mut AsyncWindowContext) -> Result<(usize, Option<String>), AppError> {
     let (core, label) = (env.core.clone(), env.window.to_string());
     let task = cx.update(|_, cx| {
@@ -125,8 +125,8 @@ async fn replace_on_disk(env: &Env, path: String, matcher: Arc<LineMatcher>, rep
     }
 }
 
-/// Menjalankan penggantian untuk `targets` (hasil pencarian yang masih tampil) tanpa konfirmasi
-/// maupun pemberitahuan.
+/// Performs the replacement for `targets` (search results still displayed) without confirmation
+/// or notification.
 pub(crate) async fn perform(env: &Env, query: SearchQuery, replacement: String, targets: Vec<Target>, cx: &mut AsyncWindowContext) -> Performed {
     let mut outcome = ReplaceOutcome::default();
     let mut inserted = None;
@@ -147,7 +147,7 @@ pub(crate) async fn perform(env: &Env, query: SearchQuery, replacement: String, 
         match open {
             Some(open) if open.read_only => outcome.skipped_read_only.push(target.path),
             Some(open) => {
-                // Kecocokan dihitung di luar thread utama dari salinan isi editor.
+                // Matches are computed off the main thread from a copy of the editor content.
                 let edits = cx
                     .background_executor()
                     .spawn({
@@ -157,7 +157,7 @@ pub(crate) async fn perform(env: &Env, query: SearchQuery, replacement: String, 
                     .await;
                 let applied = cx.update(|window, cx| {
                     open.state.update(cx, |state, cx| {
-                        // Isi berubah selagi dihitung (pengguna mengetik): hitung ulang dari isi terkini.
+                        // The content changed while computing (the user is typing): recompute from the current content.
                         let edits = if *state.text() == open.snapshot { edits } else { compute_edits(&matcher, &state.text().to_string(), &replacement, interpolate, target.picked.as_pick()) };
                         (apply_to_editor(state, &edits, window, cx), edits.first().map(|edit| edit.insert.clone()))
                     })
@@ -167,8 +167,8 @@ pub(crate) async fn perform(env: &Env, query: SearchQuery, replacement: String, 
                     continue;
                 }
                 inserted = first;
-                // Buffer yang tadinya bersih langsung disimpan (setara dengan berkas yang ditulis
-                // backend). Buffer yang sudah berisi perubahan lain tidak disimpan tanpa izin pengguna.
+                // A buffer that was clean is saved right away (equivalent to a file written by the
+                // backend). A buffer that already contains other changes is not saved without the user's permission.
                 if open.was_dirty {
                     outcome.unsaved += 1;
                 } else {
@@ -215,7 +215,7 @@ mod tests {
 
     #[test]
     fn result_paths_are_joined_onto_the_project_root() {
-        let root = Path::new(if cfg!(windows) { "C:\\proyek" } else { "/proyek" });
+        let root = Path::new(if cfg!(windows) { "C:\\project" } else { "/project" });
         assert_eq!(Path::new(&absolute_path(root, "src/main.rs")), root.join("src").join("main.rs"));
         assert_eq!(Path::new(&absolute_path(root, "a.txt")), root.join("a.txt"));
     }

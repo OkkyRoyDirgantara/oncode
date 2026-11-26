@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
-description = "Terminal terintegrasi untuk OnCode"
+description = "Integrated terminal for OnCode"
 
 [dependencies]
 oncode-core = { path = "../oncode-core" }
@@ -14,7 +14,7 @@ serde.workspace = true
 serde_json.workspace = true
 oncode-terminal = { path = "../oncode-terminal" }
 tokio.workspace = true
-# Emulasi terminal (grid, scrollback, seleksi, parser ANSI); tampilannya dibuat sendiri.
+# Terminal emulation (grid, scrollback, selection, ANSI parser); the rendering is custom.
 alacritty_terminal = "0.26"
 
 [dev-dependencies]

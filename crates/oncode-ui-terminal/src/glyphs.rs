@@ -1,38 +1,38 @@
-//! Karakter yang digambar sendiri alih-alih diambil dari font: garis kotak (box drawing), blok,
-//! dan pemisah powerline. Glyph font untuk karakter ini jarang pas dengan ukuran sel (terutama
-//! bila jarak baris lebih tinggi dari font), sehingga garis vertikal putus-putus dan panah prompt
-//! tidak memenuhi tinggi baris. Digambar sebagai bentuk yang tepat mengisi sel, karakter ini
-//! menyambung mulus dengan sel tetangganya, seperti di VS Code (xterm.js) dan kitty.
+//! Characters that are drawn by us instead of taken from the font: box drawing lines, blocks,
+//! and powerline separators. Font glyphs for these characters rarely fit the cell size (especially
+//! when the line spacing is taller than the font), so vertical lines come out dashed and prompt
+//! arrows do not fill the line height. Drawn as shapes that exactly fill the cell, these characters
+//! join seamlessly with their neighboring cells, as in VS Code (xterm.js) and kitty.
 //!
-//! Murni (tanpa GPUI): menghasilkan bentuk dalam piksel relatif terhadap pojok kiri atas sel.
+//! Pure (no GPUI): produces shapes in pixels relative to the cell's top-left corner.
 
-/// Satu langkah lintasan.
+/// A single step of a path.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Segment {
     MoveTo(f32, f32),
     LineTo(f32, f32),
-    /// Kurva kuadrat ke `to` dengan titik kendali `ctrl`.
+    /// A quadratic curve to `to` with control point `ctrl`.
     CurveTo { to: (f32, f32), ctrl: (f32, f32) },
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Shape {
-    /// Persegi panjang terisi; `alpha` < 1 untuk arsiran (░ ▒ ▓).
+    /// A filled rectangle; `alpha` < 1 for shading (░ ▒ ▓).
     Rect { x: f32, y: f32, w: f32, h: f32, alpha: f32 },
-    /// Bidang tertutup yang diisi.
+    /// A closed filled area.
     Fill(Vec<Segment>),
-    /// Garis sepanjang lintasan dengan ketebalan `width`.
+    /// A line along the path with thickness `width`.
     Stroke { path: Vec<Segment>, width: f32 },
 }
 
-/// Ukuran sel dan ketebalan garis, sudah dibulatkan ke piksel perangkat oleh pemanggil.
+/// Cell size and line thickness, already rounded to device pixels by the caller.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Cell {
     pub w: f32,
     pub h: f32,
-    /// Ketebalan garis tipis; garis tebal dua kalinya.
+    /// Thickness of a light line; a heavy line is twice that.
     pub light: f32,
-    /// Faktor skala layar, untuk membulatkan posisi ke piksel perangkat.
+    /// The screen scale factor, for rounding positions to device pixels.
     pub scale: f32,
 }
 
@@ -50,18 +50,18 @@ impl Cell {
         Shape::Rect { x: x0, y: y0, w: (x1 - x0).max(0.), h: (y1 - y0).max(0.), alpha: 1. }
     }
 
-    /// Bagian sel dalam pecahan lebar/tinggi.
+    /// A part of the cell, in fractions of the width/height.
     fn part(&self, x0: f32, y0: f32, x1: f32, y1: f32) -> Shape {
         self.rect(x0 * self.w, y0 * self.h, x1 * self.w, y1 * self.h)
     }
 }
 
-/// Karakter ini digambar sendiri (lihat [`shapes`]).
+/// This character is drawn by us (see [`shapes`]).
 pub fn is_custom(c: char) -> bool {
     matches!(c as u32, 0x2500..=0x259F | 0xE0B0..=0xE0B7)
 }
 
-/// Bentuk untuk karakter ini, atau `None` bila karakter ini digambar dengan font.
+/// The shapes for this character, or `None` if this character is drawn with the font.
 pub fn shapes(c: char, cell: Cell) -> Option<Vec<Shape>> {
     let code = c as u32;
     match code {
@@ -82,16 +82,16 @@ pub fn shapes(c: char, cell: Cell) -> Option<Vec<Shape>> {
     }
 }
 
-// ----- Garis tipis dan tebal -----
+// ----- Light and heavy lines -----
 
-/// Lengan (atas, kanan, bawah, kiri) tiap karakter: 0 tidak ada, 1 tipis, 2 tebal.
-/// Indeks 0..=0x4B untuk U+2500..=U+254B, lalu 0x4C.. untuk U+2574..=U+257F.
+/// The arms (up, right, down, left) of each character: 0 none, 1 light, 2 heavy.
+/// Index 0..=0x4B for U+2500..=U+254B, then 0x4C.. for U+2574..=U+257F.
 const ARMS: [[u8; 4]; 88] = [
     [0, 1, 0, 1], // ─
     [0, 2, 0, 2], // ━
     [1, 0, 1, 0], // │
     [2, 0, 2, 0], // ┃
-    [0, 0, 0, 0], // ┄ (putus-putus, lihat `dashes`)
+    [0, 0, 0, 0], // ┄ (dashed, see `dashes`)
     [0, 0, 0, 0], // ┅
     [0, 0, 0, 0], // ┆
     [0, 0, 0, 0], // ┇
@@ -185,15 +185,15 @@ fn arm_index(code: u32) -> Option<usize> {
     }
 }
 
-/// Garis dari tengah sel ke tiap sisi yang punya lengan. Lengan sedikit melewati tengah (setebal
-/// garis tegak lurusnya) agar sudut dan persimpangan tertutup rapat.
+/// Lines from the center of the cell to each side that has an arm. An arm extends slightly past the
+/// center (by the thickness of its perpendicular line) so corners and junctions close up tightly.
 fn arms(cell: Cell, [up, right, down, left]: [u8; 4]) -> Vec<Shape> {
     let thick = |weight: u8| if weight == 2 { cell.heavy() } else { cell.light };
     let widest = |a: u8, b: u8| match a.max(b) {
         0 => None,
         weight => Some(thick(weight)),
     };
-    // Tepi kiri garis tegak dan tepi atas garis mendatar (yang paling tebal) di tengah sel.
+    // The left edge of the vertical line and the top edge of the horizontal line (the thickest one) at the center of the cell.
     let vertical = widest(up, down).map(|t| (cell.snap((cell.w - t) / 2.), t));
     let horizontal = widest(left, right).map(|t| (cell.snap((cell.h - t) / 2.), t));
     let (mid_x, mid_y) = (cell.snap(cell.w / 2.), cell.snap(cell.h / 2.));
@@ -229,7 +229,7 @@ fn arms(cell: Cell, [up, right, down, left]: [u8; 4]) -> Vec<Shape> {
     shapes
 }
 
-/// Garis putus-putus: (tegak?, jumlah ruas, tebal?).
+/// Dashed line: (vertical?, number of segments, heavy?).
 fn dashes(code: u32) -> Option<(bool, usize, bool)> {
     Some(match code {
         0x2504 => (false, 3, false),
@@ -252,7 +252,7 @@ fn dashed(cell: Cell, vertical: bool, count: usize, heavy: bool) -> Vec<Shape> {
     let t = if heavy { cell.heavy() } else { cell.light };
     let length = if vertical { cell.h } else { cell.w };
     let segment = length / count as f32;
-    // Celah di kedua ujung tiap ruas, sehingga pola berulang rata antar sel.
+    // A gap at both ends of each segment, so the pattern repeats evenly across cells.
     let gap = segment * 0.2;
     (0..count)
         .map(|i| {
@@ -268,19 +268,19 @@ fn dashed(cell: Cell, vertical: bool, count: usize, heavy: bool) -> Vec<Shape> {
         .collect()
 }
 
-// ----- Garis ganda -----
+// ----- Double lines -----
 
-/// Posisi di sepanjang sumbu sel: 0 tepi awal, 1 garis ganda pertama, 2 tengah, 3 garis ganda
-/// kedua, 4 tepi akhir.
+/// A position along the cell axis: 0 the start edge, 1 the first double line, 2 the center, 3 the
+/// second double line, 4 the end edge.
 type Pos = u8;
 
-/// Ruas garis: (mendatar?, posisi melintang, dari, sampai).
+/// A line segment: (horizontal?, cross position, from, to).
 type Line = (bool, Pos, Pos, Pos);
 
 const H: bool = true;
 const V: bool = false;
 
-/// Ruas tiap karakter U+2550..=U+256C (garis ganda dan campurannya dengan garis tunggal).
+/// The segments of each character U+2550..=U+256C (double lines and their mixes with single lines).
 const DOUBLE: [&[Line]; 29] = [
     &[(H, 1, 0, 4), (H, 3, 0, 4)],                                                                   // ═
     &[(V, 1, 0, 4), (V, 3, 0, 4)],                                                                   // ║
@@ -315,7 +315,7 @@ const DOUBLE: [&[Line]; 29] = [
 
 fn double(cell: Cell, lines: &[Line]) -> Vec<Shape> {
     let t = cell.light;
-    // Jarak tiap garis ganda dari tengah: celah di antara keduanya setebal satu garis.
+    // The distance of each double line from the center: the gap between the two is one line thick.
     let at = |pos: Pos, length: f32| {
         let mid = cell.snap((length - t) / 2.) + t / 2.;
         match pos {
@@ -330,7 +330,7 @@ fn double(cell: Cell, lines: &[Line]) -> Vec<Shape> {
         .iter()
         .map(|&(horizontal, across, from, to)| {
             let (along, cross) = if horizontal { (cell.w, cell.h) } else { (cell.h, cell.w) };
-            // Ujung di dalam sel diperpanjang setengah tebal garis agar sudut tertutup.
+            // Ends inside the cell are extended by half the line thickness so corners close up.
             let start = if from == 0 { 0. } else { at(from, along) - t / 2. };
             let end = if to == 4 { along } else { at(to, along) + t / 2. };
             let center = at(across, cross);
@@ -343,11 +343,11 @@ fn double(cell: Cell, lines: &[Line]) -> Vec<Shape> {
         .collect()
 }
 
-// ----- Lengkung dan diagonal -----
+// ----- Arcs and diagonals -----
 
 fn arc(cell: Cell, code: u32) -> Shape {
     let t = cell.light;
-    // Tengah garis, sama dengan garis lurus di sel tetangga.
+    // The center of the line, same as the straight line in the neighboring cell.
     let cx = cell.snap((cell.w - t) / 2.) + t / 2.;
     let cy = cell.snap((cell.h - t) / 2.) + t / 2.;
     let r = (cell.w / 2.).min(cell.h / 2.);
@@ -381,7 +381,7 @@ fn diagonals(cell: Cell, code: u32) -> Vec<Shape> {
     }
 }
 
-// ----- Blok -----
+// ----- Blocks -----
 
 fn block(cell: Cell, code: u32) -> Vec<Shape> {
     let eighth = |n: u32| n as f32 / 8.;
@@ -392,7 +392,7 @@ fn block(cell: Cell, code: u32) -> Vec<Shape> {
         0x2589..=0x258F => vec![cell.part(0., 0., eighth(0x2590 - code), 1.)],
         0x2590 => vec![cell.part(0.5, 0., 1., 1.)],
         0x2591..=0x2593 => {
-            // Arsiran sebagai warna transparan (bukan pola titik).
+            // Shading as a transparent color (not a dot pattern).
             let alpha = (code - 0x2590) as f32 * 0.25;
             let Shape::Rect { x, y, w, h, .. } = cell.part(0., 0., 1., 1.) else { unreachable!() };
             vec![Shape::Rect { x, y, w, h, alpha }]
@@ -400,7 +400,7 @@ fn block(cell: Cell, code: u32) -> Vec<Shape> {
         0x2594 => vec![cell.part(0., 0., 1., eighth(1))],
         0x2595 => vec![cell.part(eighth(7), 0., 1., 1.)],
         _ => {
-            // Kuadran: kiri atas, kanan atas, kiri bawah, kanan bawah.
+            // Quadrants: upper left, upper right, lower left, lower right.
             let [ul, ur, ll, lr] = match code {
                 0x2596 => [false, false, true, false],
                 0x2597 => [false, false, false, true],
@@ -428,13 +428,13 @@ fn powerline(cell: Cell, code: u32) -> Vec<Shape> {
     let (w, h, t) = (cell.w, cell.h, cell.light);
     let mid = h / 2.;
     match code {
-        // Segitiga penuh ke kanan / ke kiri.
+        // A solid triangle pointing right / left.
         0xE0B0 => vec![Shape::Fill(vec![Segment::MoveTo(0., 0.), Segment::LineTo(w, mid), Segment::LineTo(0., h)])],
         0xE0B2 => vec![Shape::Fill(vec![Segment::MoveTo(w, 0.), Segment::LineTo(0., mid), Segment::LineTo(w, h)])],
-        // Panah tipis.
+        // A thin arrow.
         0xE0B1 => vec![Shape::Stroke { path: vec![Segment::MoveTo(0., 0.), Segment::LineTo(w - t / 2., mid), Segment::LineTo(0., h)], width: t }],
         0xE0B3 => vec![Shape::Stroke { path: vec![Segment::MoveTo(w, 0.), Segment::LineTo(t / 2., mid), Segment::LineTo(w, h)], width: t }],
-        // Setengah lingkaran penuh / garis lengkung.
+        // A solid half circle / a curved line.
         0xE0B4 => vec![Shape::Fill(half_round(cell, true))],
         0xE0B6 => vec![Shape::Fill(half_round(cell, false))],
         0xE0B5 => vec![Shape::Stroke { path: half_round(cell, true), width: t }],
@@ -442,7 +442,7 @@ fn powerline(cell: Cell, code: u32) -> Vec<Shape> {
     }
 }
 
-/// Setengah lingkaran yang menggembung ke kanan (`right`) atau ke kiri, setinggi sel.
+/// A half circle that bulges to the right (`right`) or to the left, as tall as the cell.
 fn half_round(cell: Cell, right: bool) -> Vec<Segment> {
     let (w, h) = (cell.w, cell.h);
     let (flat, bulge) = if right { (0., w) } else { (w, 0.) };
@@ -465,12 +465,12 @@ mod tests {
             .into_iter()
             .map(|shape| match shape {
                 Shape::Rect { x, y, w, h, .. } => (x, y, w, h),
-                other => panic!("bukan persegi: {other:?}"),
+                other => panic!("not a rectangle: {other:?}"),
             })
             .collect()
     }
 
-    /// Daerah yang tertutup bentuk-bentuk ini mencakup titik (x, y).
+    /// The area covered by these shapes includes the point (x, y).
     fn covers(c: char, x: f32, y: f32) -> bool {
         rects(c).iter().any(|(rx, ry, rw, rh)| x >= *rx && x < rx + rw && y >= *ry && y < ry + rh)
     }
@@ -488,27 +488,27 @@ mod tests {
         assert_eq!(total_width, CELL.w);
         assert!(covers('─', 0., 8.) && covers('─', 7.9, 8.));
         let total_height: f32 = rects('│').iter().map(|r| r.3).sum();
-        assert_eq!(total_height, CELL.h, "garis tegak setinggi baris, tanpa celah antar baris");
+        assert_eq!(total_height, CELL.h, "the vertical line is as tall as the line, with no gap between lines");
         assert!(covers('│', 4., 0.) && covers('│', 4., 16.9));
     }
 
     #[test]
     fn corners_and_junctions_meet_without_a_notch() {
-        // Garis tegak di x 4..5, mendatar di y 8..9 (sel 8×17, garis 1 px).
-        // ┌: lengan kanan dan bawah bertemu di tengah, pojok tertutup.
+        // Vertical line at x 4..5, horizontal at y 8..9 (cell 8×17, 1 px line).
+        // ┌: the right and down arms meet at the center, the corner is closed.
         assert!(covers('┌', 4.5, 8.) && covers('┌', 7.9, 8.) && covers('┌', 4.5, 16.9));
         assert!(!covers('┌', 0., 8.) && !covers('┌', 4.5, 0.));
-        // ┼: keempat sisi.
+        // ┼: all four sides.
         assert!(covers('┼', 0., 8.) && covers('┼', 7.9, 8.) && covers('┼', 4.5, 0.) && covers('┼', 4.5, 16.9));
-        // ━ dua kali lebih tebal dari ─.
+        // ━ is twice as thick as ─.
         assert_eq!(rects('━')[0].3, 2. * rects('─')[0].3);
-        // Setengah garis: ╴ hanya kiri.
+        // Half line: ╴ is left only.
         assert!(covers('╴', 0., 8.) && !covers('╴', 7.9, 8.));
     }
 
     #[test]
     fn table_matches_the_unicode_names() {
-        // Sampel dari bagian yang mudah salah urut.
+        // Samples from the parts that are easy to get out of order.
         assert_eq!(ARMS[arm_index('┞' as u32).unwrap()], [2, 1, 1, 0], "up heavy and right down light");
         assert_eq!(ARMS[arm_index('╆' as u32).unwrap()], [1, 2, 2, 1], "right down heavy and left up light");
         assert_eq!(ARMS[arm_index('╋' as u32).unwrap()], [2, 2, 2, 2]);
@@ -521,8 +521,8 @@ mod tests {
         let lines = rects('═');
         assert_eq!(lines.len(), 2);
         assert!(lines.iter().all(|r| r.0 == 0. && r.2 == CELL.w));
-        assert!(lines[1].1 - (lines[0].1 + lines[0].3) >= 1., "ada celah di antara keduanya");
-        // ╔: dua sudut bersarang; bagian luar sel kiri atas kosong.
+        assert!(lines[1].1 - (lines[0].1 + lines[0].3) >= 1., "there is a gap between the two");
+        // ╔: two nested corners; the outer upper-left part of the cell is empty.
         assert!(!covers('╔', 0., 0.) && covers('╔', 7.9, lines[0].1) && covers('╔', 7.9, lines[1].1));
     }
 
@@ -550,7 +550,7 @@ mod tests {
         assert_eq!(
             shapes('\u{E0B0}', CELL).unwrap(),
             [Shape::Fill(vec![Segment::MoveTo(0., 0.), Segment::LineTo(8., 8.5), Segment::LineTo(0., 17.)])],
-            "segitiga penuh setinggi sel"
+            "a solid triangle as tall as the cell"
         );
         assert!(matches!(shapes('\u{E0B1}', CELL).unwrap()[0], Shape::Stroke { .. }));
         assert!(matches!(shapes('╭', CELL).unwrap()[0], Shape::Stroke { .. }));

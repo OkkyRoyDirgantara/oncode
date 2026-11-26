@@ -1,5 +1,5 @@
-//! Tampilan sidebar Search: isian kueri dan pengganti, jalannya pencarian (jeda mengetik,
-//! pembatalan, hasil yang dialirkan), dan pohon hasil per berkas yang divirtualisasi.
+//! The Search sidebar view: query and replacement inputs, how the search runs (typing delay,
+//! cancellation, streamed results), and the virtualized per-file result tree.
 
 use std::ops::Range;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -33,10 +33,10 @@ use crate::replace::{self, absolute_path, Picked, Target};
 
 const ROW_HEIGHT: Pixels = px(24.);
 
-/// Id operasi harus unik di seluruh aplikasi (dipakai untuk membatalkan pencarian di backend).
+/// Operation ids must be unique across the whole app (used to cancel a search in the backend).
 static NEXT_OPERATION: AtomicU64 = AtomicU64::new(1);
 
-/// Opsi pencarian yang bisa dinyalakan dan dimatikan.
+/// Search options that can be turned on and off.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SearchOption {
     CaseSensitive,
@@ -44,14 +44,14 @@ pub enum SearchOption {
     Regex,
 }
 
-/// Pencarian yang sedang (atau terakhir) berjalan.
+/// The search currently (or most recently) running.
 struct Run {
     seq: u64,
     operation_id: String,
     finished: bool,
 }
 
-/// Cakupan sebuah penggantian.
+/// The scope of a replacement.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum ReplaceScope {
     All,
@@ -71,9 +71,9 @@ pub struct SearchView {
     show_replace: bool,
     show_filters: bool,
     results: Results,
-    /// `results` yang diratakan; dihitung ulang setiap kali hasil berubah.
+    /// `results` flattened; recomputed every time the results change.
     rows: Vec<Row>,
-    /// Pratinjau pengganti pada mode regex butuh pencocok untuk mengisi `$1` dkk.
+    /// The replacement preview in regex mode needs a matcher to fill in `$1` etc.
     preview_matcher: Option<LineMatcher>,
     replacing: bool,
     run: Option<Run>,
@@ -101,14 +101,14 @@ impl SearchView {
             cx.subscribe_in(&query, window, searches),
             cx.subscribe_in(&include, window, searches),
             cx.subscribe_in(&exclude, window, searches),
-            // Teks pengganti hanya mengubah pratinjau.
+            // The replacement text only changes the preview.
             cx.subscribe_in(&replacement, window, |_, _, event: &InputEvent, _, cx| {
                 if matches!(event, InputEvent::Change) {
                     cx.notify();
                 }
             }),
         ];
-        // Pencarian yang masih berjalan di backend dibatalkan saat tampilan dilepas (folder berganti).
+        // A search still running in the backend is canceled when the view is released (the folder changed).
         cx.on_release(|this, cx| this.cancel_current(cx)).detach();
 
         Self {
@@ -136,7 +136,7 @@ impl SearchView {
         }
     }
 
-    // ----- Keadaan yang boleh dibaca fitur lain dan uji -----
+    // ----- State that other features and tests may read -----
 
     pub fn results(&self) -> &Results {
         &self.results
@@ -158,7 +158,7 @@ impl SearchView {
         self.show_replace
     }
 
-    /// Isian formulir saat ini.
+    /// The current form inputs.
     pub fn inputs(&self, cx: &App) -> Inputs {
         Inputs {
             pattern: self.query.read(cx).value().to_string(),
@@ -175,10 +175,10 @@ impl SearchView {
         cx.notify();
     }
 
-    // ----- Isian -----
+    // ----- Inputs -----
 
-    /// Memfokuskan kolom kueri dan memilih isinya; `prefill` (mis. teks terpilih di editor)
-    /// menggantikan kueri dan langsung dicari.
+    /// Focuses the query field and selects its content; `prefill` (e.g. text selected in the editor)
+    /// replaces the query and is searched right away.
     pub fn focus_query(&mut self, prefill: Option<String>, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(prefill) = prefill.filter(|prefill| prefill.as_str() != self.query.read(cx).value().as_ref()) {
             self.set_query(prefill, window, cx);
@@ -189,10 +189,10 @@ impl SearchView {
         });
     }
 
-    /// Mengganti kueri dan langsung mencari (tanpa jeda mengetik).
+    /// Replaces the query and searches right away (without the typing delay).
     pub fn set_query(&mut self, pattern: impl Into<SharedString>, window: &mut Window, cx: &mut Context<Self>) {
         let pattern: SharedString = pattern.into();
-        // `set_value` tidak memancarkan `Change`, jadi pencarian dimulai di sini.
+        // `set_value` does not emit `Change`, so the search is started here.
         self.query.update(cx, |state, cx| state.set_value(pattern, window, cx));
         self.search_now(window, cx);
     }
@@ -212,7 +212,7 @@ impl SearchView {
         self.schedule_search(window, cx);
     }
 
-    /// Menampilkan baris pengganti; fokus ke kolom pengganti bila kueri sudah terisi.
+    /// Shows the replacement row; focuses the replacement field if the query is already filled in.
     pub fn show_replace(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.show_replace = true;
         let target = if self.query.read(cx).value().is_empty() { self.query.clone() } else { self.replacement.clone() };
@@ -233,14 +233,14 @@ impl SearchView {
         cx.notify();
     }
 
-    /// Mengosongkan kueri dan hasil; opsi pencarian dipertahankan.
+    /// Clears the query and results; the search options are kept.
     pub fn clear(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.set_query("", window, cx);
     }
 
-    // ----- Jalannya pencarian -----
+    // ----- How the search runs -----
 
-    /// Menjadwalkan pencarian setelah jeda mengetik.
+    /// Schedules a search after the typing delay.
     fn schedule_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.results.pending = true;
         self.debounce = cx.spawn_in(window, async move |this, cx| {
@@ -250,7 +250,7 @@ impl SearchView {
         cx.notify();
     }
 
-    /// Membatalkan pencarian yang sedang berjalan; apa pun yang masih dikirimnya diabaikan.
+    /// Cancels the running search; anything it still sends is ignored.
     fn cancel_current(&mut self, cx: &mut App) {
         self.pump = Task::ready(());
         let Some(run) = self.run.take() else { return };
@@ -263,8 +263,8 @@ impl SearchView {
         }
     }
 
-    /// Memulai pencarian sekarang juga dengan isian saat ini; pencarian sebelumnya dibatalkan.
-    /// Kueri kosong mengosongkan hasil.
+    /// Starts a search right now with the current inputs; the previous search is canceled.
+    /// An empty query clears the results.
     pub fn search_now(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.debounce = Task::ready(());
         self.cancel_current(cx);
@@ -284,7 +284,7 @@ impl SearchView {
         self.results.start(query.clone());
         self.sync_rows(cx);
 
-        // Event datang dari thread backend; diteruskan ke thread utama lewat kanal.
+        // Events arrive from a backend thread; they are forwarded to the main thread through a channel.
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<SearchEvent>();
         let (core, label) = (self.env.core.clone(), self.env.window.to_string());
         spawn_core(cx, async move {
@@ -308,14 +308,14 @@ impl SearchView {
                     Ok(true) => {}
                     _ => break,
                 }
-                // Hasil yang datang beruntun dikumpulkan sebentar agar daftar tidak digambar ulang per berkas.
+                // Results that arrive in succession are briefly batched so the list isn't redrawn per file.
                 cx.background_executor().timer(Duration::from_millis(FLUSH_MS)).await;
             }
         });
     }
 
-    /// Menerapkan event dari backend. Hasil `false` berarti pencarian ini sudah selesai atau
-    /// sudah digantikan pencarian lain.
+    /// Applies events from the backend. Returning `false` means this search has finished or
+    /// has been replaced by another search.
     fn apply_events(&mut self, seq: u64, events: Vec<SearchEvent>, cx: &mut Context<Self>) -> bool {
         let Some(run) = self.run.as_mut().filter(|run| run.seq == seq && !run.finished) else { return false };
         let mut incoming: Vec<FileMatches> = Vec::new();
@@ -342,7 +342,7 @@ impl SearchView {
         self.results.status == SearchStatus::Running
     }
 
-    // ----- Hasil -----
+    // ----- Results -----
 
     fn selected_index(&self) -> Option<usize> {
         let selected = self.results.selected.as_ref()?;
@@ -380,7 +380,7 @@ impl SearchView {
         cx.notify();
     }
 
-    /// Membuka berkas sebagai tab pratinjau dan memilih kecocokannya di editor.
+    /// Opens the file as a preview tab and selects its match in the editor.
     fn open_match(&mut self, path: &str, key: MatchKey, window: &mut Window, cx: &mut Context<Self>) {
         let Some(root) = self.env.root.as_ref() else { return };
         let Some(found) = self.results.file(path).and_then(|file| file.matches.iter().find(|m| m.line == key.line && m.column == key.column)) else { return };
@@ -455,10 +455,10 @@ impl SearchView {
         cx.stop_propagation();
     }
 
-    // ----- Penggantian -----
+    // ----- Replacement -----
 
-    /// Mengganti semua kecocokan yang masih tampil, setelah konfirmasi; lalu mencari ulang dan
-    /// melaporkan jumlahnya.
+    /// Replaces all matches still displayed, after confirmation; then searches again and
+    /// reports the count.
     pub fn replace_all(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !self.results.can_replace(self.replacing) {
             return;
@@ -468,7 +468,7 @@ impl SearchView {
         self.confirm_replace(ReplaceScope::All, title, message, window, cx);
     }
 
-    /// Mengganti semua kecocokan yang masih tampil di satu berkas, setelah konfirmasi.
+    /// Replaces all matches still displayed in a single file, after confirmation.
     fn replace_file(&mut self, path: &str, window: &mut Window, cx: &mut Context<Self>) {
         if !self.results.can_replace(self.replacing) {
             return;
@@ -479,7 +479,7 @@ impl SearchView {
         self.confirm_replace(ReplaceScope::File(path.to_string()), title, message, window, cx);
     }
 
-    /// Mengganti satu kecocokan. Tanpa konfirmasi: barisnya sudah menampilkan persis apa yang berubah.
+    /// Replaces a single match. No confirmation: its row already shows exactly what changes.
     fn replace_match(&mut self, path: &str, key: MatchKey, window: &mut Window, cx: &mut Context<Self>) {
         if !self.results.can_replace(self.replacing) {
             return;
@@ -498,7 +498,7 @@ impl SearchView {
     }
 
     fn start_replace(&mut self, scope: ReplaceScope, window: &mut Window, cx: &mut Context<Self>) {
-        // Keadaan bisa berubah selagi dialog konfirmasi terbuka.
+        // The state may change while the confirmation dialog is open.
         if !self.results.can_replace(self.replacing) {
             return;
         }
@@ -547,7 +547,7 @@ impl SearchView {
 
         let clean = outcome.replacements > 0 && outcome.errors.is_empty() && outcome.skipped_read_only.is_empty();
         match scope {
-            // Daftar disesuaikan di tempat agar posisi gulir dan lipatan tidak hilang.
+            // The list is adjusted in place so the scroll position and collapsed state aren't lost.
             ReplaceScope::File(path) if clean => {
                 self.results.dismiss_file(&path);
                 self.sync_rows(cx);
@@ -560,7 +560,7 @@ impl SearchView {
         }
     }
 
-    // ----- Tampilan -----
+    // ----- View -----
 
     fn render_toolbar(&self, cx: &Context<Self>) -> impl IntoElement {
         let empty = self.query.read(cx).value().is_empty();
@@ -687,7 +687,7 @@ impl SearchView {
             .when_some(line, |el, (text, is_error)| el.child(div().flex_1().min_w_0().when(is_error, |el| el.text_color(theme.danger)).child(SharedString::from(text))))
     }
 
-    /// Tombol aksi di sisi kanan baris, tampil saat baris disorot.
+    /// Action buttons on the right side of a row, shown when the row is hovered.
     fn row_actions(&self, cx: &App) -> gpui_kit::Div {
         h_flex().absolute().top_0().right_1().h_full().gap_0p5().bg(cx.theme().sidebar).invisible().group_hover("sr-row", |style| style.visible())
     }
@@ -749,7 +749,7 @@ impl SearchView {
         let (click_path, replace_path, dismiss_path) = (path.clone(), path.clone(), path.clone());
         let suffix = format!("{path}:{}:{}", found.line, found.column);
 
-        // Teks pengganti ditampilkan di samping kecocokan (yang dicoret) pada mode ganti.
+        // In replace mode, the replacement text is shown next to the match (which is struck through).
         let inserted = replacement.map(|replacement| replacement_preview(self.preview_matcher.as_ref(), self.results.query.as_ref().is_some_and(|q| q.is_regex), replacement, found));
         let row = row_text(found, inserted.as_deref());
         let mut highlights = Vec::with_capacity(2);

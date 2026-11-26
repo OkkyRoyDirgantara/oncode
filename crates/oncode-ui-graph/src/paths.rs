@@ -1,4 +1,4 @@
-//! Pemetaan path absolut editor ke path relatif repositori, dan nama folder worktree.
+//! Mapping of the editor's absolute paths to repository-relative paths, and worktree folder names.
 
 use oncode_core::AppError;
 
@@ -7,13 +7,13 @@ fn is_windows_path(path: &str) -> bool {
     (bytes.len() >= 3 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' && (bytes[2] == b'\\' || bytes[2] == b'/')) || path.starts_with("\\\\")
 }
 
-/// Path `absolute` relatif terhadap akar repositori, dengan garis miring biasa.
-/// Mengembalikan `None` bila berkas berada di luar repositori (atau adalah akarnya sendiri).
+/// The path `absolute` relative to the repository root, with forward slashes.
+/// Returns `None` if the file is outside the repository (or is the root itself).
 pub fn repo_relative_path(root: &str, absolute: &str) -> Option<String> {
     let windows = is_windows_path(root);
     let base = root.replace('\\', "/").trim_end_matches('/').to_string();
     let full = absolute.replace('\\', "/");
-    // Sistem berkas Windows tidak membedakan huruf besar dan kecil.
+    // The Windows file system is case-insensitive.
     let (prefix, candidate) = if windows { (base.to_lowercase(), full.to_lowercase()) } else { (base.clone(), full.clone()) };
     if !candidate.starts_with(&format!("{prefix}/")) {
         return None;
@@ -22,7 +22,7 @@ pub fn repo_relative_path(root: &str, absolute: &str) -> Option<String> {
     (!relative.is_empty()).then(|| relative.to_string())
 }
 
-/// Repositori yang memuat `absolute` (yang akarnya paling dalam), beserta path relatifnya.
+/// The repository that contains `absolute` (the one with the deepest root), together with its relative path.
 pub fn locate_in_repo<'a>(roots: impl IntoIterator<Item = &'a str>, absolute: &str) -> Option<(String, String)> {
     let mut best: Option<(String, String)> = None;
     for root in roots {
@@ -35,25 +35,25 @@ pub fn locate_in_repo<'a>(roots: impl IntoIterator<Item = &'a str>, absolute: &s
     best
 }
 
-/// Menggabungkan folder dan nama memakai pemisah yang dipakai folder itu.
+/// Joins a folder and a name using the separator that folder uses.
 pub fn join_path(dir: &str, name: &str) -> String {
     let sep = if dir.contains('\\') && !dir.contains('/') { '\\' } else { '/' };
     format!("{}{sep}{name}", dir.trim_end_matches(['/', '\\']))
 }
 
-/// Path absolut sebuah berkas repositori, dengan pemisah milik akar repositori.
+/// The absolute path of a repository file, with the separator of the repository root.
 pub fn repo_file(root: &str, path: &str) -> String {
     let sep = if root.contains('\\') && !root.contains('/') { "\\" } else { "/" };
     format!("{}{sep}{}", root.trim_end_matches(['/', '\\']), path.replace('/', sep))
 }
 
-/// Nama folder bawaan untuk worktree baru: `<folder-repo>-<branch>` tanpa garis miring.
+/// Default folder name for a new worktree: `<repo-folder>-<branch>` without slashes.
 pub fn default_worktree_name(root: &str, branch: &str) -> String {
     let flat: Vec<&str> = branch.split(['/', '\\']).filter(|s| !s.is_empty()).collect();
     format!("{}-{}", crate::format::base_name(root), flat.join("-"))
 }
 
-/// Galat `git worktree remove` karena worktree masih berisi perubahan atau berkas untracked.
+/// A `git worktree remove` error because the worktree still contains changes or untracked files.
 pub fn is_dirty_worktree_error(error: &AppError) -> bool {
     if error.code == "dirtyWorkTree" {
         return true;
@@ -62,7 +62,7 @@ pub fn is_dirty_worktree_error(error: &AppError) -> bool {
     ["modified or untracked", "contains modified", "untracked files", "use --force"].iter().any(|needle| text.contains(needle))
 }
 
-/// Galat untuk nama folder yang tidak sah, atau `None`.
+/// An error for an invalid folder name, or `None`.
 pub fn validate_folder_name(value: &str) -> Option<&'static str> {
     let name = value.trim();
     if name.is_empty() {
@@ -77,7 +77,7 @@ pub fn validate_folder_name(value: &str) -> Option<&'static str> {
     None
 }
 
-/// Aturan dasar nama ref Git, agar galat muncul sebelum perintah dijalankan.
+/// Basic Git ref name rules, so the error appears before the command runs.
 pub fn validate_ref_name(value: &str) -> Option<&'static str> {
     let name = value.trim();
     if name.is_empty() {
@@ -105,7 +105,7 @@ mod tests {
             ("/work/repo/", "/work/repo/README.md", "README.md"),
             ("/work/repo", "/work/repo/a/b/c.txt", "a/b/c.txt"),
             ("C:\\work\\repo", "C:\\work\\repo\\src\\app.ts", "src/app.ts"),
-            // Windows tidak membedakan huruf besar/kecil; huruf pada hasil mengikuti path berkas.
+            // Windows is case-insensitive; the letter case in the result follows the file path.
             ("C:\\Work\\Repo", "c:\\work\\repo\\Src\\App.ts", "Src/App.ts"),
             ("C:/work/repo", "C:\\work\\repo\\x.ts", "x.ts"),
         ];
@@ -118,12 +118,12 @@ mod tests {
     fn repo_relative_path_rejects_files_outside() {
         let cases = [
             ("/work/repo", "/work/other/file.ts"),
-            // Awalan nama yang sama bukan berarti berada di dalam repositori.
+            // A shared name prefix does not mean it is inside the repository.
             ("/work/repo", "/work/repo-backup/file.ts"),
             ("/work/repo", "/work/repo"),
             ("/work/repo", "/work/repo/"),
             ("/work/repo", "relative/file.ts"),
-            // Di Unix huruf besar/kecil berbeda berarti folder lain.
+            // On Unix a different letter case means a different folder.
             ("/work/repo", "/Work/Repo/file.ts"),
         ];
         for (root, absolute) in cases {

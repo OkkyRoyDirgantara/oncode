@@ -1,9 +1,9 @@
-//! Tampilan sidebar Explorer: pohon berkas yang dimuat per folder dan divirtualisasi, beserta
-//! operasi berkasnya (buat, ganti nama, hapus ke tempat sampah, salin path).
+//! The Explorer sidebar view: a file tree loaded per folder and virtualized, together with its
+//! file operations (create, rename, move to trash, copy path).
 //!
-//! State pohon ada di [`TreeState`] (logika murni). Tampilan ini hanya menjalankan pemuatan:
-//! setiap kali pohon berubah, folder terbuka yang belum punya isi diminta ke backend, dan
-//! permintaan "tampilkan path ini" dilanjutkan sampai semua leluhurnya termuat.
+//! The tree state lives in [`TreeState`] (pure logic). This view only runs the loading:
+//! each time the tree changes, open folders that have no contents yet are requested from the backend, and
+//! a "show this path" request is continued until all its ancestors are loaded.
 
 use std::collections::{HashMap, HashSet};
 use std::ops::Range;
@@ -37,10 +37,10 @@ use crate::tree::{
     validate_entry_name, EntryDecoration, GitDecorations, NameOptions, Row, TreeState, INDENT, ROW_HEIGHT,
 };
 
-/// Jeda pengumpulan event perubahan berkas yang beruntun menjadi satu pemuatan ulang.
+/// The delay for collecting consecutive file change events into a single reload.
 const FS_DEBOUNCE: Duration = Duration::from_millis(150);
 
-/// Lama penunjuk menetap di atas folder tertutup, selagi menyeret, sebelum folder itu dibuka.
+/// How long the pointer must rest over a closed folder, while dragging, before that folder is opened.
 const HOVER_EXPAND: Duration = Duration::from_millis(600);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -55,17 +55,17 @@ enum EditKind {
     Rename(DirEntry),
 }
 
-/// Masukan nama di dalam pohon, untuk entri baru atau ganti nama.
+/// The name input inside the tree, for a new entry or a rename.
 struct Edit {
     kind: EditKind,
-    /// Folder tempat entri dibuat, atau induk entri yang diganti namanya.
+    /// The folder where the entry is created, or the parent of the entry being renamed.
     parent: String,
     input: Entity<InputState>,
     error: Option<SharedString>,
     _subscriptions: Vec<Subscription>,
 }
 
-/// Baris yang digambar: baris pohon, masukan nama, atau pesan validasinya.
+/// A drawn row: a tree row, the name input, or its validation message.
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum Display {
     Tree(usize),
@@ -73,14 +73,14 @@ enum Display {
     EditError { depth: usize },
 }
 
-/// Folder yang terbuka dan baris terpilih per jendela dan folder proyek. `Workbench` (dan
-/// tampilan ini) dibuat ulang saat status kepercayaan berubah; pohonnya tidak boleh ikut menciut.
+/// The open folders and the selected row per window and project folder. `Workbench` (and
+/// this view) is recreated when the trust status changes; the tree must not collapse along with it.
 #[derive(Default)]
 struct TreeMemory(HashMap<(String, String), (HashSet<String>, Option<String>)>);
 
 impl Global for TreeMemory {}
 
-/// Label item menu dan command yang membuka berkas di file manager OS, sesuai platform.
+/// The label of the menu item and command that reveal a file in the OS file manager, per platform.
 pub const REVEAL_LABEL: &str = if cfg!(target_os = "macos") {
     "Reveal in Finder"
 } else if cfg!(windows) {
@@ -89,7 +89,7 @@ pub const REVEAL_LABEL: &str = if cfg!(target_os = "macos") {
     "Open Containing Folder"
 };
 
-/// Label command palette untuk berkas di tab aktif.
+/// The command palette label for the file in the active tab.
 pub const REVEAL_ACTIVE_LABEL: &str = if cfg!(target_os = "macos") {
     "Reveal Active File in Finder"
 } else if cfg!(windows) {
@@ -98,34 +98,34 @@ pub const REVEAL_ACTIVE_LABEL: &str = if cfg!(target_os = "macos") {
     "Open Active File's Containing Folder"
 };
 
-/// Pembuka file manager OS. Bawaannya `App::reveal_path`; tes memasang pengganti lewat global ini
-/// karena platform uji GPUI tidak mengimplementasikan `reveal_path` (memanggilnya langsung panik).
+/// The opener of the OS file manager. The default is `App::reveal_path`; tests install a replacement through this global
+/// because the GPUI test platform does not implement `reveal_path` (calling it directly panics).
 #[derive(Clone)]
 pub struct RevealHandler(pub RevealFn);
 
-/// Fungsi yang membuka `path` di file manager OS.
+/// A function that opens `path` in the OS file manager.
 pub type RevealFn = Rc<dyn Fn(&Path, &mut App)>;
 
 impl Global for RevealHandler {}
 
 pub struct Explorer {
     env: Env,
-    /// Folder proyek; `None` bila jendela belum membuka folder.
+    /// The project folder; `None` if the window has not opened a folder.
     root: Option<String>,
     tree: TreeState,
     rows: Vec<Row>,
     display: Vec<Display>,
     decorations: GitDecorations,
-    /// Berkas di tab aktif; barisnya disorot.
+    /// The file in the active tab; its row is highlighted.
     active_path: Option<String>,
-    /// Path yang diminta tampil; dilanjutkan setiap kali isi sebuah folder datang.
+    /// The path requested to be shown; continued each time the contents of a folder arrive.
     pending_reveal: Option<String>,
     edit: Option<Edit>,
-    /// Sasaran menu konteks: entri di bawah penunjuk, atau `None` untuk latar pohon.
+    /// The context menu target: the entry under the pointer, or `None` for the tree background.
     menu_target: Option<String>,
-    /// Folder yang akan menerima bila yang sedang diseret dilepas sekarang; disorot selama menyeret.
+    /// The folder that would receive what is being dragged if dropped now; highlighted while dragging.
     drop_target: Option<String>,
-    /// Folder tertutup di bawah penunjuk selagi menyeret; dibuka bila penunjuk menetap di atasnya.
+    /// A closed folder under the pointer while dragging; opened if the pointer rests over it.
     hover_folder: Option<String>,
     _hover_expand: Task<()>,
     focus_handle: FocusHandle,
@@ -136,12 +136,12 @@ pub struct Explorer {
     _subscriptions: Vec<Subscription>,
 }
 
-/// Tempat di pohon yang ditunjuk sebuah titik saat menyeret.
+/// The place in the tree that a point indicates while dragging.
 struct DropPoint {
-    /// Folder yang menerima: folder di bawah penunjuk, folder induk sebuah berkas, atau akar proyek
-    /// bila penunjuk ada di latar pohon.
+    /// The receiving folder: the folder under the pointer, the parent folder of a file, or the project root
+    /// if the pointer is on the tree background.
     dir: String,
-    /// Folder tertutup yang persis di bawah penunjuk.
+    /// The closed folder exactly under the pointer.
     collapsed: Option<String>,
 }
 
@@ -226,13 +226,13 @@ impl Explorer {
         this
     }
 
-    // ----- Keadaan untuk fitur lain dan pengujian -----
+    // ----- State for other features and tests -----
 
     pub fn root(&self) -> Option<&str> {
         self.root.as_deref()
     }
 
-    /// Baris pohon yang terlihat, dari atas ke bawah.
+    /// The visible tree rows, from top to bottom.
     pub fn rows(&self) -> &[Row] {
         &self.rows
     }
@@ -245,37 +245,37 @@ impl Explorer {
         self.tree.expanded.contains(path)
     }
 
-    /// Ada folder yang sedang dimuat.
+    /// A folder is being loaded.
     pub fn is_loading(&self) -> bool {
         self.tree.is_loading()
     }
 
-    /// Masukan nama (entri baru atau ganti nama) sedang terbuka.
+    /// The name input (new entry or rename) is open.
     pub fn is_editing(&self) -> bool {
         self.edit.is_some()
     }
 
-    /// Pesan validasi masukan nama, bila ada.
+    /// The validation message of the name input, if any.
     pub fn edit_error(&self) -> Option<SharedString> {
         self.edit.as_ref()?.error.clone()
     }
 
-    /// Dekorasi Git untuk sebuah path absolut.
+    /// The Git decoration for an absolute path.
     pub fn decoration(&self, path: &str, is_dir: bool) -> Option<EntryDecoration> {
         decoration_for(&self.decorations, path, is_dir)
     }
 
-    /// Fokus keyboard berada di pohon (bukan di masukan nama).
+    /// Keyboard focus is in the tree (not in the name input).
     pub fn tree_focused(&self, window: &Window) -> bool {
         self.focus_handle.is_focused(window)
     }
 
-    /// Entri yang sedang terpilih, dicari di isi folder induknya.
+    /// The currently selected entry, looked up in the contents of its parent folder.
     pub fn selected_entry(&self) -> Option<&DirEntry> {
         self.tree.entry(self.tree.selected.as_deref()?)
     }
 
-    // ----- Pemuatan -----
+    // ----- Loading -----
 
     fn start_load(&mut self, dir: &str, cx: &mut Context<Self>) {
         let request = self.tree.begin_load(dir);
@@ -292,8 +292,8 @@ impl Explorer {
         .detach();
     }
 
-    /// Dipanggil setelah setiap perubahan pohon: melanjutkan permintaan tampil, meminta isi
-    /// folder terbuka yang belum dimuat, lalu menyusun ulang baris.
+    /// Called after every tree change: continues the show request, requests the contents of
+    /// open folders that are not loaded yet, then rebuilds the rows.
     fn tree_changed(&mut self, cx: &mut Context<Self>) {
         if self.root.is_none() {
             return;
@@ -318,7 +318,7 @@ impl Explorer {
         cx.default_global::<TreeMemory>().0.insert((self.env.window.to_string(), root), state);
     }
 
-    /// Menyusun baris yang digambar: baris pohon ditambah masukan nama pada tempatnya.
+    /// Builds the drawn rows: the tree rows plus the name input in its place.
     fn rebuild_display(&mut self) {
         let mut display: Vec<Display> = (0..self.rows.len()).map(Display::Tree).collect();
         if let Some(edit) = &self.edit {
@@ -334,12 +334,12 @@ impl Explorer {
                     }
                 }
                 EditKind::Create(_) => {
-                    // Tepat di bawah folder tujuan; di paling atas untuk akar proyek.
+                    // Right below the target folder; at the very top for the project root.
                     let (at, depth) = match self.rows.iter().position(|row| row.path() == Some(edit.parent.as_str())) {
                         Some(index) => (index + 1, self.rows[index].depth() + 1),
                         None => (0, 0),
                     };
-                    // Keterangan "Empty" tidak perlu tampil di samping masukan nama.
+                    // The "Empty" note does not need to appear next to the name input.
                     if matches!(self.rows.get(at), Some(Row::Note { parent, error: false, .. }) if *parent == edit.parent) {
                         display.remove(at);
                     }
@@ -366,12 +366,12 @@ impl Explorer {
         }
     }
 
-    /// Melanjutkan permintaan tampil. Mengembalikan path-nya bila kini sudah terpilih dan terlihat.
+    /// Continues the show request. Returns its path if it is now selected and visible.
     fn advance_reveal(&mut self, cx: &mut Context<Self>) -> Option<String> {
         let path = self.pending_reveal.clone()?;
         let chain = ancestor_chain(&self.tree.root, &path);
         if chain.is_empty() {
-            // Di luar proyek.
+            // Outside the project.
             self.pending_reveal = None;
             return None;
         }
@@ -382,11 +382,11 @@ impl Explorer {
                     self.start_load(dir, cx);
                     return None;
                 }
-                // Isi yang sedang dimuat ulang belum bisa dipercaya; tunggu jawabannya.
+                // Contents that are being reloaded cannot be trusted yet; wait for the response.
                 Some(state) if state.loading => return None,
                 Some(state) => {
                     if !state.entries.as_ref().is_some_and(|entries| entries.iter().any(|entry| entry.path == next)) {
-                        // Sudah dihapus, tidak terbaca, atau disembunyikan (mis. di dalam `.git`).
+                        // Already deleted, unreadable, or hidden (e.g. inside `.git`).
                         self.pending_reveal = None;
                         return None;
                     }
@@ -401,8 +401,8 @@ impl Explorer {
         Some(path)
     }
 
-    /// Membuka semua folder leluhur `path`, memilihnya, dan menggulir ke sana. Tidak berbuat
-    /// apa-apa bila `path` tidak ada di pohon (di luar proyek atau sudah dihapus).
+    /// Opens all ancestor folders of `path`, selects it, and scrolls to it. Does
+    /// nothing if `path` is not in the tree (outside the project or already deleted).
     pub fn reveal(&mut self, path: &str, cx: &mut Context<Self>) {
         if self.root.is_none() {
             return;
@@ -427,7 +427,7 @@ impl Explorer {
         let store = store.read(cx);
         let snapshot = self.env.repo_root.as_deref().and_then(|repo_root| {
             store.snapshot(repo_root).or_else(|| {
-                // Akar yang dilaporkan backend bisa ditulis sedikit berbeda (mis. garis miring penutup).
+                // The root reported by the backend may be written slightly differently (e.g. a trailing slash).
                 let root = self.root.as_deref()?;
                 store.roots().into_iter().filter(|candidate| is_same_or_under(root, candidate)).max_by_key(String::len).and_then(|candidate| store.snapshot(&candidate))
             })
@@ -439,7 +439,7 @@ impl Explorer {
         }
     }
 
-    // ----- Perubahan dari luar -----
+    // ----- Outside changes -----
 
     fn queue_fs_change(&mut self, paths: &[String], overflow: bool, cx: &mut Context<Self>) {
         if self.root.is_none() {
@@ -461,7 +461,7 @@ impl Explorer {
         });
     }
 
-    // ----- Pohon -----
+    // ----- Tree -----
 
     pub fn select(&mut self, path: Option<String>, cx: &mut Context<Self>) {
         if self.tree.selected == path {
@@ -498,8 +498,8 @@ impl Explorer {
         self.tree_changed(cx);
     }
 
-    /// Memuat ulang akar dan setiap folder yang terbuka; cache folder lain dibuang. Bentangan
-    /// dan pilihan dipertahankan.
+    /// Reloads the root and every open folder; the cache of other folders is dropped. The expansion
+    /// and selection are kept.
     pub fn refresh(&mut self, cx: &mut Context<Self>) {
         let Some(root) = self.root.clone() else { return };
         self.reload_under(&root, cx);
@@ -529,12 +529,12 @@ impl Explorer {
         self.select(Some(path.to_string()), cx);
         if is_dir {
             self.focus_handle.focus(window, cx);
-            // Klik kedua dari klik ganda tidak menutup lagi folder yang baru dibuka.
+            // The second click of a double click does not close the folder that was just opened.
             if clicks <= 1 {
                 self.toggle(path, cx);
             }
         } else {
-            // Klik tunggal membuka pratinjau; klik ganda menjadikannya tab tetap.
+            // A single click opens a preview; a double click makes it a permanent tab.
             self.open(path, clicks <= 1, false, window, cx);
         }
     }
@@ -600,9 +600,9 @@ impl Explorer {
         }
     }
 
-    // ----- Entri baru dan ganti nama -----
+    // ----- New entries and rename -----
 
-    /// Folder tujuan untuk berkas/folder baru: folder terpilih, folder dari berkas terpilih, atau akar proyek.
+    /// The target folder for a new file/folder: the selected folder, the folder of the selected file, or the project root.
     fn target_directory(&self) -> Option<String> {
         let root = self.root.clone()?;
         Some(match self.selected_entry() {
@@ -615,7 +615,7 @@ impl Explorer {
     fn start_edit(&mut self, kind: EditKind, parent: String, window: &mut Window, cx: &mut Context<Self>) {
         let (initial, stem_end) = match &kind {
             EditKind::Rename(entry) => {
-                // Untuk berkas, hanya nama tanpa ekstensi yang terpilih; `.gitignore` dan folder terpilih seluruhnya.
+                // For a file, only the name without the extension is selected; `.gitignore` and folders are selected entirely.
                 let stem_end = match entry.name.rfind('.') {
                     Some(dot) if !entry.is_dir && dot > 0 => dot,
                     _ => entry.name.len(),
@@ -631,7 +631,7 @@ impl Explorer {
         };
         let input = cx.new(|cx| InputState::new(window, cx).placeholder(placeholder).default_value(initial));
         let subscription = cx.subscribe_in(&input, window, |this: &mut Self, input, event: &InputEvent, window, cx| {
-            // Event dari masukan yang sudah digantikan diabaikan.
+            // Events from an input that has been replaced are ignored.
             if this.edit.as_ref().is_none_or(|edit| edit.input != *input) {
                 return;
             }
@@ -645,7 +645,7 @@ impl Explorer {
         self.edit = Some(Edit { kind, parent, input: input.clone(), error: None, _subscriptions: vec![subscription] });
         self.tree_changed(cx);
         self.scroll_to_edit();
-        // Fokus dipindah setelah pembaruan ini selesai, saat masukan sudah menjadi bagian tampilan.
+        // Focus is moved after this update finishes, once the input is part of the view.
         window.defer(cx, move |window, cx| {
             input.update(cx, |state, cx| {
                 state.focus(window, cx);
@@ -656,11 +656,11 @@ impl Explorer {
         });
     }
 
-    /// Membuka masukan nama untuk berkas atau folder baru di `dir` (bawaan: mengikuti pilihan).
+    /// Opens the name input for a new file or folder in `dir` (default: follows the selection).
     pub fn new_entry(&mut self, kind: EntryKind, dir: Option<String>, window: &mut Window, cx: &mut Context<Self>) {
         let Some(root) = self.root.clone() else { return };
         let Some(parent) = dir.or_else(|| self.target_directory()) else { return };
-        // Folder tujuan dibuka lebih dulu agar terlihat di mana entri baru akan muncul.
+        // The target folder is opened first so it is visible where the new entry will appear.
         for dir in ancestor_chain(&root, &parent).into_iter().skip(1) {
             self.tree.expand(&dir);
         }
@@ -670,7 +670,7 @@ impl Explorer {
         self.start_edit(EditKind::Create(kind), parent, window, cx);
     }
 
-    /// Membuka masukan nama untuk mengganti nama entri terpilih.
+    /// Opens the name input to rename the selected entry.
     pub fn rename_selected(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(entry) = self.selected_entry().cloned() else { return };
         self.rename_entry(entry, window, cx);
@@ -749,7 +749,7 @@ impl Explorer {
                     return;
                 }
                 this.start_load(&parent, cx);
-                // Folder antara (`a/b/c.txt`) mungkin sudah pernah dimuat; cache-nya kini usang.
+                // The intermediate folder (`a/b/c.txt`) may have been loaded before; its cache is now stale.
                 if let Some((first, _)) = name.split_once('/') {
                     let between = join_path(&parent, first);
                     for dir in this.tree.reload_under(&between) {
@@ -779,7 +779,7 @@ impl Explorer {
                 this.apply_rename(&entry.path, &to, window, cx);
                 this.tree.move_state(&entry.path, &to);
                 this.tree.selected = Some(to.clone());
-                // Induk dimuat ulang; folder di bawah nama baru menyusul setelah nama itu ada di isi induknya.
+                // The parent is reloaded; the folder under the new name follows once that name is in its parent's contents.
                 this.start_load(&parent, cx);
                 this.tree_changed(cx);
             });
@@ -787,11 +787,11 @@ impl Explorer {
         .detach();
     }
 
-    /// Memindahkan buffer dan tab berkas dari `from` (berkas, atau folder beserta isinya) ke `to`.
+    /// Moves buffers and file tabs from `from` (a file, or a folder with its contents) to `to`.
     fn apply_rename(&mut self, from: &str, to: &str, window: &mut Window, cx: &mut Context<Self>) {
         let Some(workbench) = self.env.workbench.upgrade() else { return };
-        // Buffer dipindah lebih dulu: isi yang belum disimpan ikut ke path baru sebelum tab dipasang ulang.
-        // Buffer dan state editornya dipegang sampai tampilan baru menautkan diri.
+        // Buffers are moved first: unsaved contents follow to the new path before tabs are reattached.
+        // The buffers and their editor state are held until the new view attaches itself.
         let mut held = Vec::new();
         if let Some(registry) = buffers(workbench.read(cx)) {
             for buffer in registry.read(cx).all() {
@@ -799,7 +799,7 @@ impl Explorer {
                 let Some(new) = moved_path(&old, from, to) else { continue };
                 registry.update(cx, |registry, cx| registry.rename(&old, &new, cx));
                 if !buffer.read(cx).is_ready() {
-                    // Pemuatan dari path lama tidak akan berhasil lagi.
+                    // Loading from the old path would no longer succeed.
                     buffer.update(cx, |buffer, cx| buffer.reload(window, cx));
                 }
                 let state = buffer.read(cx).primary();
@@ -810,9 +810,9 @@ impl Explorer {
         drop(held);
     }
 
-    // ----- Hapus dan salin path -----
+    // ----- Delete and copy path -----
 
-    /// Memindahkan entri terpilih ke tempat sampah OS setelah konfirmasi.
+    /// Moves the selected entry to the OS trash after confirmation.
     pub fn delete_selected(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(entry) = self.selected_entry().cloned() else { return };
         self.delete_entry(entry, window, cx);
@@ -820,7 +820,7 @@ impl Explorer {
 
     fn delete_entry(&mut self, entry: DirEntry, window: &mut Window, cx: &mut Context<Self>) {
         let Some(workbench) = self.env.workbench.upgrade() else { return };
-        // Berkas terbuka di dalam entri ini yang punya perubahan belum disimpan ikut hilang.
+        // Open files inside this entry that have unsaved changes are lost too.
         let dirty: Vec<String> = {
             let workbench = workbench.read(cx);
             let open: Vec<&str> = workbench.model().all_tabs().filter(|tab| tab.kind == "file").filter_map(|tab| tab.param_str("path")).collect();
@@ -858,7 +858,7 @@ impl Explorer {
                 workbench.update(cx, |workbench, cx| {
                     workbench.force_close_where(|tab| tab.kind == "file" && tab.param_str("path").is_some_and(|path| is_same_or_under(path, &inside)), window, cx);
                 });
-                // Memuat ulang induk sekaligus membuang keadaan pohon di bawah entri yang hilang.
+                // Reloading the parent also drops the tree state below the entry that disappeared.
                 this.start_load(dir_name(&entry.path), cx);
                 this.tree_changed(cx);
             });
@@ -866,7 +866,7 @@ impl Explorer {
         .detach();
     }
 
-    /// Menyalin path entri terpilih ke papan klip.
+    /// Copies the path of the selected entry to the clipboard.
     pub fn copy_selected_path(&mut self, relative: bool, cx: &mut Context<Self>) {
         if let Some(path) = self.tree.selected.clone() {
             self.copy_path(&path, relative, cx);
@@ -881,9 +881,9 @@ impl Explorer {
         cx.write_to_clipboard(ClipboardItem::new_string(text));
     }
 
-    /// Membuka `path` di file manager OS: berkas terpilih di folder induknya (Windows/macOS), atau
-    /// folder induknya dibuka (Linux). Hanya meminta OS menampilkan path itu, tidak menjalankan isi
-    /// folder proyek, jadi aman juga di mode terbatas. Berkas `untitled:` belum ada di disk: diabaikan.
+    /// Opens `path` in the OS file manager: the file selected in its parent folder (Windows/macOS), or
+    /// its parent folder opened (Linux). It only asks the OS to show that path and does not run any contents of the
+    /// project folder, so it is also safe in restricted mode. An `untitled:` file is not on disk yet: ignored.
     pub fn reveal_in_file_manager(&self, path: &str, cx: &mut Context<Self>) {
         if is_untitled(path) {
             return;
@@ -895,7 +895,7 @@ impl Explorer {
         }
     }
 
-    /// Berkas di tab aktif yang sudah ada di disk; `None` untuk tab non-berkas dan berkas `untitled:`.
+    /// The file in the active tab that is already on disk; `None` for non-file tabs and `untitled:` files.
     pub fn active_file(&self) -> Option<&str> {
         self.active_path.as_deref().filter(|path| !is_untitled(path))
     }
@@ -906,26 +906,26 @@ impl Explorer {
         }
     }
 
-    // ----- Seret dan jatuhkan -----
+    // ----- Drag and drop -----
 
-    /// Daftar baris digambar: akar punya isi, atau masukan nama sedang terbuka. Selain itu yang tampil
-    /// hanya satu pesan (memuat, kosong, atau galat).
+    /// Whether the row list is drawn: the root has contents, or the name input is open. Otherwise only
+    /// a single message is shown (loading, empty, or error).
     fn list_shown(&self) -> bool {
         let has_entries = self.root.as_deref().and_then(|root| self.tree.dirs.get(root)).is_some_and(|state| state.entries.as_ref().is_some_and(|entries| !entries.is_empty()));
         self.edit.is_some() || has_entries
     }
 
-    /// Folder yang sedang disorot sebagai tujuan jatuh, selama ada yang diseret di atas pohon.
+    /// The folder currently highlighted as the drop target, while something is being dragged over the tree.
     pub fn drop_target(&self) -> Option<&str> {
         self.drop_target.as_deref()
     }
 
-    /// Tempat di pohon yang ditunjuk `position` (koordinat jendela). Baris dipetakan lewat posisi dan
-    /// gulir daftar, karena baris divirtualisasi dan semuanya setinggi `ROW_HEIGHT`. `None` bila di luar
-    /// daftar atau di atas masukan nama.
+    /// The place in the tree indicated by `position` (window coordinates). Rows are mapped through the position and
+    /// the list scroll, because rows are virtualized and all are `ROW_HEIGHT` tall. `None` if outside the
+    /// list or over the name input.
     fn drop_point(&self, position: Point<Pixels>) -> Option<DropPoint> {
         let root = self.root.clone()?;
-        // Proyek kosong (atau masih dimuat): daftar tidak digambar, hanya pesan. Seluruh pohon adalah akar.
+        // An empty (or still loading) project: the list is not drawn, only a message. The whole tree is the root.
         if !self.list_shown() {
             return Some(DropPoint { dir: root, collapsed: None });
         }
@@ -939,21 +939,21 @@ impl Explorer {
         let index = f32::from(position.y - bounds.origin.y - offset.y) / ROW_HEIGHT;
         let display = (index >= 0.).then(|| index as usize).and_then(|index| self.display.get(index).copied());
         let row = match display {
-            // Di bawah baris terakhir: latar pohon, artinya akar proyek.
+            // Below the last row: the tree background, meaning the project root.
             None => return Some(DropPoint { dir: root, collapsed: None }),
             Some(Display::Tree(row)) => &self.rows[row],
             Some(Display::Edit { .. } | Display::EditError { .. }) => return None,
         };
         Some(match row {
             Row::Entry { entry, expanded, .. } if entry.is_dir => DropPoint { dir: entry.path.clone(), collapsed: (!*expanded).then(|| entry.path.clone()) },
-            // Dijatuhkan di atas berkas: masuk ke folder tempat berkas itu berada.
+            // Dropped on a file: goes into the folder that file is in.
             Row::Entry { entry, .. } => DropPoint { dir: dir_name(&entry.path).to_string(), collapsed: None },
             Row::Note { parent, .. } => DropPoint { dir: parent.clone(), collapsed: None },
         })
     }
 
-    /// Menyorot folder tujuan selama sesuatu diseret di atas pohon, dan membuka folder tertutup bila
-    /// penunjuk menetap di atasnya. `dragged` kosong untuk berkas dari OS, yang selalu boleh disalin.
+    /// Highlights the target folder while something is dragged over the tree, and opens a closed folder if
+    /// the pointer rests over it. `dragged` is empty for files from the OS, which may always be copied.
     fn track_drop_target(&mut self, dragged: Option<&DraggedEntry>, bounds: Bounds<Pixels>, position: Point<Pixels>, cx: &mut Context<Self>) {
         let Some(root) = self.root.clone() else { return };
         let point = if bounds.contains(&position) { self.drop_point(position) } else { None };
@@ -965,7 +965,7 @@ impl Explorer {
         }
         if folder != self.hover_folder {
             self.hover_folder = folder.clone();
-            // Mengganti tugas sebelumnya membatalkannya.
+            // Replacing the previous task cancels it.
             self._hover_expand = match folder {
                 Some(dir) => cx.spawn(async move |this, cx| {
                     cx.background_executor().timer(HOVER_EXPAND).await;
@@ -981,7 +981,7 @@ impl Explorer {
         }
     }
 
-    /// Menghapus sorotan dan menghentikan pembukaan otomatis, setelah dijatuhkan.
+    /// Clears the highlight and stops the automatic opening, after a drop.
     fn end_drop(&mut self, cx: &mut Context<Self>) {
         self.drop_target = None;
         self.hover_folder = None;
@@ -989,12 +989,12 @@ impl Explorer {
         cx.notify();
     }
 
-    /// Folder tujuan yang harus disorot sekarang: ada yang sedang diseret dan penunjuk di atas pohon.
+    /// The target folder that should be highlighted now: something is being dragged and the pointer is over the tree.
     fn active_drop_target(&self, cx: &App) -> Option<&str> {
         self.drop_target.as_deref().filter(|_| cx.has_active_drag())
     }
 
-    /// Entri dari pohon ini dijatuhkan: dipindah ke folder di bawah penunjuk.
+    /// An entry from this tree is dropped: it is moved into the folder under the pointer.
     fn drop_entry(&mut self, dragged: &DraggedEntry, window: &mut Window, cx: &mut Context<Self>) {
         let position = window.mouse_position();
         self.end_drop(cx);
@@ -1005,7 +1005,7 @@ impl Explorer {
         }
     }
 
-    /// Berkas dari OS dijatuhkan: disalin ke folder di bawah penunjuk.
+    /// Files from the OS are dropped: they are copied into the folder under the pointer.
     fn drop_external(&mut self, dropped: &ExternalPaths, window: &mut Window, cx: &mut Context<Self>) {
         let position = window.mouse_position();
         self.end_drop(cx);
@@ -1014,8 +1014,8 @@ impl Explorer {
         self.copy_in(sources, point.dir, window, cx);
     }
 
-    /// Memindahkan `from` (berkas atau folder) ke dalam folder `to_dir`. Buffer dan tab yang terbuka ikut
-    /// pindah, sama seperti ganti nama.
+    /// Moves `from` (a file or folder) into the folder `to_dir`. Open buffers and tabs move
+    /// along, just like a rename.
     fn move_entry(&mut self, from: String, to_dir: String, window: &mut Window, cx: &mut Context<Self>) {
         let name = base_name(&from).to_string();
         let to = join_path(&to_dir, &name);
@@ -1029,17 +1029,17 @@ impl Explorer {
                     overlay::show_error(&with_context(error, format!("Could not move {name}")), window, cx);
                     return;
                 }
-                // Berkas aktif yang ikut pindah sudah diketahui di tempat barunya. Tanpa ini, tab yang ditulis
-                // ulang membuat pohon menampilkan berkas itu dan menggeser pilihan dari entri yang diseret.
-                // Path tab memakai bentuk `file_path`; `from`/`to` disamakan dulu, seperti pada `rewrite_file_tab`.
+                // The active file that moves along is already known at its new location. Without this, the rewritten
+                // tab makes the tree reveal that file and shift the selection away from the dragged entry.
+                // Tab paths use the `file_path` form; `from`/`to` are normalized first, as in `rewrite_file_tab`.
                 let (from_tab, to_tab) = (oncode_ui::editor::file_path(&from), oncode_ui::editor::file_path(&to));
                 if let Some(active) = this.active_path.as_deref().and_then(|active| moved_path(active, &from_tab, &to_tab)) {
                     this.active_path = Some(active);
                 }
                 this.apply_rename(&from, &to, window, cx);
                 this.tree.move_state(&from, &to);
-                // Kedua folder berubah isi. Pemuatan dimulai sebelum `reveal`, supaya isi lama folder tujuan
-                // tidak dipercaya; hasilnya lalu dibuka, dipilih, dan digulir ke tampilan.
+                // Both folders' contents changed. Loading starts before `reveal`, so the old contents of the target
+                // folder are not trusted; the result is then opened, selected, and scrolled into view.
                 this.start_load(&from_dir, cx);
                 if !same_path(&from_dir, &to_dir) {
                     this.start_load(&to_dir, cx);
@@ -1050,8 +1050,8 @@ impl Explorer {
         .detach();
     }
 
-    /// Menyalin berkas dan folder dari luar proyek (hasil seret dari OS) ke dalam `dest_dir`. Tidak menimpa:
-    /// nama yang sudah ada membuat seluruhnya ditolak dengan pesan.
+    /// Copies files and folders from outside the project (dragged from the OS) into `dest_dir`. It does not overwrite:
+    /// a name that already exists makes the whole copy rejected with a message.
     fn copy_in(&mut self, sources: Vec<String>, dest_dir: String, window: &mut Window, cx: &mut Context<Self>) {
         if sources.is_empty() {
             return;
@@ -1073,7 +1073,7 @@ impl Explorer {
         .detach();
     }
 
-    // ----- Menu konteks -----
+    // ----- Context menu -----
 
     fn build_menu(this: &WeakEntity<Self>, mut menu: PopupMenu, cx: &App) -> PopupMenu {
         let Some(explorer) = this.upgrade() else { return menu };
@@ -1082,7 +1082,7 @@ impl Explorer {
             (explorer.root.clone(), explorer.menu_target.as_deref().and_then(|path| explorer.tree.entry(path)).cloned())
         };
         let Some(root) = root else { return menu };
-        // Aksi dijalankan setelah menu tertutup, di luar pembaruan menu itu sendiri.
+        // The action runs after the menu closes, outside the menu's own update.
         let item = |label: &str, run: Box<dyn Fn(&mut Self, &mut Window, &mut Context<Self>)>| {
             let this = this.clone();
             let run: std::rc::Rc<dyn Fn(&mut Self, &mut Window, &mut Context<Self>)> = std::rc::Rc::from(run);
@@ -1102,7 +1102,7 @@ impl Explorer {
                         .item(item("Open to the Side", Box::new(move |this, window, cx| this.open(&b, false, true, window, cx))))
                         .separator();
                 }
-                // Di dalam folder yang diklik; untuk berkas, di folder induknya.
+                // Inside the clicked folder; for a file, in its parent folder.
                 let dir = if entry.is_dir { entry.path.clone() } else { dir_name(&entry.path).to_string() };
                 let (new_file_dir, new_folder_dir) = (dir.clone(), dir);
                 let (rename, delete) = (entry.clone(), entry.clone());
@@ -1128,7 +1128,7 @@ impl Explorer {
         }
     }
 
-    // ----- Tampilan -----
+    // ----- View -----
 
     fn row_id(&self, prefix: &str, path: &str) -> SharedString {
         let relative = self.root.as_deref().map_or_else(|| path.to_string(), |root| relative_path(root, path));
@@ -1161,7 +1161,7 @@ impl Explorer {
         }
         let title = SharedString::from(title.join(" • "));
 
-        // Logo bahasa / jenis berkas, dan ikon folder khusus (src, tests, node_modules, …).
+        // Language / file type logo, and special folder icons (src, tests, node_modules, …).
         let icon = if entry.is_dir { folder_icon(&entry.path) } else { file_icon(&entry.path) };
         let ignored = entry.ignored;
         let (path, is_dir) = (entry.path.clone(), entry.is_dir);
@@ -1181,11 +1181,11 @@ impl Explorer {
             .when(selected && !focused, |el| el.bg(theme.list_active.opacity(0.6)))
             .when(active && !selected, |el| el.bg(theme.list_hover))
             .when(!selected && !active, |el| el.hover(|style| style.bg(theme.list_hover)))
-            // Folder tujuan jatuh beserta isinya disorot, mengalahkan warna pilihan.
+            // The drop target folder and its contents are highlighted, overriding the selection color.
             .when(dropping, |el| el.bg(theme.drop_target))
             .tooltip(move |window, cx| Tooltip::new(title.clone()).build(window, cx))
             .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| this.on_row_click(&path, is_dir, event.click_count(), window, cx)))
-            // Seret ke folder lain untuk memindah, atau ke area editor untuk membuka (berkas).
+            // Drag to another folder to move, or to the editor area to open (files).
             .on_drag(dragged, |dragged, _, _, cx| {
                 cx.stop_propagation();
                 let icon = if dragged.is_dir { Lucide::Folder } else { Lucide::FileText };
@@ -1251,7 +1251,7 @@ impl Explorer {
             .pl(Self::row_padding(depth))
             .pr_2()
             .text_sm()
-            // Escape membatalkan sebelum masukan sempat menanganinya.
+            // Escape cancels before the input gets a chance to handle it.
             .capture_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 if event.keystroke.key == "escape" {
                     cx.stop_propagation();
@@ -1275,8 +1275,8 @@ impl Explorer {
             .into_any_element()
     }
 
-    /// Folder tujuan jatuh yang disorot barisnya: folder itu dan isinya. Akar proyek tidak disorot di
-    /// baris, melainkan di seluruh pohon (lihat `render_tree`).
+    /// The drop target folder whose rows are highlighted: that folder and its contents. The project root is not highlighted
+    /// on a row, but on the whole tree (see `render_tree`).
     fn highlighted_folder(&self, cx: &App) -> Option<String> {
         let target = self.active_drop_target(cx)?;
         (!self.root.as_deref().is_some_and(|root| same_path(root, target))).then(|| target.to_string())
@@ -1347,7 +1347,7 @@ impl Explorer {
             message(div()).child("Loading…").into_any_element()
         };
 
-        // Dilepas di akar proyek (latar pohon, atau baris berkas di akar): seluruh pohon disorot.
+        // Dropped on the project root (the tree background, or a file row at the root): the whole tree is highlighted.
         let root_target = self.active_drop_target(cx).is_some_and(|dir| same_path(root, dir));
         let this = cx.entity().downgrade();
         div()
@@ -1360,8 +1360,8 @@ impl Explorer {
             .overflow_hidden()
             .when(root_target, |el| el.bg(theme.drop_target))
             .on_key_down(cx.listener(Self::on_key_down))
-            // Seret-lepas ditangani di satu tempat: baris di bawah penunjuk dihitung dari posisinya,
-            // sehingga latar kosong di bawah baris terakhir (akar proyek) ikut ditangani.
+            // Drag and drop is handled in one place: the row under the pointer is computed from its position,
+            // so the empty background below the last row (the project root) is handled too.
             .on_drag_move::<DraggedEntry>(cx.listener(|this, event: &DragMoveEvent<DraggedEntry>, _, cx| {
                 let dragged = event.drag(cx).clone();
                 this.track_drop_target(Some(&dragged), event.bounds, event.event.position, cx);
@@ -1369,7 +1369,7 @@ impl Explorer {
             .on_drag_move::<ExternalPaths>(cx.listener(|this, event: &DragMoveEvent<ExternalPaths>, _, cx| this.track_drop_target(None, event.bounds, event.event.position, cx)))
             .on_drop(cx.listener(|this, dragged: &DraggedEntry, window, cx| this.drop_entry(dragged, window, cx)))
             .on_drop(cx.listener(|this, dropped: &ExternalPaths, window, cx| this.drop_external(dropped, window, cx)))
-            // Menu konteks dibangun dari sasaran ini; baris di bawah penunjuk mengisinya kembali.
+            // The context menu is built from this target; the row under the pointer sets it again.
             .capture_any_mouse_down(cx.listener(|this, _, _, _| this.menu_target = None))
             .on_any_mouse_down(cx.listener(|this, _, window, cx| {
                 if this.edit.is_none() {

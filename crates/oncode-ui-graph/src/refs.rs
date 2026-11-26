@@ -1,4 +1,4 @@
-//! Penyaringan dan pengelompokan ref untuk panel Referensi, serta ringkasan lencana ref pada baris commit.
+//! Filtering and grouping of refs for the References panel, plus the summary of ref badges on commit rows.
 
 use std::collections::{HashMap, HashSet};
 
@@ -28,13 +28,13 @@ impl RefGroups {
     }
 }
 
-/// Nama branch remote tanpa awalan nama remote, mis. `origin/feature/x` → `feature/x`.
+/// A remote branch name without the remote-name prefix, e.g. `origin/feature/x` → `feature/x`.
 pub fn remote_short_name(branch: &RemoteBranch) -> &str {
     branch.name.strip_prefix(&branch.remote).and_then(|rest| rest.strip_prefix('/')).unwrap_or(&branch.name)
 }
 
-/// Ref yang cocok dengan `filter` (substring, tidak peka huruf besar), dikelompokkan untuk ditampilkan.
-/// Branch remote dikelompokkan per remote mengikuti urutan `refs.remotes`; `<remote>/HEAD` dibuang.
+/// Refs matching `filter` (a case-insensitive substring), grouped for display.
+/// Remote branches are grouped per remote following the order of `refs.remotes`; `<remote>/HEAD` is dropped.
 pub fn group_refs(refs: Option<&Refs>, stashes: &[Stash], filter: &str) -> RefGroups {
     let needle = filter.trim().to_lowercase();
     let matches = |texts: &[&str]| needle.is_empty() || texts.iter().any(|t| t.to_lowercase().contains(&needle));
@@ -54,7 +54,7 @@ pub fn group_refs(refs: Option<&Refs>, stashes: &[Stash], filter: &str) -> RefGr
             }
         }
     }
-    // Saat menyaring, remote tanpa branch yang cocok disembunyikan.
+    // While filtering, remotes without matching branches are hidden.
     groups.retain(|g| !g.branches.is_empty() || needle.is_empty());
 
     RefGroups {
@@ -65,16 +65,16 @@ pub fn group_refs(refs: Option<&Refs>, stashes: &[Stash], filter: &str) -> RefGr
     }
 }
 
-/// Satu simpul pohon nama ref yang dipisah `/` (mis. `feature/login` di bawah folder `feature`).
+/// A node of the tree of ref names split by `/` (e.g. `feature/login` under the folder `feature`).
 #[derive(Debug, Clone, PartialEq)]
 pub enum NameNode {
-    /// Folder: nama segmen, path lengkapnya (untuk status buka/tutup), dan isinya.
+    /// Folder: the segment name, its full path (for the open/closed state), and its contents.
     Folder { name: String, path: String, children: Vec<NameNode> },
-    /// Daun: nama segmen terakhir dan indeks item aslinya.
+    /// Leaf: the last segment name and the index of its original item.
     Leaf { name: String, index: usize },
 }
 
-/// Menyusun nama-nama ref menjadi pohon menurut `/`. Urutan kemunculan pertama dipertahankan.
+/// Arranges ref names into a tree by `/`. The order of first appearance is kept.
 pub fn name_tree<'a>(names: impl IntoIterator<Item = &'a str>) -> Vec<NameNode> {
     fn insert(nodes: &mut Vec<NameNode>, prefix: &str, segments: &[&str], index: usize) {
         if segments.len() == 1 {
@@ -103,7 +103,7 @@ pub fn name_tree<'a>(names: impl IntoIterator<Item = &'a str>) -> Vec<NameNode> 
     roots
 }
 
-/// Membagi lencana ref menjadi yang ditampilkan dan yang diringkas sebagai "+N".
+/// Splits ref badges into those shown and those summarized as "+N".
 pub fn summarize_labels(labels: &[RefLabel], max: usize) -> (&[RefLabel], &[RefLabel]) {
     if labels.len() <= max {
         (labels, &[])
@@ -112,10 +112,10 @@ pub fn summarize_labels(labels: &[RefLabel], max: usize) -> (&[RefLabel], &[RefL
     }
 }
 
-/// Apakah `oid` leluhur dari `head_oid`, menurut baris yang sudah dimuat.
-/// Urutan topologis menjamin semua commit di antara HEAD dan leluhurnya muncul lebih dulu,
-/// sehingga jawabannya pasti selama daftar tidak disaring. Mengembalikan `None` bila tidak bisa
-/// ditentukan (HEAD tidak muncul sebelum commit itu, atau commit tidak ada di daftar).
+/// Whether `oid` is an ancestor of `head_oid`, according to the rows already loaded.
+/// Topological order guarantees that all commits between HEAD and its ancestor appear first,
+/// so the answer is definite as long as the list is not filtered. Returns `None` if it cannot
+/// be determined (HEAD does not appear before that commit, or the commit is not in the list).
 pub fn is_ancestor_of_head(rows: &[GraphRow], head_oid: Option<&str>, oid: &str) -> Option<bool> {
     let head_oid = head_oid?;
     if oid == head_oid {
@@ -200,7 +200,7 @@ mod tests {
     fn without_a_filter_everything_is_returned_grouped_by_remote_in_configured_order() {
         let groups = group_refs(Some(&refs()), &stashes(), "");
         assert_eq!(names(&groups.branches), ["main", "feature/login", "fix/typo"]);
-        // Urutan mengikuti `refs.remotes`; remote yang tidak terdaftar (fork) menyusul di belakang.
+        // The order follows `refs.remotes`; a remote that is not listed (fork) comes last.
         assert_eq!(remotes(&groups), ["upstream", "origin", "empty", "fork"]);
         let origin = groups.remotes.iter().find(|g| g.remote == "origin").unwrap();
         assert_eq!(origin.branches.iter().map(|b| b.name.as_str()).collect::<Vec<_>>(), ["origin/main", "origin/feature/login"]);
@@ -222,7 +222,7 @@ mod tests {
         assert_eq!(names(&groups.branches), ["feature/login"]);
         assert_eq!(groups.remotes, [RemoteGroup { remote: "origin".into(), branches: vec![remote_branch("origin/feature/login", "origin", 1)] }]);
         assert_eq!(groups.tags.iter().map(|t| t.name.as_str()).collect::<Vec<_>>(), ["v1.1.0-login"]);
-        // Stash dicocokkan lewat pesannya juga.
+        // A stash is matched by its message too.
         assert_eq!(groups.stashes.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(), ["stash@{0}"]);
     }
 
@@ -284,7 +284,7 @@ mod tests {
         assert_eq!(hidden.iter().map(|l| l.name.as_str()).collect::<Vec<_>>(), ["v1", "v2"]);
     }
 
-    // Riwayat (terbaru di atas):  side(1) ─┐
+    // History (newest on top):    side(1) ─┐
     //                             head(2)  │   head → 3 → 4 ; side → 4
     fn history() -> Vec<GraphRow> {
         vec![row(1, &[4]), row(2, &[3]), row(3, &[4]), row(4, &[5]), row(5, &[])]

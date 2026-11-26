@@ -1,13 +1,13 @@
-//! Kendali aliran keluaran terminal: bila emulator tertinggal memproses, pembacaan PTY di backend dijeda.
+//! Flow control for terminal output: if the emulator falls behind processing, reading the PTY in the backend is paused.
 
-/// Jeda saat antrean melebihi angka ini (dalam byte).
+/// Pause when the queue exceeds this number (in bytes).
 pub const HIGH_WATERMARK: usize = 500_000;
-/// Lanjutkan saat antrean turun di bawah angka ini.
+/// Resume when the queue drops below this number.
 pub const LOW_WATERMARK: usize = 100_000;
 
-/// Menghitung byte yang sudah diterima dari PTY tetapi belum selesai diproses emulator.
-/// `written` dan `processed` mengembalikan `Some(paused)` hanya saat keadaan berubah,
-/// sehingga backend tidak dipanggil pada setiap potongan.
+/// Counts the bytes that have been received from the PTY but not yet finished processing by the
+/// emulator. `written` and `processed` return `Some(paused)` only when the state changes, so the
+/// backend is not called on every chunk.
 #[derive(Debug)]
 pub struct FlowControl {
     pending: usize,
@@ -23,13 +23,13 @@ impl Default for FlowControl {
 }
 
 impl FlowControl {
-    /// Panik bila `low > high` (konfigurasi terbalik).
+    /// Panics if `low > high` (inverted configuration).
     pub fn new(high: usize, low: usize) -> Self {
-        assert!(low <= high, "low watermark harus tidak lebih besar dari high watermark");
+        assert!(low <= high, "low watermark must not be greater than the high watermark");
         Self { pending: 0, paused: false, high, low }
     }
 
-    /// Sebuah potongan diterima dan masuk antrean.
+    /// A chunk was received and entered the queue.
     pub fn written(&mut self, length: usize) -> Option<bool> {
         self.pending += length;
         if !self.paused && self.pending > self.high {
@@ -39,7 +39,7 @@ impl FlowControl {
         None
     }
 
-    /// Emulator selesai memproses sebagian antrean.
+    /// The emulator finished processing part of the queue.
     pub fn processed(&mut self, length: usize) -> Option<bool> {
         self.pending = self.pending.saturating_sub(length);
         if self.paused && self.pending < self.low {
@@ -62,7 +62,7 @@ impl FlowControl {
 mod tests {
     use super::*;
 
-    /// Mencatat panggilan `setPaused` seperti mock di uji versi 0.2.
+    /// Records `setPaused` calls like the mock in the v0.2 tests.
     struct Recorder {
         flow: FlowControl,
         calls: Vec<bool>,
@@ -100,14 +100,14 @@ mod tests {
         r.written(80);
         assert_eq!(r.calls, [true]);
         assert!(r.flow.is_paused());
-        // Potongan yang datang selagi dijeda tidak memicu panggilan kedua.
+        // A chunk that arrives while paused does not trigger a second call.
         r.written(50);
         assert_eq!(r.calls.len(), 1);
 
-        r.processed(80); // 130 tersisa
-        r.processed(80); // 50 tersisa: masih di atas low watermark
+        r.processed(80); // 130 left
+        r.processed(80); // 50 left: still above the low watermark
         assert_eq!(r.calls.len(), 1);
-        r.processed(31); // 19 tersisa
+        r.processed(31); // 19 left
         assert_eq!(r.calls, [true, false]);
         assert!(!r.flow.is_paused());
     }
@@ -116,7 +116,7 @@ mod tests {
     fn exactly_at_low_does_not_resume_and_the_queue_never_goes_negative() {
         let mut r = Recorder::new(100, 20);
         r.written(101);
-        r.processed(81); // tepat 20
+        r.processed(81); // exactly 20
         assert!(r.flow.is_paused());
         r.processed(1000);
         assert_eq!(r.flow.pending(), 0);

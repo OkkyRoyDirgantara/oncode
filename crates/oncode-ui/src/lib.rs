@@ -1,8 +1,8 @@
-//! Kerangka UI native OnCode (GPUI): jendela, tab, panel, command, keybinding.
+//! OnCode native UI framework (GPUI): window, tabs, panels, commands, keybindings.
 //!
-//! Crate fitur (`oncode-ui-*`) bergantung pada crate ini dan mendaftarkan diri lewat
-//! [`register_feature`]. Aturan penting agar tidak terjadi peminjaman ganda entitas:
-//! lihat `docs/PENGEMBANGAN.md` bagian "Aturan entitas".
+//! Feature crates (`oncode-ui-*`) depend on this crate and register themselves through
+//! [`register_feature`]. Key rules to avoid double entity borrows:
+//! see `docs/DEVELOPMENT.md`, section "Entity rules".
 
 pub mod app;
 pub mod app_menu;
@@ -30,10 +30,10 @@ pub use workbench::{
     Workbench, WorkbenchEvent,
 };
 
-/// Ikon Lucide lengkap (± 1.800 ikon) dari paket aset bawaan.
+/// The full Lucide icon set (~1,800 icons) from the bundled asset pack.
 pub use gpui_kit::assets::IconName as Lucide;
 
-/// Menyiapkan semua yang bersifat global. Dipanggil sekali setelah `gpui_kit::init`.
+/// Sets up everything global. Called once after `gpui_kit::init`.
 pub fn init(app: OnCode, cx: &mut gpui_kit::App) {
     app::install(app, cx);
     commands::install(cx);
@@ -43,16 +43,16 @@ pub fn init(app: OnCode, cx: &mut gpui_kit::App) {
     app_menu::install(cx);
 }
 
-/// Membuka jendela baru, opsional langsung dengan sebuah folder.
+/// Opens a new window, optionally straight away with a folder.
 pub fn open_window(folder: Option<std::path::PathBuf>, cx: &mut gpui_kit::App) {
     if let Err(error) = try_open_window(folder, cx) {
         eprintln!("oncode: failed to open a window: {error}");
     }
 }
 
-/// Folder dari proses OnCode lain (`oncode .` di terminal, lihat `app/src/single_instance.rs`):
-/// jendela yang sudah membuka folder itu difokuskan, selain itu dibuka jendela baru (tanpa folder
-/// bila tidak ada), seperti `code` milik VS Code.
+/// Folder from another OnCode process (`oncode .` in a terminal, see `app/src/single_instance.rs`):
+/// a window that already has that folder open is focused, otherwise a new window is opened (without
+/// a folder if there is none), like VS Code's `code`.
 pub fn open_from_command_line(folder: Option<std::path::PathBuf>, cx: &mut gpui_kit::App) {
     cx.activate(true);
     match folder.as_deref().and_then(|folder| shell::window_with_folder(folder, cx)) {
@@ -63,8 +63,8 @@ pub fn open_from_command_line(folder: Option<std::path::PathBuf>, cx: &mut gpui_
     }
 }
 
-/// Seperti [`open_window`], tetapi kegagalannya dikembalikan ke pemanggil (mis. untuk dicatat ke log
-/// saat jendela pertama gagal dibuka, karena aplikasi GUI di Windows tidak punya konsol).
+/// Like [`open_window`], but the failure is returned to the caller (e.g. to be written to a log
+/// when the first window fails to open, since GUI apps on Windows have no console).
 pub fn try_open_window(folder: Option<std::path::PathBuf>, cx: &mut gpui_kit::App) -> gpui_kit::Result<()> {
     use gpui_kit::{px, size, AppContext as _, WindowBounds, WindowOptions};
     let options = WindowOptions {

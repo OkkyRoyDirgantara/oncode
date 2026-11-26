@@ -1,6 +1,6 @@
-//! Ekstensi "Go to Definition without a language server": mencari definisi sebuah simbol di
-//! seluruh proyek (lihat `oncode_workspace::symbols`). Dipakai Ctrl+klik dan F12 bila tidak ada
-//! language server yang menjawab.
+//! The "Go to Definition without a language server" extension: finds a symbol's definition across
+//! the whole project (see `oncode_workspace::symbols`). Used by Ctrl+click and F12 when no
+//! language server answers.
 
 use std::path::Path;
 
@@ -9,24 +9,24 @@ use serde::Serialize;
 use crate::error::{AppError, AppResult};
 use crate::state::Shared;
 
-/// Jumlah kandidat maksimum.
+/// Maximum number of candidates.
 const LIMIT: usize = 20;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SymbolLocation {
-    /// Path absolut.
+    /// Absolute path.
     pub path: String,
-    /// Mulai dari 1.
+    /// Starts from 1.
     pub line: u32,
-    /// Unit UTF-16, mulai dari 0.
+    /// UTF-16 units, starts from 0.
     pub column: u32,
     pub length: u32,
     pub preview: String,
 }
 
-/// Kandidat definisi `symbol` di folder jendela ini, yang paling meyakinkan lebih dulu. Kosong bila
-/// ekstensinya dimatikan. `current` adalah path berkas yang sedang dibuka (didahulukan).
+/// Definition candidates for `symbol` in this window's folder, the most convincing first. Empty if
+/// the extension is turned off. `current` is the path of the file currently open (given priority).
 pub async fn symbol_definitions(core: &Shared, window: &str, symbol: String, current: Option<String>) -> AppResult<Vec<SymbolLocation>> {
     if !core.effective_settings(window).extensions.symbol_search {
         return Ok(Vec::new());
@@ -54,13 +54,13 @@ mod tests {
     #[tokio::test]
     async fn finds_definitions_in_the_open_folder_and_respects_the_setting() {
         let t = TestCore::new();
-        let project = t.project("proyek");
-        std::fs::write(project.join("util.py"), "def bersihkan(teks):\n    return teks\n").unwrap();
-        std::fs::write(project.join("main.py"), "from util import bersihkan\nbersihkan(' a ')\n").unwrap();
+        let project = t.project("project");
+        std::fs::write(project.join("util.py"), "def normalize(text):\n    return text\n").unwrap();
+        std::fs::write(project.join("main.py"), "from util import normalize\nnormalize(' a ')\n").unwrap();
         workspace_open(&t.core, "w1", project.to_string_lossy().into_owned()).await.unwrap();
 
         let current = project.join("main.py").to_string_lossy().into_owned();
-        let found = symbol_definitions(&t.core, "w1", "bersihkan".into(), Some(current.clone())).await.unwrap();
+        let found = symbol_definitions(&t.core, "w1", "normalize".into(), Some(current.clone())).await.unwrap();
         assert_eq!(found.len(), 1, "{found:?}");
         assert_eq!(Path::new(&found[0].path), project.join("util.py"));
         assert_eq!((found[0].line, found[0].column, found[0].length), (1, 4, 9));
@@ -68,6 +68,6 @@ mod tests {
         let mut settings = t.core.user_settings();
         settings.extensions.symbol_search = false;
         t.core.set_user_settings(settings).unwrap();
-        assert!(symbol_definitions(&t.core, "w1", "bersihkan".into(), Some(current)).await.unwrap().is_empty());
+        assert!(symbol_definitions(&t.core, "w1", "normalize".into(), Some(current)).await.unwrap().is_empty());
     }
 }

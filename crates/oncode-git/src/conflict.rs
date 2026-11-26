@@ -1,5 +1,5 @@
-//! Resolusi konflik: tiga versi dari index digabung ulang dengan `git merge-file`
-//! lalu dipecah menjadi segmen untuk editor konflik.
+//! Conflict resolution: the three versions from the index are re-merged with `git merge-file`
+//! and then split into segments for the conflict editor.
 
 use crate::content::is_binary;
 use crate::error::{GitError, Result};
@@ -8,7 +8,7 @@ use crate::repo::Repo;
 use crate::runner::{check_path, Cmd};
 use crate::status::detect_operation;
 
-/// Memecah keluaran `git merge-file --diff3` dengan penanda sepanjang `marker` karakter.
+/// Splits `git merge-file --diff3` output whose markers are `marker` characters long.
 pub fn parse_merge_output(output: &[u8], marker: usize) -> Vec<MergeSegment> {
     #[derive(PartialEq)]
     enum State {
@@ -55,7 +55,7 @@ pub fn parse_merge_output(output: &[u8], marker: usize) -> Vec<MergeSegment> {
     segments
 }
 
-/// Panjang penanda yang tidak bertabrakan dengan isi berkas mana pun.
+/// A marker length that does not collide with the content of any file.
 fn pick_marker_size(inputs: &[&[u8]]) -> usize {
     let mut size = 16;
     loop {
@@ -85,7 +85,7 @@ fn kind_from_stages(base: bool, ours: bool, theirs: bool) -> ConflictKind {
 }
 
 impl Repo {
-    /// Label kedua sisi konflik memakai nama branch/commit yang sebenarnya.
+    /// Labels for both sides of the conflict, using the actual branch/commit names.
     async fn conflict_labels(&self) -> (String, String) {
         let head = self
             .run(Cmd::new(["rev-parse", "--abbrev-ref", "HEAD"]))
@@ -96,7 +96,7 @@ impl Repo {
         let head_label = head.unwrap_or_else(|| "HEAD".to_string());
         match detect_operation(self.git_dir()) {
             Some(Operation::Merge { incoming }) => (head_label, incoming),
-            // Saat rebase, sisi "ours" adalah dasar baru dan "theirs" adalah commit milik branch yang sedang di-rebase.
+            // During a rebase, the "ours" side is the new base and "theirs" is the commit from the branch being rebased.
             Some(Operation::Rebase { onto, head_name, stopped_at, .. }) => {
                 let incoming = match stopped_at {
                     Some(sha) if !head_name.is_empty() => format!("{head_name} ({sha})"),
@@ -111,7 +111,7 @@ impl Repo {
         }
     }
 
-    /// Tiga versi berkas konflik beserta hasil penggabungan ulangnya.
+    /// The three versions of a conflicted file together with the result of re-merging them.
     pub async fn conflict_detail(&self, path: &str) -> Result<ConflictDetail> {
         let path = check_path(path)?;
         let base = self.blob(&format!(":1:{path}")).await?;
@@ -163,8 +163,8 @@ impl Repo {
         })
     }
 
-    /// Menyelesaikan konflik dengan memakai satu sisi seutuhnya. Bila sisi itu
-    /// menghapus berkas, berkasnya dihapus.
+    /// Resolves a conflict by taking one side entirely. If that side
+    /// deleted the file, the file is deleted.
     pub async fn resolve_with_side(&self, path: &str, side: ConflictSide) -> Result<()> {
         let path = check_path(path)?;
         let (stage, flag) = match side {
@@ -181,14 +181,14 @@ impl Repo {
         }
     }
 
-    /// Menandai konflik selesai dengan isi berkas di working tree saat ini.
+    /// Marks a conflict as resolved using the file's current working tree content.
     pub async fn mark_resolved(&self, path: &str) -> Result<()> {
         let path = check_path(path)?;
         let _guard = self.lock().await;
         self.run(Cmd::new(["add"]).paths([path]).write()).await.map(drop)
     }
 
-    /// Menyelesaikan konflik dengan menghapus berkas.
+    /// Resolves a conflict by deleting the file.
     pub async fn resolve_by_deleting(&self, path: &str) -> Result<()> {
         let path = check_path(path)?;
         let _guard = self.lock().await;

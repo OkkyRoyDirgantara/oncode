@@ -1,4 +1,4 @@
-//! Penyedia GitLab terhadap server HTTP tiruan.
+//! The GitLab provider against a mock HTTP server.
 
 mod common;
 
@@ -11,16 +11,16 @@ use serde_json::{json, Value};
 use wiremock::matchers::{body_json, method, path, query_param, query_param_is_missing};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-const TOKEN: &str = "glpat-token_rahasia_456";
-/// Jalur proyek `tim/sub/proyek` setelah di-encode.
-const PROJECT: &str = "/projects/tim%2Fsub%2Fproyek";
+const TOKEN: &str = "glpat-token_secret_456";
+/// The path of project `team/sub/project` after encoding.
+const PROJECT: &str = "/projects/team%2Fsub%2Fproject";
 
 fn client(server: &MockServer) -> Box<dyn ForgeProvider + Send + Sync> {
     provider(&ForgeHost::gitlab(), TOKEN, Some(&server.uri()))
 }
 
 fn proyek() -> RepoRef {
-    repo("gitlab.com", "tim/sub", "proyek")
+    repo("gitlab.com", "team/sub", "project")
 }
 
 fn project_json(path_with_namespace: &str) -> Value {
@@ -46,12 +46,12 @@ fn mr_json(iid: u32, title: &str) -> Value {
         "state": "opened",
         "draft": false,
         "work_in_progress": false,
-        "author": { "username": "budi", "name": "Budi", "avatar_url": "https://gitlab.com/uploads/budi.png" },
-        "source_branch": "fitur",
+        "author": { "username": "alice", "name": "Alice", "avatar_url": "https://gitlab.com/uploads/alice.png" },
+        "source_branch": "feature",
         "target_branch": "main",
         "sha": "8888888888888888888888888888888888888888",
         "updated_at": "2024-05-01T19:34:56.000+07:00",
-        "web_url": format!("https://gitlab.com/tim/sub/proyek/-/merge_requests/{iid}"),
+        "web_url": format!("https://gitlab.com/team/sub/project/-/merge_requests/{iid}"),
         "source_project_id": 42,
         "target_project_id": 42,
         "labels": [],
@@ -66,8 +66,8 @@ async fn current_user_and_request_headers() {
         .and(path("/user"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "id": 7,
-            "username": "budi",
-            "name": "Budi Santoso",
+            "username": "alice",
+            "name": "Alice Smith",
             "avatar_url": "https://gitlab.com/uploads/-/system/user/avatar/7/avatar.png",
         })))
         .expect(1)
@@ -75,16 +75,16 @@ async fn current_user_and_request_headers() {
         .await;
 
     let account = client(&server).current_user().await.expect("current_user");
-    assert_eq!(account.id, "gitlab:gitlab.com:budi");
+    assert_eq!(account.id, "gitlab:gitlab.com:alice");
     assert_eq!(account.kind, ForgeKind::GitLab);
     assert_eq!(account.host, "https://gitlab.com");
-    assert_eq!(account.username, "budi");
-    assert_eq!(account.display_name, "Budi Santoso");
+    assert_eq!(account.username, "alice");
+    assert_eq!(account.display_name, "Alice Smith");
     assert_eq!(account.avatar_url.as_deref(), Some("https://gitlab.com/uploads/-/system/user/avatar/7/avatar.png"));
 
     let requests = received(&server).await;
     let request = &requests[0];
-    assert_eq!(header(request, "authorization"), Some("Bearer glpat-token_rahasia_456"));
+    assert_eq!(header(request, "authorization"), Some("Bearer glpat-token_secret_456"));
     assert_eq!(header(request, "user-agent"), Some("OnCode"));
     assert_eq!(header(request, "accept"), Some("application/json"));
     assert_eq!(header(request, "private-token"), None);
@@ -96,32 +96,32 @@ async fn self_hosted_relative_avatar_becomes_absolute() {
     Mock::given(method("GET"))
         .and(path("/user"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "username": "siti",
+            "username": "carol",
             "name": "",
-            "avatar_url": "/uploads/-/system/user/avatar/3/siti.png",
+            "avatar_url": "/uploads/-/system/user/avatar/3/carol.png",
         })))
         .mount(&server)
         .await;
 
-    let host = ForgeHost::new(ForgeKind::GitLab, "https://git.perusahaan.id/");
+    let host = ForgeHost::new(ForgeKind::GitLab, "https://git.example.com/");
     let account = provider(&host, TOKEN, Some(&server.uri())).current_user().await.expect("current_user");
-    assert_eq!(account.id, "gitlab:git.perusahaan.id:siti");
-    assert_eq!(account.host, "https://git.perusahaan.id");
-    assert_eq!(account.display_name, "siti");
+    assert_eq!(account.id, "gitlab:git.example.com:carol");
+    assert_eq!(account.host, "https://git.example.com");
+    assert_eq!(account.display_name, "carol");
     assert_eq!(
         account.avatar_url.as_deref(),
-        Some("https://git.perusahaan.id/uploads/-/system/user/avatar/3/siti.png")
+        Some("https://git.example.com/uploads/-/system/user/avatar/3/carol.png")
     );
 }
 
 #[tokio::test]
 async fn list_repos_pages_through_next_page_header() {
     let server = MockServer::start().await;
-    let mut internal_fork = project_json("tim/internal");
+    let mut internal_fork = project_json("team/internal");
     internal_fork["visibility"] = json!("internal");
-    internal_fork["forked_from_project"] = json!({ "id": 1, "path_with_namespace": "asal/internal" });
-    internal_fork["description"] = json!("Proyek internal");
-    let mut empty_project = project_json("tim/kosong");
+    internal_fork["forked_from_project"] = json!({ "id": 1, "path_with_namespace": "origin/internal" });
+    internal_fork["description"] = json!("Internal project");
+    let mut empty_project = project_json("team/empty");
     empty_project["visibility"] = json!("private");
     empty_project["default_branch"] = Value::Null;
     Mock::given(method("GET"))
@@ -136,7 +136,7 @@ async fn list_repos_pages_through_next_page_header() {
             ResponseTemplate::new(200)
                 .insert_header("x-next-page", "2")
                 .insert_header("x-total-pages", "2")
-                .set_body_json(json!([project_json("tim/sub/proyek"), internal_fork, empty_project])),
+                .set_body_json(json!([project_json("team/sub/project"), internal_fork, empty_project])),
         )
         .expect(1)
         .mount(&server)
@@ -147,7 +147,7 @@ async fn list_repos_pages_through_next_page_header() {
         .and(query_param("page", "2"))
         .and(query_param_is_missing("search"))
         .respond_with(
-            ResponseTemplate::new(200).insert_header("x-next-page", "").set_body_json(json!([project_json("tim/akhir")])),
+            ResponseTemplate::new(200).insert_header("x-next-page", "").set_body_json(json!([project_json("team/last")])),
         )
         .expect(1)
         .mount(&server)
@@ -158,24 +158,24 @@ async fn list_repos_pages_through_next_page_header() {
     assert_eq!(first.next_page, Some(2));
     assert_eq!(first.items.len(), 3);
     let project = &first.items[0];
-    assert_eq!(project.full_name, "tim/sub/proyek");
+    assert_eq!(project.full_name, "team/sub/project");
     assert_eq!(project.description, "");
     assert!(!project.private);
     assert!(!project.fork);
-    assert_eq!(project.clone_url_https, "https://gitlab.com/tim/sub/proyek.git");
-    assert_eq!(project.clone_url_ssh, "git@gitlab.com:tim/sub/proyek.git");
+    assert_eq!(project.clone_url_https, "https://gitlab.com/team/sub/project.git");
+    assert_eq!(project.clone_url_ssh, "git@gitlab.com:team/sub/project.git");
     assert_eq!(project.default_branch, "main");
     assert_eq!(project.updated_at, 1_714_566_896.5);
-    assert_eq!(project.web_url, "https://gitlab.com/tim/sub/proyek");
-    assert!(first.items[1].private, "internal dihitung privat");
+    assert_eq!(project.web_url, "https://gitlab.com/team/sub/project");
+    assert!(first.items[1].private, "internal counts as private");
     assert!(first.items[1].fork);
-    assert_eq!(first.items[1].description, "Proyek internal");
+    assert_eq!(first.items[1].description, "Internal project");
     assert!(first.items[2].private);
     assert_eq!(first.items[2].default_branch, "");
 
     let last = client.list_repos("", 2).await.expect("list_repos");
     assert_eq!(last.next_page, None);
-    assert_eq!(last.items[0].full_name, "tim/akhir");
+    assert_eq!(last.items[0].full_name, "team/last");
 }
 
 #[tokio::test]
@@ -187,7 +187,7 @@ async fn list_repos_searches_server_side() {
         .and(query_param("search", "on code"))
         .and(query_param("per_page", "30"))
         .and(query_param("page", "3"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!([project_json("tim/oncode")])))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!([project_json("team/oncode")])))
         .expect(1)
         .mount(&server)
         .await;
@@ -201,11 +201,11 @@ async fn list_repos_searches_server_side() {
 async fn list_pull_requests_sends_filter_query() {
     let server = MockServer::start().await;
     let merge_requests = format!("{PROJECT}/merge_requests");
-    let mut draft = mr_json(4, "Draft: Masih dikerjakan");
+    let mut draft = mr_json(4, "Draft: Work in progress");
     draft["draft"] = json!(true);
-    let mut from_fork = mr_json(3, "Dari fork");
+    let mut from_fork = mr_json(3, "From fork");
     from_fork["source_project_id"] = json!(99);
-    from_fork["author"] = json!({ "username": "tamu", "avatar_url": "/uploads/tamu.png" });
+    from_fork["author"] = json!({ "username": "guest", "avatar_url": "/uploads/guest.png" });
 
     // Open
     Mock::given(method("GET"))
@@ -220,15 +220,15 @@ async fn list_pull_requests_sends_filter_query() {
         .respond_with(
             ResponseTemplate::new(200)
                 .insert_header("x-next-page", "2")
-                .set_body_json(json!([mr_json(5, "Tambah fitur"), draft, from_fork])),
+                .set_body_json(json!([mr_json(5, "Add feature"), draft, from_fork])),
         )
         .expect(1)
         .mount(&server)
         .await;
     // All
-    let mut merged = mr_json(2, "Sudah masuk");
+    let mut merged = mr_json(2, "Already merged");
     merged["state"] = json!("merged");
-    let mut closed = mr_json(1, "Ditutup");
+    let mut closed = mr_json(1, "Closed");
     closed["state"] = json!("closed");
     Mock::given(method("GET"))
         .and(path(merge_requests.as_str()))
@@ -249,24 +249,24 @@ async fn list_pull_requests_sends_filter_query() {
         .and(query_param("scope", "created_by_me"))
         .and(query_param("order_by", "updated_at"))
         .and(query_param("page", "1"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!([mr_json(5, "Tambah fitur")])))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!([mr_json(5, "Add feature")])))
         .expect(1)
         .mount(&server)
         .await;
-    // ReviewRequested: username diambil dari /user, sekali saja.
+    // ReviewRequested: the username is fetched from /user, only once.
     Mock::given(method("GET"))
         .and(path("/user"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "username": "budi", "name": "Budi" })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "username": "alice", "name": "Alice" })))
         .expect(1)
         .mount(&server)
         .await;
     Mock::given(method("GET"))
         .and(path(merge_requests.as_str()))
         .and(query_param("state", "opened"))
-        .and(query_param("reviewer_username", "budi"))
+        .and(query_param("reviewer_username", "alice"))
         .and(query_param("order_by", "updated_at"))
         .and(query_param_is_missing("scope"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!([mr_json(6, "Tolong direview")])))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!([mr_json(6, "Please review")])))
         .expect(2)
         .mount(&server)
         .await;
@@ -277,20 +277,20 @@ async fn list_pull_requests_sends_filter_query() {
     assert_eq!(open.items.len(), 3);
     let first = &open.items[0];
     assert_eq!(first.number, 5);
-    assert_eq!(first.title, "Tambah fitur");
+    assert_eq!(first.title, "Add feature");
     assert_eq!(first.state, PrState::Open);
     assert!(!first.draft);
-    assert_eq!(first.author, "budi");
-    assert_eq!(first.author_avatar.as_deref(), Some("https://gitlab.com/uploads/budi.png"));
-    assert_eq!(first.source_branch, "fitur");
+    assert_eq!(first.author, "alice");
+    assert_eq!(first.author_avatar.as_deref(), Some("https://gitlab.com/uploads/alice.png"));
+    assert_eq!(first.source_branch, "feature");
     assert_eq!(first.target_branch, "main");
     assert_eq!(first.head_sha, "8888888888888888888888888888888888888888");
     assert_eq!(first.updated_at, 1_714_566_896.0);
-    assert_eq!(first.web_url, "https://gitlab.com/tim/sub/proyek/-/merge_requests/5");
+    assert_eq!(first.web_url, "https://gitlab.com/team/sub/project/-/merge_requests/5");
     assert!(!first.is_cross_repo);
     assert!(open.items[1].draft);
     assert!(open.items[2].is_cross_repo);
-    assert_eq!(open.items[2].author_avatar.as_deref(), Some("https://gitlab.com/uploads/tamu.png"));
+    assert_eq!(open.items[2].author_avatar.as_deref(), Some("https://gitlab.com/uploads/guest.png"));
 
     let all = client.list_pull_requests(&proyek(), PrFilter::All, 2).await.expect("all");
     assert_eq!(all.next_page, None);
@@ -302,23 +302,23 @@ async fn list_pull_requests_sends_filter_query() {
 
     let review = client.list_pull_requests(&proyek(), PrFilter::ReviewRequested, 1).await.expect("review");
     assert_eq!(review.items.iter().map(|p| p.number).collect::<Vec<_>>(), [6]);
-    // Panggilan kedua memakai username yang sudah diingat.
-    client.list_pull_requests(&proyek(), PrFilter::ReviewRequested, 1).await.expect("review lagi");
+    // The second call uses the username that was already remembered.
+    client.list_pull_requests(&proyek(), PrFilter::ReviewRequested, 1).await.expect("review again");
 
-    // Jalur proyek dikirim ter-encode, bukan sebagai segmen terpisah.
+    // The project path is sent encoded, not as separate segments.
     let requests = received(&server).await;
-    assert!(requests[0].url.as_str().contains("/projects/tim%2Fsub%2Fproyek/merge_requests?"), "{}", requests[0].url);
+    assert!(requests[0].url.as_str().contains("/projects/team%2Fsub%2Fproject/merge_requests?"), "{}", requests[0].url);
     assert_eq!(query_value(&requests[0], "state").as_deref(), Some("opened"));
 }
 
 #[tokio::test]
 async fn get_pull_request_merged_with_details() {
     let server = MockServer::start().await;
-    let mut mr = mr_json(12, "Perbaiki login");
+    let mut mr = mr_json(12, "Fix login");
     mr["state"] = json!("merged");
-    mr["description"] = json!("## Ringkasan\n\nMemperbaiki *login*.");
-    mr["reviewers"] = json!([{ "username": "siti" }, { "username": "agus" }]);
-    mr["labels"] = json!(["bug", "prioritas"]);
+    mr["description"] = json!("## Summary\n\nFixes *login*.");
+    mr["reviewers"] = json!([{ "username": "carol" }, { "username": "dave" }]);
+    mr["labels"] = json!(["bug", "priority"]);
     mr["merge_status"] = json!("can_be_merged");
     mr["has_conflicts"] = json!(false);
     mr["changes_count"] = json!("5");
@@ -344,13 +344,13 @@ async fn get_pull_request_merged_with_details() {
     assert_eq!(detail.pull_request.number, 12);
     assert_eq!(detail.pull_request.state, PrState::Merged);
     assert!(!detail.pull_request.draft);
-    assert_eq!(detail.body, "## Ringkasan\n\nMemperbaiki *login*.");
-    assert_eq!(detail.reviewers, ["siti", "agus"]);
-    assert_eq!(detail.labels, ["bug", "prioritas"]);
+    assert_eq!(detail.body, "## Summary\n\nFixes *login*.");
+    assert_eq!(detail.reviewers, ["carol", "dave"]);
+    assert_eq!(detail.labels, ["bug", "priority"]);
     assert_eq!(detail.mergeable, Some(true));
     assert_eq!(detail.commits, 3);
     assert_eq!(detail.changed_files, 5);
-    // GitLab tidak menyediakan jumlah baris.
+    // GitLab does not provide line counts.
     assert_eq!(detail.additions, 0);
     assert_eq!(detail.deletions, 0);
 }
@@ -358,9 +358,9 @@ async fn get_pull_request_merged_with_details() {
 #[tokio::test]
 async fn get_pull_request_draft_with_conflicts() {
     let server = MockServer::start().await;
-    let mut mr = mr_json(13, "Draft: Masih dikerjakan");
-    // Instance lama hanya mengirim `work_in_progress`.
-    mr.as_object_mut().expect("objek").remove("draft");
+    let mut mr = mr_json(13, "Draft: Work in progress");
+    // Old instances only send `work_in_progress`.
+    mr.as_object_mut().expect("object").remove("draft");
     mr["work_in_progress"] = json!(true);
     mr["description"] = Value::Null;
     mr["merge_status"] = json!("cannot_be_merged");
@@ -372,7 +372,7 @@ async fn get_pull_request_draft_with_conflicts() {
         .respond_with(ResponseTemplate::new(200).set_body_json(mr))
         .mount(&server)
         .await;
-    // Tanpa header `x-total`, jumlah dihitung dari isi jawaban.
+    // Without the `x-total` header, the count is computed from the response body.
     Mock::given(method("GET"))
         .and(path(format!("{PROJECT}/merge_requests/13/commits")))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!([{ "id": "a" }, { "id": "b" }])))
@@ -392,7 +392,7 @@ async fn get_pull_request_draft_with_conflicts() {
 #[tokio::test]
 async fn get_pull_request_mergeability_unknown_while_checking() {
     let server = MockServer::start().await;
-    let mut mr = mr_json(14, "Baru dibuat");
+    let mut mr = mr_json(14, "Newly created");
     mr["merge_status"] = json!("checking");
     mr["changes_count"] = Value::Null;
     Mock::given(method("GET"))
@@ -422,7 +422,7 @@ async fn list_checks_maps_latest_pipeline_jobs() {
         .and(query_param("sort", "desc"))
         .and(query_param("per_page", "1"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!([
-            { "id": 77, "status": "failed", "web_url": "https://gitlab.com/tim/sub/proyek/-/pipelines/77" },
+            { "id": 77, "status": "failed", "web_url": "https://gitlab.com/team/sub/project/-/pipelines/77" },
         ])))
         .expect(1)
         .mount(&server)
@@ -433,20 +433,20 @@ async fn list_checks_maps_latest_pipeline_jobs() {
             "name": name,
             "status": status,
             "allow_failure": allow_failure,
-            "web_url": format!("https://gitlab.com/tim/sub/proyek/-/jobs/{id}"),
+            "web_url": format!("https://gitlab.com/team/sub/project/-/jobs/{id}"),
         })
     };
-    // API mengurutkan dari id terbesar; hasil akhirnya harus urut naik.
+    // The API sorts from the largest id; the final result must be in ascending order.
     Mock::given(method("GET"))
         .and(path(format!("{PROJECT}/pipelines/77/jobs")))
         .and(query_param("per_page", "100"))
         .and(query_param("page", "1"))
         .respond_with(ResponseTemplate::new(200).insert_header("x-next-page", "2").set_body_json(json!([
             job(10, "manual", "manual", false),
-            job(9, "lewati", "skipped", false),
-            job(8, "batal", "canceled", false),
-            job(7, "boleh-gagal", "failed", true),
-            job(6, "gagal", "failed", false),
+            job(9, "skipped", "skipped", false),
+            job(8, "canceled", "canceled", false),
+            job(7, "allowed-to-fail", "failed", true),
+            job(6, "failed", "failed", false),
         ])))
         .expect(1)
         .mount(&server)
@@ -456,11 +456,11 @@ async fn list_checks_maps_latest_pipeline_jobs() {
         .and(query_param("per_page", "100"))
         .and(query_param("page", "2"))
         .respond_with(ResponseTemplate::new(200).insert_header("x-next-page", "").set_body_json(json!([
-            job(5, "lulus", "success", false),
-            job(4, "jalan", "running", false),
-            job(3, "tunggu-sumber", "waiting_for_resource", false),
-            job(2, "antre", "pending", false),
-            job(1, "dibuat", "created", false),
+            job(5, "passed", "success", false),
+            job(4, "running", "running", false),
+            job(3, "waiting-for-resource", "waiting_for_resource", false),
+            job(2, "queued", "pending", false),
+            job(1, "created", "created", false),
         ])))
         .expect(1)
         .mount(&server)
@@ -471,19 +471,19 @@ async fn list_checks_maps_latest_pipeline_jobs() {
     assert_eq!(
         states,
         [
-            ("dibuat", CheckState::Pending),
-            ("antre", CheckState::Pending),
-            ("tunggu-sumber", CheckState::Pending),
-            ("jalan", CheckState::Running),
-            ("lulus", CheckState::Success),
-            ("gagal", CheckState::Failure),
-            ("boleh-gagal", CheckState::Neutral),
-            ("batal", CheckState::Cancelled),
-            ("lewati", CheckState::Skipped),
+            ("created", CheckState::Pending),
+            ("queued", CheckState::Pending),
+            ("waiting-for-resource", CheckState::Pending),
+            ("running", CheckState::Running),
+            ("passed", CheckState::Success),
+            ("failed", CheckState::Failure),
+            ("allowed-to-fail", CheckState::Neutral),
+            ("canceled", CheckState::Cancelled),
+            ("skipped", CheckState::Skipped),
             ("manual", CheckState::Neutral),
         ]
     );
-    assert_eq!(checks[0].url.as_deref(), Some("https://gitlab.com/tim/sub/proyek/-/jobs/1"));
+    assert_eq!(checks[0].url.as_deref(), Some("https://gitlab.com/team/sub/project/-/jobs/1"));
 }
 
 #[tokio::test]
@@ -491,15 +491,15 @@ async fn list_checks_without_pipeline_or_jobs() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path(format!("{PROJECT}/pipelines")))
-        .and(query_param("sha", "tanpa-ci"))
+        .and(query_param("sha", "no-ci"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!([])))
         .mount(&server)
         .await;
     Mock::given(method("GET"))
         .and(path(format!("{PROJECT}/pipelines")))
-        .and(query_param("sha", "tanpa-job"))
+        .and(query_param("sha", "no-jobs"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!([
-            { "id": 78, "status": "running", "web_url": "https://gitlab.com/tim/sub/proyek/-/pipelines/78" },
+            { "id": 78, "status": "running", "web_url": "https://gitlab.com/team/sub/project/-/pipelines/78" },
         ])))
         .mount(&server)
         .await;
@@ -510,28 +510,28 @@ async fn list_checks_without_pipeline_or_jobs() {
         .await;
 
     let client = client(&server);
-    assert!(client.list_checks(&proyek(), "tanpa-ci").await.expect("checks").is_empty());
+    assert!(client.list_checks(&proyek(), "no-ci").await.expect("checks").is_empty());
 
-    // Pipeline tanpa job dilaporkan sebagai satu pemeriksaan dengan status pipelinenya.
-    let checks = client.list_checks(&proyek(), "tanpa-job").await.expect("checks");
+    // A pipeline without jobs is reported as a single check with the pipeline's status.
+    let checks = client.list_checks(&proyek(), "no-jobs").await.expect("checks");
     assert_eq!(checks.len(), 1);
     assert_eq!(checks[0].name, "Pipeline #78");
     assert_eq!(checks[0].state, CheckState::Running);
-    assert_eq!(checks[0].url.as_deref(), Some("https://gitlab.com/tim/sub/proyek/-/pipelines/78"));
+    assert_eq!(checks[0].url.as_deref(), Some("https://gitlab.com/team/sub/project/-/pipelines/78"));
 }
 
 #[tokio::test]
 async fn create_pull_request_draft_prefixes_title() {
     let server = MockServer::start().await;
-    let mut created = mr_json(21, "Draft: Tambah fitur ekspor");
+    let mut created = mr_json(21, "Draft: Add export feature");
     created["draft"] = json!(true);
     Mock::given(method("POST"))
         .and(path(format!("{PROJECT}/merge_requests")))
         .and(body_json(json!({
-            "source_branch": "fitur",
+            "source_branch": "feature",
             "target_branch": "main",
-            "title": "Draft: Tambah fitur ekspor",
-            "description": "Deskripsi **Markdown**.",
+            "title": "Draft: Add export feature",
+            "description": "Description **Markdown**.",
         })))
         .respond_with(ResponseTemplate::new(201).set_body_json(created))
         .expect(1)
@@ -539,20 +539,20 @@ async fn create_pull_request_draft_prefixes_title() {
         .await;
 
     let input = NewPullRequest {
-        title: "Tambah fitur ekspor".into(),
-        body: "Deskripsi **Markdown**.".into(),
-        source_branch: "fitur".into(),
+        title: "Add export feature".into(),
+        body: "Description **Markdown**.".into(),
+        source_branch: "feature".into(),
         target_branch: "main".into(),
         draft: true,
     };
     let pull = client(&server).create_pull_request(&proyek(), &input).await.expect("create");
     assert_eq!(pull.number, 21);
     assert!(pull.draft);
-    assert_eq!(pull.title, "Draft: Tambah fitur ekspor");
+    assert_eq!(pull.title, "Draft: Add export feature");
 
     let requests = received(&server).await;
     assert_eq!(header(&requests[0], "content-type"), Some("application/json"));
-    assert_eq!(header(&requests[0], "authorization"), Some("Bearer glpat-token_rahasia_456"));
+    assert_eq!(header(&requests[0], "authorization"), Some("Bearer glpat-token_secret_456"));
 }
 
 #[tokio::test]
@@ -561,40 +561,40 @@ async fn create_pull_request_non_draft_and_already_prefixed() {
     Mock::given(method("POST"))
         .and(path(format!("{PROJECT}/merge_requests")))
         .and(body_json(json!({
-            "source_branch": "fitur",
+            "source_branch": "feature",
             "target_branch": "main",
-            "title": "Tambah fitur ekspor",
+            "title": "Add export feature",
             "description": "",
         })))
-        .respond_with(ResponseTemplate::new(201).set_body_json(mr_json(22, "Tambah fitur ekspor")))
+        .respond_with(ResponseTemplate::new(201).set_body_json(mr_json(22, "Add export feature")))
         .expect(1)
         .mount(&server)
         .await;
-    // Judul yang sudah berawalan draft tidak diberi awalan ganda.
+    // A title that already has a draft prefix is not given a double prefix.
     Mock::given(method("POST"))
         .and(path(format!("{PROJECT}/merge_requests")))
         .and(body_json(json!({
-            "source_branch": "fitur",
+            "source_branch": "feature",
             "target_branch": "main",
-            "title": "[Draft] Tambah fitur ekspor",
+            "title": "[Draft] Add export feature",
             "description": "",
         })))
-        .respond_with(ResponseTemplate::new(201).set_body_json(mr_json(23, "[Draft] Tambah fitur ekspor")))
+        .respond_with(ResponseTemplate::new(201).set_body_json(mr_json(23, "[Draft] Add export feature")))
         .expect(1)
         .mount(&server)
         .await;
 
     let client = client(&server);
     let mut input = NewPullRequest {
-        title: "Tambah fitur ekspor".into(),
+        title: "Add export feature".into(),
         body: String::new(),
-        source_branch: "fitur".into(),
+        source_branch: "feature".into(),
         target_branch: "main".into(),
         draft: false,
     };
     assert_eq!(client.create_pull_request(&proyek(), &input).await.expect("create").number, 22);
 
-    input.title = "[Draft] Tambah fitur ekspor".into();
+    input.title = "[Draft] Add export feature".into();
     input.draft = true;
     assert_eq!(client.create_pull_request(&proyek(), &input).await.expect("create").number, 23);
 }
@@ -611,9 +611,9 @@ async fn create_pull_request_conflict_is_invalid_input() {
         .await;
 
     let input = NewPullRequest {
-        title: "Judul".into(),
+        title: "Title".into(),
         body: String::new(),
-        source_branch: "fitur".into(),
+        source_branch: "feature".into(),
         target_branch: "main".into(),
         draft: false,
     };
@@ -625,7 +625,7 @@ async fn create_pull_request_conflict_is_invalid_input() {
 #[tokio::test]
 async fn default_branch_reads_project() {
     let server = MockServer::start().await;
-    let mut project = project_json("tim/sub/proyek");
+    let mut project = project_json("team/sub/project");
     project["default_branch"] = json!("develop");
     Mock::given(method("GET"))
         .and(path(PROJECT))
@@ -633,17 +633,17 @@ async fn default_branch_reads_project() {
         .expect(1)
         .mount(&server)
         .await;
-    let mut empty = project_json("tim/kosong");
+    let mut empty = project_json("team/empty");
     empty["default_branch"] = Value::Null;
     Mock::given(method("GET"))
-        .and(path("/projects/tim%2Fkosong"))
+        .and(path("/projects/team%2Fempty"))
         .respond_with(ResponseTemplate::new(200).set_body_json(empty))
         .mount(&server)
         .await;
 
     let client = client(&server);
     assert_eq!(client.default_branch(&proyek()).await.expect("default_branch"), "develop");
-    let err = client.default_branch(&repo("gitlab.com", "tim", "kosong")).await.expect_err("repo kosong");
+    let err = client.default_branch(&repo("gitlab.com", "team", "empty")).await.expect_err("empty repo");
     assert_error(&err, ForgeErrorCode::InvalidResponse, TOKEN);
 }
 
@@ -704,7 +704,7 @@ async fn http_status_maps_to_error_code() {
         }
         Mock::given(method("GET")).and(path(PROJECT)).respond_with(response).mount(&server).await;
 
-        let err = client(&server).default_branch(&proyek()).await.expect_err("harus gagal");
+        let err = client(&server).default_branch(&proyek()).await.expect_err("must fail");
         assert_eq!(err.code, case.expected, "status {} header {:?}: {}", case.status, case.headers, err.message);
         assert_error(&err, case.expected, TOKEN);
     }
@@ -715,14 +715,14 @@ async fn malformed_json_and_unreachable_server() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/user"))
-        .respond_with(ResponseTemplate::new(200).set_body_string("<html>masuk dulu</html>"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("<html>log in first</html>"))
         .mount(&server)
         .await;
 
-    let err = client(&server).current_user().await.expect_err("bukan json");
+    let err = client(&server).current_user().await.expect_err("not json");
     assert_error(&err, ForgeErrorCode::InvalidResponse, TOKEN);
 
     let uri = common::closed_port_uri();
-    let err = provider(&ForgeHost::gitlab(), TOKEN, Some(&uri)).current_user().await.expect_err("tidak terhubung");
+    let err = provider(&ForgeHost::gitlab(), TOKEN, Some(&uri)).current_user().await.expect_err("not connected");
     assert_error(&err, ForgeErrorCode::Network, TOKEN);
 }

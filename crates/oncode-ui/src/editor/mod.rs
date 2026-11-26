@@ -1,5 +1,5 @@
-//! Fitur editor: jenis tab `file`, penyimpanan, status bar, dan reaksi terhadap perubahan
-//! berkas dari luar.
+//! The editor feature: the `file` tab kind, saving, the status bar, and reacting to file
+//! changes from outside.
 
 mod buffer;
 pub mod format;
@@ -28,14 +28,14 @@ use crate::shell::file_tab;
 use crate::workbench::{register_feature, register_tab_kind, Env, StatusAlign, StatusItem, TabContent, TabKind, Workbench, WorkbenchEvent};
 use crate::Lucide;
 
-/// Cara membuka sebuah berkas.
+/// How to open a file.
 #[derive(Debug, Clone, Default)]
 pub struct OpenFile {
-    /// Path absolut.
+    /// Absolute path.
     pub path: String,
     pub preview: bool,
     pub to_side: bool,
-    /// Posisi yang langsung ditampilkan.
+    /// The position to show right away.
     pub reveal: Option<Reveal>,
 }
 
@@ -54,14 +54,14 @@ impl OpenFile {
         self
     }
 
-    /// `line` mulai dari 1, `column` mulai dari 0 (karakter).
+    /// `line` starts at 1, `column` starts at 0 (characters).
     pub fn at(mut self, line: u32, column: u32, length: Option<u32>) -> Self {
         self.reveal = Some(Reveal { line, column, length });
         self
     }
 }
 
-/// Membuka berkas di editor, opsional langsung melompat ke sebuah posisi.
+/// Opens a file in the editor, optionally jumping straight to a position.
 pub fn open_file(workbench: &mut Workbench, mut options: OpenFile, window: &mut Window, cx: &mut Context<Workbench>) {
     options.path = file_path(&options.path);
     if let (Some(reveal), Some(buffers)) = (options.reveal.clone(), workbench.extension::<Entity<Buffers>>()) {
@@ -71,12 +71,12 @@ pub fn open_file(workbench: &mut Workbench, mut options: OpenFile, window: &mut 
     workbench.open_tab(file_tab(&options.path), OpenOptions { preview: options.preview, to_side: options.to_side, ..Default::default() }, window, cx);
 }
 
-/// Registry buffer jendela ini.
+/// The buffer registry of this window.
 pub fn buffers(workbench: &Workbench) -> Option<Entity<Buffers>> {
     workbench.extension::<Entity<Buffers>>()
 }
 
-/// Berkas di tab aktif: tampilan, buffer, dan state editornya.
+/// The file in the active tab: its view, buffer, and editor state.
 pub fn active_file(workbench: &Workbench, cx: &App) -> Option<(Entity<FileView>, Entity<Buffer>, Entity<EditorState>)> {
     let tab = workbench.active_content()?.as_any().downcast_ref::<FileTab>()?;
     let state = tab.view.read(cx).state().clone();
@@ -88,8 +88,8 @@ struct FileKind;
 impl TabKind for FileKind {
     fn build(&self, tab: &TabData, env: &Env, window: &mut Window, cx: &mut App) -> Box<dyn TabContent> {
         let path = tab.param_str("path").unwrap_or_default().to_string();
-        // Registry buffer dipasang oleh `setup` sebelum tab mana pun dibangun.
-        let buffers = cx.global::<PendingBuffers>().0.clone().expect("registry buffer belum dipasang");
+        // The buffer registry is installed by `setup` before any tab is built.
+        let buffers = cx.global::<PendingBuffers>().0.clone().expect("buffer registry is not installed yet");
         let env = env.clone();
         let view = cx.new(|cx| FileView::new(&path, env, buffers, window, cx));
         let buffer = view.read(cx).buffer().clone();
@@ -105,13 +105,13 @@ impl TabKind for FileKind {
     }
 }
 
-/// Registry buffer milik `Workbench` yang sedang membangun tab (lihat `Workbench::sync_slots`).
+/// The buffer registry of the `Workbench` that is currently building tabs (see `Workbench::sync_slots`).
 #[derive(Default)]
 struct PendingBuffers(Option<Entity<Buffers>>);
 
 impl gpui_kit::Global for PendingBuffers {}
 
-/// Mendaftarkan grammar yang tidak disediakan gpui-kit ke highlighter (sekali per proses).
+/// Registers grammars not provided by gpui-kit with the highlighter (once per process).
 fn register_grammars() {
     use gpui_kit::component::highlighter::{GrammarConfig, LanguageRegistry};
     LanguageRegistry::singleton().register(
@@ -212,15 +212,15 @@ fn setup(workbench: &mut Workbench, window: &mut Window, cx: &mut Context<Workbe
         .key("Mod+G")
         .when(has_file.clone()),
     );
-    // Hanya saat editor benar-benar fokus: di kotak lain (terminal, pesan commit) tombolnya tetap milik kotak itu.
+    // Only when the editor is actually focused: in other inputs (terminal, commit message) the keys stay with that input.
     let editor_focused = {
         let weak = weak.clone();
         move |window: &Window, cx: &App| weak.upgrade().and_then(|w| active_file(w.read(cx), cx)).is_some_and(|(_, _, state)| state.focus_handle(cx).is_focused(window))
     };
     workbench.register_command(
-        // Language server bila ada; selain itu pencarian definisi di proyek (ekstensi Symbol Search).
+        // The language server if there is one; otherwise a project-wide definition search (Symbol Search extension).
         Command::new("editor.goToDefinition", "Go to Definition", with_file(|_, _, state, window, cx| {
-            // Aksi editor dikirim ke editor itu sendiri, juga saat dipilih dari menu.
+            // The editor action is sent to the editor itself, also when picked from the menu.
             state.update(cx, |state, cx| state.focus(window, cx));
             window.dispatch_action(Box::new(gpui_kit::component::input::GoToDefinition), cx);
         }))
@@ -263,12 +263,12 @@ fn setup(workbench: &mut Workbench, window: &mut Window, cx: &mut Context<Workbe
 
     workbench.register_status(StatusItem::new("editor.cursor", StatusAlign::Right, 10, |env, window, cx| cx.new(|cx| EditorStatus::new(env.workbench.clone(), window, cx)).into()), window, cx);
 
-    // Perubahan berkas dari luar dan simpan otomatis saat jendela kehilangan fokus.
+    // File changes from outside, and auto-save when the window loses focus.
     let watcher = cx.new(|cx| ExternalChanges::new(env, buffers, window, cx));
     workbench.set_extension(watcher);
 }
 
-/// Memindahkan baris di kursor (atau semua baris yang dipilih) satu baris ke atas/bawah.
+/// Moves the line at the cursor (or all selected lines) one line up/down.
 fn move_lines(state: &Entity<EditorState>, up: bool, window: &mut Window, cx: &mut App) {
     state.update(cx, |state, cx| {
         let text = state.text().clone();
@@ -279,7 +279,7 @@ fn move_lines(state: &Entity<EditorState>, up: bool, window: &mut Window, cx: &m
     });
 }
 
-/// Menanggapi perubahan berkas di disk dan menyimpan otomatis saat fokus berpindah.
+/// Reacts to file changes on disk and auto-saves when focus moves away.
 struct ExternalChanges {
     _subscriptions: Vec<Subscription>,
 }
@@ -340,7 +340,7 @@ impl ExternalChanges {
     }
 }
 
-/// Item status bar: posisi kursor, encoding, akhir baris, dan bahasa berkas aktif.
+/// Status bar item: cursor position, encoding, line ending, and language of the active file.
 struct EditorStatus {
     workbench: WeakEntity<Workbench>,
     _subscriptions: Vec<Subscription>,
@@ -353,7 +353,7 @@ impl EditorStatus {
         if let Some(entity) = workbench.upgrade() {
             subscriptions.push(cx.subscribe_in(&entity, window, |this, workbench, event: &WorkbenchEvent, _, cx| {
                 if matches!(event, WorkbenchEvent::ActiveTabChanged | WorkbenchEvent::TabsChanged) {
-                    // Amati state editor aktif agar posisi kursor ikut berubah.
+                    // Observe the active editor's state so the cursor position follows along.
                     this._state_subscription = active_file(workbench.read(cx), cx).map(|(_, _, state)| cx.observe(&state, |_, _, cx| cx.notify()));
                     cx.notify();
                 }
@@ -385,18 +385,18 @@ mod tests {
     use gpui_kit::component::highlighter::{HighlightTheme, SyntaxHighlighter};
     use gpui_kit::component::input::Rope;
 
-    /// Grammar Dart terpasang di highlighter: kodenya terurai tanpa galat dan mendapat warna.
+    /// The Dart grammar is installed in the highlighter: its code parses without errors and gets colored.
     #[test]
     fn dart_grammar_highlights_flutter_code() {
         super::register_grammars();
-        let code = "import 'package:flutter/material.dart';\n\nclass App extends StatelessWidget {\n  @override\n  Widget build(BuildContext context) => const Text('Halo');\n}\n";
+        let code = "import 'package:flutter/material.dart';\n\nclass App extends StatelessWidget {\n  @override\n  Widget build(BuildContext context) => const Text('Hello');\n}\n";
         let mut highlighter = SyntaxHighlighter::new("dart");
-        assert_eq!(highlighter.language().as_ref(), "dart", "bukan fallback ke teks polos");
+        assert_eq!(highlighter.language().as_ref(), "dart", "not a fallback to plain text");
         highlighter.update(None, &Rope::from(code), None);
-        assert!(highlighter.tree().is_some_and(|tree| !tree.root_node().has_error()), "kode Dart terurai tanpa galat");
+        assert!(highlighter.tree().is_some_and(|tree| !tree.root_node().has_error()), "Dart code parses without errors");
         let theme = HighlightTheme::default_dark();
         let styles = highlighter.styles(&(0..code.len()), &*theme);
-        assert!(styles.len() > 5, "kata kunci, string, dan tipe diberi warna: {}", styles.len());
+        assert!(styles.len() > 5, "keywords, strings, and types are colored: {}", styles.len());
     }
 }
 
@@ -404,7 +404,7 @@ mod tests {
 mod extra_language_tests {
     use gpui_kit::component::highlighter::SyntaxHighlighter;
 
-    /// Grammar dari fitur gpui-kit untuk ekstensi "Extra languages" benar-benar ikut terpasang.
+    /// The grammars from the gpui-kit features for the "Extra languages" extension are really compiled in.
     #[test]
     fn extra_grammars_are_compiled_in() {
         for language in ["kotlin", "csharp", "php", "lua", "swift", "scala", "graphql", "proto", "make", "cmake", "zig", "elixir", "svelte"] {

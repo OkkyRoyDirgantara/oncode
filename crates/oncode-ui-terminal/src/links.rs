@@ -1,8 +1,8 @@
-//! Deteksi tautan di keluaran terminal. Hanya `http://` dan `https://` yang dikenali dan dibuka.
+//! Link detection in terminal output. Only `http://` and `https://` are recognized and opened.
 
 use std::ops::Range;
 
-/// Tautan yang aman dibuka di browser sistem.
+/// A link that is safe to open in the system browser.
 pub fn is_web_url(url: &str) -> bool {
     let lower = url.to_ascii_lowercase();
     ["http://", "https://"].iter().any(|scheme| lower.len() > scheme.len() && lower.starts_with(scheme))
@@ -12,10 +12,10 @@ fn ends_url(c: char) -> bool {
     c.is_whitespace() || c.is_control() || matches!(c, '<' | '>' | '"' | '`' | '\'' | '│' | '\0')
 }
 
-/// Rentang (indeks karakter, akhir eksklusif) semua tautan web di `chars`.
+/// The ranges (character indices, exclusive end) of all web links in `chars`.
 ///
-/// Tanda baca penutup kalimat di ujung tidak ikut, dan kurung tutup hanya ikut bila
-/// pasangannya ada di dalam tautan (mis. tautan Wikipedia).
+/// Sentence-ending punctuation at the end is not included, and a closing bracket is only included if
+/// its pair is inside the link (e.g. a Wikipedia link).
 pub fn find_urls(chars: &[char]) -> Vec<Range<usize>> {
     let mut found = Vec::new();
     let mut index = 0;
@@ -25,7 +25,7 @@ pub fn find_urls(chars: &[char]) -> Vec<Range<usize>> {
             let scheme: Vec<char> = scheme.chars().collect();
             (rest.len() > scheme.len() && rest[..scheme.len()].iter().zip(&scheme).all(|(a, b)| a.eq_ignore_ascii_case(b))).then_some(scheme.len())
         });
-        // Skema di tengah kata (mis. "xhttp://") bukan awal tautan.
+        // A scheme in the middle of a word (e.g. "xhttp://") is not the start of a link.
         let at_boundary = index == 0 || !chars[index - 1].is_alphanumeric();
         let Some(scheme_len) = scheme_len.filter(|_| at_boundary) else {
             index += 1;

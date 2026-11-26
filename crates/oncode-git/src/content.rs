@@ -1,20 +1,20 @@
-//! Isi berkas untuk tampilan diff, dan staging parsial lewat sambung-potong baris.
+//! File contents for the diff view, and partial staging through line splicing.
 //!
-//! Staging per hunk/baris tidak memakai `git apply`. UI mengirim rentang baris dari
-//! diff yang sedang ditampilkannya, backend menyusun isi baru lalu menuliskannya
-//! langsung sebagai blob ke index (`hash-object` + `update-index --cacheinfo`).
-//! Dengan begitu hasilnya tidak bergantung pada algoritma diff mana pun, dan sidik
-//! isi kedua sisi memastikan diff yang dipakai UI belum usang.
+//! Per-hunk/per-line staging does not use `git apply`. The UI sends line ranges from
+//! the diff it is currently showing, and the backend builds the new content and writes it
+//! directly as a blob into the index (`hash-object` + `update-index --cacheinfo`).
+//! This way the result does not depend on any particular diff algorithm, and the
+//! content fingerprints of both sides ensure the diff the UI is using is not stale.
 
 use crate::error::{GitError, GitErrorCode, Result};
 use crate::model::*;
 use crate::repo::Repo;
 use crate::runner::{check_path, check_ref, Cmd};
 
-/// Batas ukuran teks yang dikirim ke tampilan diff.
+/// Size limit for text sent to the diff view.
 pub const MAX_DIFF_BYTES: usize = 5 * 1024 * 1024;
 
-/// Sidik isi (FNV-1a 64-bit) dalam heksadesimal. `None` (sisi tidak ada) berbeda dari isi kosong.
+/// Content fingerprint (64-bit FNV-1a) in hexadecimal. `None` (side absent) differs from empty content.
 pub fn fingerprint(data: Option<&[u8]>) -> String {
     let Some(data) = data else { return "-".into() };
     let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
@@ -49,7 +49,7 @@ fn side(data: Option<Vec<u8>>, label: String) -> DiffSide {
     }
 }
 
-/// Memecah isi menjadi baris seperti model dokumen editor: `"a\nb\n"` → `["a", "b", ""]`.
+/// Splits content into lines like the editor's document model:`"a\nb\n"` → `["a", "b", ""]`.
 fn split_lines(data: &[u8]) -> Vec<&[u8]> {
     data.split(|b| *b == b'\n').collect()
 }
@@ -69,7 +69,7 @@ fn check_ops(ops: &[SpliceOp], a_len: usize, b_len: usize) -> Result<()> {
     Ok(())
 }
 
-/// Menghasilkan A dengan `A[a_from..a_to)` diganti `B[b_from..b_to)` untuk tiap operasi.
+/// Produces A with `A[a_from..a_to)` replaced by `B[b_from..b_to)` for each operation.
 pub fn splice_forward(a: &[u8], b: &[u8], ops: &[SpliceOp]) -> Result<Vec<u8>> {
     let (a_lines, b_lines) = (split_lines(a), split_lines(b));
     check_ops(ops, a_lines.len(), b_lines.len())?;
@@ -84,14 +84,14 @@ pub fn splice_forward(a: &[u8], b: &[u8], ops: &[SpliceOp]) -> Result<Vec<u8>> {
     Ok(out.join(&b'\n'))
 }
 
-/// Menghasilkan B dengan `B[b_from..b_to)` diganti `A[a_from..a_to)` untuk tiap operasi.
+/// Produces B with `B[b_from..b_to)` replaced by `A[a_from..a_to)` for each operation.
 pub fn splice_reverse(a: &[u8], b: &[u8], ops: &[SpliceOp]) -> Result<Vec<u8>> {
     let swapped: Vec<SpliceOp> =
         ops.iter().map(|op| SpliceOp { a_from: op.b_from, a_to: op.b_to, b_from: op.a_from, b_to: op.a_to }).collect();
     splice_forward(b, a, &swapped)
 }
 
-/// Menyamakan akhir baris `source` dengan gaya `target` (CRLF atau LF).
+/// Makes the line endings of `source` match the style of `target` (CRLF or LF).
 fn match_eol(source: &[u8], target: &[u8]) -> Vec<u8> {
     let target_crlf = target.windows(2).any(|w| w == b"\r\n");
     let source_crlf = source.windows(2).any(|w| w == b"\r\n");
@@ -120,7 +120,7 @@ fn match_eol(source: &[u8], target: &[u8]) -> Vec<u8> {
 }
 
 impl Repo {
-    /// Isi blob pada sebuah spesifikasi objek (`HEAD:path`, `:path`, ...), atau `None` bila tidak ada.
+    /// The blob content at an object spec (`HEAD:path`, `:path`, ...), or `None` if it does not exist.
     pub async fn blob(&self, spec: &str) -> Result<Option<Vec<u8>>> {
         let out = self.run_raw(Cmd::new(["cat-file", "blob", "--end-of-options", spec])).await?;
         Ok((out.code == 0).then_some(out.stdout))
@@ -137,7 +137,7 @@ impl Repo {
         }
     }
 
-    /// Dua versi sebuah berkas untuk ditampilkan berdampingan.
+    /// Two versions of a file to display side by side.
     pub async fn diff_contents(&self, path: &str, orig_path: Option<&str>, source: &DiffSource) -> Result<DiffContents> {
         let path = check_path(path)?;
         let old_path = match orig_path {
@@ -175,7 +175,7 @@ impl Repo {
                 let name = check_ref(name)?;
                 let mut after = self.blob(&format!("{name}:{path}")).await?;
                 if after.is_none() {
-                    // Berkas untracked disimpan di induk ketiga stash.
+                    // Untracked files are stored in the stash's third parent.
                     after = self.blob(&format!("{name}^3:{path}")).await?;
                 }
                 (side(self.blob(&format!("{name}^1:{old_path}")).await?, "Before".into()), side(after, name.to_string()))
@@ -184,7 +184,7 @@ impl Repo {
         Ok(DiffContents { path: path.to_string(), orig_path: orig_path.map(String::from), a, b })
     }
 
-    /// Mode index sebuah berkas (mis. `100644`), bila ada di index.
+    /// The index mode of a file (e.g. `100644`), if it is in the index.
     async fn index_mode(&self, path: &str) -> Result<Option<String>> {
         let out = self.run(Cmd::new(["ls-files", "-s", "-z"]).paths([path])).await?;
         let text = out.text();
@@ -211,10 +211,10 @@ impl Repo {
         Ok(())
     }
 
-    /// Stage, unstage, atau discard sebagian perubahan sebuah berkas.
+    /// Stages, unstages, or discards part of a file's changes.
     ///
-    /// `fp_a` dan `fp_b` adalah sidik kedua sisi diff yang ditampilkan UI; bila isi
-    /// sudah berubah sejak itu, operasi ditolak dengan kode `Stale`.
+    /// `fp_a` and `fp_b` are the fingerprints of both diff sides shown by the UI; if the
+    /// content has changed since then, the operation is rejected with code `Stale`.
     pub async fn apply_splice(&self, target: SpliceTarget, path: &str, ops: &[SpliceOp], fp_a: &str, fp_b: &str) -> Result<()> {
         let path = check_path(path)?;
         let _guard = self.lock().await;
@@ -240,7 +240,7 @@ impl Repo {
 
         match target {
             SpliceTarget::Stage => {
-                // Sisi worktree dibersihkan dulu (filter clean, konversi akhir baris) agar setara dengan isi index.
+                // The worktree side is cleaned first (clean filter, line-ending conversion) so it is equivalent to the index content.
                 let b_clean = if b.is_some() {
                     let oid = self.run(Cmd::new(["hash-object", "-w"]).paths([path]).write()).await?.trimmed();
                     self.blob(&oid).await?.ok_or_else(stale)?
@@ -261,7 +261,7 @@ impl Repo {
             SpliceTarget::Unstage => {
                 let content = splice_reverse(&a_bytes, &b_bytes, ops)?;
                 if a.is_none() && content.is_empty() {
-                    // Berkas baru yang seluruh isinya dikeluarkan kembali menjadi untracked.
+                    // A new file whose entire content is unstaged becomes untracked again.
                     self.run(Cmd::new(["update-index", "--force-remove"]).paths([path]).write()).await?;
                     return Ok(());
                 }
@@ -308,11 +308,11 @@ mod tests {
     fn forward_replaces_selected_ranges_only() {
         let a = b"1\n2\n3\n4\n5\n";
         let b = b"1\nTWO\n3\n4\nFIVE\nSIX\n";
-        // Hanya perubahan pertama.
+        // Only the first change.
         assert_eq!(splice_forward(a, b, &[op(1, 2, 1, 2)]).unwrap(), b"1\nTWO\n3\n4\n5\n");
-        // Hanya perubahan kedua.
+        // Only the second change.
         assert_eq!(splice_forward(a, b, &[op(4, 5, 4, 6)]).unwrap(), b"1\n2\n3\n4\nFIVE\nSIX\n");
-        // Keduanya menghasilkan B.
+        // Both produce B.
         assert_eq!(splice_forward(a, b, &[op(1, 2, 1, 2), op(4, 5, 4, 6)]).unwrap(), b);
     }
 
@@ -326,13 +326,13 @@ mod tests {
 
     #[test]
     fn handles_missing_trailing_newline_like_the_editor_model() {
-        // A tanpa newline di akhir, B menambah baris: baris maya terakhir ikut dipilih.
+        // A has no trailing newline, B adds a line: the last virtual line is selected too.
         assert_eq!(splice_forward(b"a", b"a\nb\n", &[op(1, 1, 1, 3)]).unwrap(), b"a\nb\n");
-        // B menghapus baris terakhir beserta newline-nya.
+        // B removes the last line along with its newline.
         assert_eq!(splice_forward(b"a\nb\n", b"a", &[op(1, 3, 1, 1)]).unwrap(), b"a");
-        // Berkas baru: A kosong.
+        // New file: A is empty.
         assert_eq!(splice_forward(b"", b"x\ny\n", &[op(0, 1, 0, 3)]).unwrap(), b"x\ny\n");
-        // Sebagian baris berkas baru.
+        // Some of the lines of a new file.
         assert_eq!(splice_forward(b"", b"x\ny\n", &[op(0, 0, 1, 2)]).unwrap(), b"y\n");
     }
 

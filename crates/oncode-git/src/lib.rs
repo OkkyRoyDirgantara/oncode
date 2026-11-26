@@ -1,7 +1,7 @@
-//! Lapisan Git OnCode.
+//! The OnCode Git layer.
 //!
-//! Semua operasi dijalankan lewat `git` milik sistem (lihat `docs/RANCANGAN.md` bagian 3.4).
-//! Crate ini tidak bergantung pada Tauri sehingga bisa diuji langsung terhadap repositori sementara.
+//! All operations run through the system `git` (see `docs/DESIGN.md` section 3.4).
+//! This crate does not depend on Tauri, so it can be tested directly against a temporary repository.
 
 pub mod blame;
 pub mod conflict;

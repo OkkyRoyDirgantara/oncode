@@ -1,4 +1,4 @@
-//! Device flow dan pembaruan token terhadap server HTTP tiruan.
+//! Device flow and token refresh against a mock HTTP server.
 
 mod common;
 
@@ -10,14 +10,14 @@ use serde_json::{json, Value};
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-const GITHUB_CLIENT: &str = "Iv1.klien_github";
-const GITLAB_CLIENT: &str = "klien_gitlab_0123";
-const DEVICE_CODE: &str = "kode_perangkat_rahasia_3584d83530557fdd";
-const ACCESS_TOKEN: &str = "token_akses_rahasia_e72e16c7";
-const REFRESH_TOKEN: &str = "token_refresh_rahasia_803c1fd4";
+const GITHUB_CLIENT: &str = "Iv1.github_client";
+const GITLAB_CLIENT: &str = "gitlab_client_0123";
+const DEVICE_CODE: &str = "device_code_secret_3584d83530557fdd";
+const ACCESS_TOKEN: &str = "access_token_secret_e72e16c7";
+const REFRESH_TOKEN: &str = "refresh_token_secret_803c1fd4";
 
 fn now() -> f64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).expect("jam sistem").as_secs_f64()
+    SystemTime::now().duration_since(UNIX_EPOCH).expect("system clock").as_secs_f64()
 }
 
 fn token_path(kind: ForgeKind) -> &'static str {
@@ -41,7 +41,7 @@ fn client_id(kind: ForgeKind) -> &'static str {
     }
 }
 
-/// GitHub mengirim galat OAuth dengan HTTP 200, GitLab dengan HTTP 400.
+/// GitHub sends OAuth errors with HTTP 200, GitLab with HTTP 400.
 fn error_status(kind: ForgeKind) -> u16 {
     match kind {
         ForgeKind::GitHub => 200,
@@ -49,7 +49,7 @@ fn error_status(kind: ForgeKind) -> u16 {
     }
 }
 
-/// Menjalankan satu poll terhadap server yang menjawab `status` + `body`.
+/// Runs a single poll against a server that answers `status` + `body`.
 async fn poll_with(kind: ForgeKind, status: u16, body: Value) -> (oncode_forge::Result<DevicePoll>, MockServer) {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
@@ -114,7 +114,7 @@ async fn gitlab_device_start() {
         .mount(&server)
         .await;
 
-    // Garis miring di akhir override tidak menggandakan pemisah path.
+    // A trailing slash on the override does not double the path separator.
     let base = format!("{}/", server.uri());
     let code = device_start(&ForgeHost::gitlab(), GITLAB_CLIENT, Some(&base)).await.expect("device_start");
     assert_eq!(code.device_code, DEVICE_CODE);
@@ -149,12 +149,12 @@ async fn device_start_defaults_missing_interval() {
 
 #[tokio::test]
 async fn device_start_failures() {
-    // Instance yang belum punya endpoint device flow.
+    // An instance that does not have a device flow endpoint yet.
     let server = MockServer::start().await;
     let err = device_start(&ForgeHost::gitlab(), GITLAB_CLIENT, Some(&server.uri())).await.expect_err("404");
     assert_error(&err, ForgeErrorCode::Unsupported, GITLAB_CLIENT);
 
-    // GitHub: device flow dimatikan untuk aplikasi ini (dijawab dengan HTTP 200).
+    // GitHub: the device flow is disabled for this app (answered with HTTP 200).
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/login/device/code"))
@@ -164,10 +164,10 @@ async fn device_start_failures() {
         })))
         .mount(&server)
         .await;
-    let err = device_start(&ForgeHost::github(), GITHUB_CLIENT, Some(&server.uri())).await.expect_err("dimatikan");
+    let err = device_start(&ForgeHost::github(), GITHUB_CLIENT, Some(&server.uri())).await.expect_err("disabled");
     assert_eq!(err.code, ForgeErrorCode::Unsupported, "{}", err.message);
 
-    // GitLab: client ID tidak dikenal.
+    // GitLab: unknown client ID.
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/oauth/authorize_device"))
@@ -177,24 +177,24 @@ async fn device_start_failures() {
         })))
         .mount(&server)
         .await;
-    let err = device_start(&ForgeHost::gitlab(), GITLAB_CLIENT, Some(&server.uri())).await.expect_err("klien salah");
+    let err = device_start(&ForgeHost::gitlab(), GITLAB_CLIENT, Some(&server.uri())).await.expect_err("wrong client");
     assert_eq!(err.code, ForgeErrorCode::InvalidInput, "{}", err.message);
 
-    // Jawaban sukses yang bentuknya salah.
+    // A success response with the wrong shape.
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/login/device/code"))
         .respond_with(ResponseTemplate::new(200).set_body_string("device_code=abc&user_code=WDJB"))
         .mount(&server)
         .await;
-    let err = device_start(&ForgeHost::github(), GITHUB_CLIENT, Some(&server.uri())).await.expect_err("bukan json");
+    let err = device_start(&ForgeHost::github(), GITHUB_CLIENT, Some(&server.uri())).await.expect_err("not json");
     assert_eq!(err.code, ForgeErrorCode::InvalidResponse, "{}", err.message);
 
-    // Client ID kosong ditolak tanpa permintaan apa pun; server mati adalah galat jaringan.
-    let err = device_start(&ForgeHost::github(), "  ", None).await.expect_err("client id kosong");
+    // An empty client ID is rejected without any request; a dead server is a network error.
+    let err = device_start(&ForgeHost::github(), "  ", None).await.expect_err("empty client id");
     assert_eq!(err.code, ForgeErrorCode::InvalidInput);
     let uri = common::closed_port_uri();
-    let err = device_start(&ForgeHost::github(), GITHUB_CLIENT, Some(&uri)).await.expect_err("tidak terhubung");
+    let err = device_start(&ForgeHost::github(), GITHUB_CLIENT, Some(&uri)).await.expect_err("not connected");
     assert_eq!(err.code, ForgeErrorCode::Network, "{}", err.message);
 }
 
@@ -215,7 +215,7 @@ async fn device_poll_sends_device_code_grant() {
             form_value(request, "grant_type").as_deref(),
             Some("urn:ietf:params:oauth:grant-type:device_code")
         );
-        // Kode perangkat hanya ada di badan permintaan, tidak di URL.
+        // The device code is only in the request body, not in the URL.
         assert!(!request.url.as_str().contains(DEVICE_CODE));
     }
 }
@@ -250,10 +250,10 @@ async fn github_device_poll_success() {
     let body = json!({ "access_token": ACCESS_TOKEN, "token_type": "bearer", "scope": "repo,read:user" });
     let (result, _server) = poll_with(ForgeKind::GitHub, 200, body).await;
     let poll = result.expect("poll");
-    assert!(!format!("{poll:?}").contains(ACCESS_TOKEN), "token bocor di Debug");
-    let DevicePoll::Token(tokens) = poll else { panic!("seharusnya Token") };
+    assert!(!format!("{poll:?}").contains(ACCESS_TOKEN), "token leaked in Debug");
+    let DevicePoll::Token(tokens) = poll else { panic!("expected Token") };
     assert_eq!(tokens.access_token, ACCESS_TOKEN);
-    // Token aplikasi OAuth GitHub tidak kedaluwarsa dan tidak punya refresh token.
+    // GitHub OAuth app tokens do not expire and have no refresh token.
     assert_eq!(tokens.refresh_token, None);
     assert_eq!(tokens.expires_at, None);
     assert!(!tokens.expires_within(3600.0));
@@ -272,10 +272,10 @@ async fn gitlab_device_poll_success() {
     });
     let (result, _server) = poll_with(ForgeKind::GitLab, 200, body).await;
     let after = now();
-    let DevicePoll::Token(tokens) = result.expect("poll") else { panic!("seharusnya Token") };
+    let DevicePoll::Token(tokens) = result.expect("poll") else { panic!("expected Token") };
     assert_eq!(tokens.access_token, ACCESS_TOKEN);
     assert_eq!(tokens.refresh_token.as_deref(), Some(REFRESH_TOKEN));
-    // Masa berlaku dihitung dari jam lokal, bukan dari `created_at` server.
+    // The lifetime is computed from the local clock, not from the server's `created_at`.
     let expires_at = tokens.expires_at.expect("expires_at");
     assert!(expires_at >= before + 7200.0 && expires_at <= after + 7200.0, "{expires_at}");
     assert!(tokens.expires_within(7300.0));
@@ -286,7 +286,7 @@ async fn gitlab_device_poll_success() {
 
 #[tokio::test]
 async fn device_poll_failures() {
-    // GitLab menjawab `invalid_grant` untuk kode yang sudah dihapus atau dipakai.
+    // GitLab answers `invalid_grant` for a code that has been deleted or used.
     let body = json!({ "error": "invalid_grant", "error_description": "The provided authorization grant is invalid." });
     let (result, _server) = poll_with(ForgeKind::GitLab, 400, body).await;
     assert_error(&result.expect_err("invalid_grant"), ForgeErrorCode::InvalidInput, DEVICE_CODE);
@@ -306,16 +306,16 @@ async fn device_poll_failures() {
     let (result, _server) = poll_with(ForgeKind::GitLab, 429, json!({ "message": "Retry later" })).await;
     assert_error(&result.expect_err("429"), ForgeErrorCode::RateLimited, DEVICE_CODE);
 
-    // Jawaban sukses yang tidak terbaca: isi jawabannya tidak boleh ikut ke pesan galat.
-    let odd = json!({ "access_token": ACCESS_TOKEN, "expires_in": "dua jam" });
+    // A success response that cannot be read: its contents must not end up in the error message.
+    let odd = json!({ "access_token": ACCESS_TOKEN, "expires_in": "two hours" });
     let (result, _server) = poll_with(ForgeKind::GitLab, 200, odd).await;
-    let err = result.expect_err("bentuk salah");
+    let err = result.expect_err("wrong shape");
     assert_error(&err, ForgeErrorCode::InvalidResponse, ACCESS_TOKEN);
 
-    let err = device_poll(&ForgeHost::github(), GITHUB_CLIENT, " ", None).await.expect_err("kode kosong");
+    let err = device_poll(&ForgeHost::github(), GITHUB_CLIENT, " ", None).await.expect_err("empty code");
     assert_eq!(err.code, ForgeErrorCode::InvalidInput);
     let uri = common::closed_port_uri();
-    let err = device_poll(&ForgeHost::gitlab(), GITLAB_CLIENT, DEVICE_CODE, Some(&uri)).await.expect_err("mati");
+    let err = device_poll(&ForgeHost::gitlab(), GITLAB_CLIENT, DEVICE_CODE, Some(&uri)).await.expect_err("down");
     assert_error(&err, ForgeErrorCode::Network, DEVICE_CODE);
 }
 
@@ -325,10 +325,10 @@ async fn gitlab_refresh_token_exchanges_for_new_tokens() {
     Mock::given(method("POST"))
         .and(path("/oauth/token"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "access_token": "token_akses_baru_c97d1fe5",
+            "access_token": "new_access_token_c97d1fe5",
             "token_type": "bearer",
             "expires_in": 7200,
-            "refresh_token": "token_refresh_baru_9f3a",
+            "refresh_token": "new_refresh_token_9f3a",
             "created_at": 1628711391,
         })))
         .expect(1)
@@ -339,8 +339,8 @@ async fn gitlab_refresh_token_exchanges_for_new_tokens() {
     let tokens = refresh_token(&ForgeHost::gitlab(), GITLAB_CLIENT, REFRESH_TOKEN, Some(&server.uri()))
         .await
         .expect("refresh_token");
-    assert_eq!(tokens.access_token, "token_akses_baru_c97d1fe5");
-    assert_eq!(tokens.refresh_token.as_deref(), Some("token_refresh_baru_9f3a"));
+    assert_eq!(tokens.access_token, "new_access_token_c97d1fe5");
+    assert_eq!(tokens.refresh_token.as_deref(), Some("new_refresh_token_9f3a"));
     let expires_at = tokens.expires_at.expect("expires_at");
     assert!(expires_at >= before + 7200.0 && expires_at <= now() + 7200.0, "{expires_at}");
 
@@ -355,7 +355,7 @@ async fn gitlab_refresh_token_exchanges_for_new_tokens() {
 
 #[tokio::test]
 async fn gitlab_refresh_token_failures() {
-    // Refresh token sudah dicabut atau sudah pernah dipakai: pengguna harus login ulang.
+    // The refresh token has been revoked or already used: the user must log in again.
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/oauth/token"))
@@ -381,13 +381,13 @@ async fn gitlab_refresh_token_failures() {
         .expect_err("500");
     assert_error(&err, ForgeErrorCode::Network, REFRESH_TOKEN);
 
-    let err = refresh_token(&ForgeHost::gitlab(), GITLAB_CLIENT, "", None).await.expect_err("kosong");
+    let err = refresh_token(&ForgeHost::gitlab(), GITLAB_CLIENT, "", None).await.expect_err("empty");
     assert_eq!(err.code, ForgeErrorCode::InvalidInput);
 }
 
 #[tokio::test]
 async fn github_refresh_token_is_unsupported() {
-    // Tidak ada permintaan yang dikirim: server tiruan tanpa mock akan menjawab 404.
+    // No request is sent: a mock server without a mock would answer 404.
     let server = MockServer::start().await;
     let err = refresh_token(&ForgeHost::github(), GITHUB_CLIENT, REFRESH_TOKEN, Some(&server.uri()))
         .await

@@ -1,7 +1,7 @@
-//! Buffer berkas: satu per path per jendela, dipakai bersama oleh semua tab/split yang menampilkannya.
+//! File buffer: one per path per window, shared by all tabs/splits that show it.
 //!
-//! Setiap tampilan punya `EditorState` sendiri (kursor dan gulir terpisah); `Buffer` menjaga
-//! isi semuanya tetap sama dengan meneruskan setiap suntingan ke state lain.
+//! Each view has its own `EditorState` (separate cursor and scroll); `Buffer` keeps
+//! the content of all of them the same by forwarding every edit to the other states.
 
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -17,15 +17,15 @@ use oncode_workspace::{Eol, OpenedFile};
 use crate::spawn_core;
 use crate::workbench::{Env, WorkbenchEvent};
 
-/// Batas ukuran untuk fitur berat (highlight, lipat, LSP).
+/// Size limit for heavy features (highlighting, folding, LSP).
 pub const LARGE_FILE_BYTES: u32 = 5 * 1024 * 1024;
 
-/// Awalan path berkas baru yang belum pernah disimpan (`untitled:Untitled-1`).
+/// Prefix of the path of a new file that has never been saved (`untitled:Untitled-1`).
 pub const UNTITLED_PREFIX: &str = "untitled:";
 
-/// Bentuk path berkas yang dipakai tab dan buffer. Di Windows pemisahnya diseragamkan menjadi
-/// `\`, sehingga `C:/x/a.rs` (root dari Git, dipakai SCM/diff/graph) dan `C:\x\a.rs` (explorer)
-/// membuka tab dan buffer yang sama. Path `untitled:` dan path di OS lain tidak diubah.
+/// The file path form used by tabs and buffers. On Windows the separator is normalized to
+/// `\`, so `C:/x/a.rs` (a root from Git, used by SCM/diff/graph) and `C:\x\a.rs` (the explorer)
+/// open the same tab and buffer. `untitled:` paths and paths on other OSes are left unchanged.
 pub fn file_path(path: &str) -> String {
     if cfg!(windows) && !is_untitled(path) {
         path.replace('/', "\\")
@@ -34,7 +34,7 @@ pub fn file_path(path: &str) -> String {
     }
 }
 
-/// `true` untuk berkas baru yang belum punya tempat di disk.
+/// `true` for a new file that has no place on disk yet.
 pub fn is_untitled(path: &str) -> bool {
     path.starts_with(UNTITLED_PREFIX)
 }
@@ -50,9 +50,9 @@ pub enum BufferStatus {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum BufferEvent {
-    /// Isi dimuat (atau dimuat ulang) dari disk.
+    /// The content was loaded (or reloaded) from disk.
     Loaded,
-    /// Isi disunting.
+    /// The content was edited.
     Edited,
     Saved,
 }
@@ -62,9 +62,9 @@ pub struct Buffer {
     env: Env,
     status: BufferStatus,
     states: Vec<(WeakEntity<EditorState>, Vec<Subscription>)>,
-    /// Isi dari disk yang menunggu `EditorState` pertama.
+    /// Content from disk waiting for the first `EditorState`.
     initial: Option<String>,
-    /// Isi saat terakhir dimuat atau disimpan; pembanding untuk tanda "belum disimpan".
+    /// Content as of the last load or save; the comparison baseline for the "unsaved" marker.
     saved: Rope,
     dirty: bool,
     encoding: String,
@@ -73,9 +73,9 @@ pub struct Buffer {
     mtime_ms: f64,
     size: u32,
     read_only: bool,
-    /// Berkas berubah di disk sementara buffer berisi perubahan yang belum disimpan.
+    /// The file changed on disk while the buffer holds unsaved changes.
     conflict: bool,
-    /// Bertambah setiap kali isi dimuat ulang dari disk.
+    /// Incremented every time the content is reloaded from disk.
     revision: u64,
     _load: Task<()>,
     _auto_save: Task<()>,
@@ -105,7 +105,7 @@ impl Buffer {
             _auto_save: Task::ready(()),
         };
         if is_untitled(&this.path) {
-            // Berkas baru: langsung siap, kosong, tanpa membaca disk.
+            // A new file: ready right away, empty, without reading the disk.
             this.status = BufferStatus::Ready;
             this.initial = Some(String::new());
             this.revision = 1;
@@ -115,7 +115,7 @@ impl Buffer {
         this
     }
 
-    /// Berkas baru yang belum pernah disimpan.
+    /// A new file that has never been saved.
     pub fn is_untitled(&self) -> bool {
         is_untitled(&self.path)
     }
@@ -131,7 +131,7 @@ impl Buffer {
         self.path.rsplit(['/', '\\']).next().unwrap_or(&self.path)
     }
 
-    /// Berkasnya diganti nama; hanya dipanggil [`Buffers::rename`] agar registry tetap selaras.
+    /// The file was renamed; only called by [`Buffers::rename`] so the registry stays consistent.
     fn set_path(&mut self, path: String, cx: &mut Context<Self>) {
         self.path = path;
         cx.notify();
@@ -173,12 +173,12 @@ impl Buffer {
         self.revision
     }
 
-    /// `EditorState` pertama yang masih hidup; isinya adalah isi buffer.
+    /// The first `EditorState` that is still alive; its content is the buffer content.
     pub fn primary(&self) -> Option<Entity<EditorState>> {
         self.states.iter().find_map(|(state, _)| state.upgrade())
     }
 
-    /// Isi terkini, atau `None` bila buffer belum siap.
+    /// The current content, or `None` if the buffer is not ready.
     pub fn text(&self, cx: &App) -> Option<Rope> {
         if !self.is_ready() {
             return None;
@@ -189,7 +189,7 @@ impl Buffer {
         }
     }
 
-    /// Menautkan `EditorState` sebuah tampilan: isinya disamakan dan suntingannya diteruskan.
+    /// Links a view's `EditorState`: its content is synced and its edits are forwarded.
     pub fn attach(&mut self, state: &Entity<EditorState>, window: &mut Window, cx: &mut Context<Self>) {
         self.states.retain(|(state, _)| state.upgrade().is_some());
         if self.is_ready() {
@@ -210,19 +210,19 @@ impl Buffer {
         self.states.push((state.downgrade(), subscriptions));
     }
 
-    /// Meneruskan suntingan dari satu state ke state lain milik buffer ini.
+    /// Forwards edits from one state to the other states of this buffer.
     fn on_edits(&mut self, source: &Entity<EditorState>, event: &InputEditsEvent, window: &mut Window, cx: &mut Context<Self>) {
         let target = source.read(cx).text().clone();
         let others: Vec<Entity<EditorState>> = self.states.iter().filter_map(|(state, _)| state.upgrade()).filter(|state| state != source).collect();
         for other in others {
-            // State yang isinya sudah sama tidak disentuh; ini juga menghentikan gema, karena
-            // suntingan yang diteruskan memancarkan event dari state penerimanya.
+            // A state whose content is already the same is left alone; this also stops the echo,
+            // because a forwarded edit emits an event from the receiving state.
             if *other.read(cx).text() == target {
                 continue;
             }
             other.update(cx, |state, cx| {
                 for (edit, after) in event.edits() {
-                    // State ini masih berisi dokumen sebelum suntingan, jadi posisi lama dihitung darinya.
+                    // This state still holds the document from before the edit, so the old positions are computed from it.
                     let before = state.text().clone();
                     if edit.old_end_byte > before.len() {
                         break;
@@ -231,7 +231,7 @@ impl Buffer {
                     let new_text = after.slice(edit.start_byte..edit.new_end_byte).to_string();
                     state.apply_lsp_edits(&vec![lsp_types::TextEdit { range, new_text }], window, cx);
                 }
-                // Jaring pengaman: bila penerusan per suntingan meleset, samakan seluruh isi.
+                // Safety net: if per-edit forwarding misses, sync the whole content.
                 if *state.text() != target {
                     state.set_value(target.to_string(), window, cx);
                 }
@@ -247,7 +247,7 @@ impl Buffer {
         let Some(primary) = self.primary() else { return };
         let dirty = {
             let text = primary.read(cx).text();
-            // Membandingkan seluruh isi hanya bila panjangnya sama dengan isi tersimpan.
+            // Compare the whole content only if its length equals that of the saved content.
             text.len() != self.saved.len() || *text != self.saved
         };
         let changed = dirty != self.dirty;
@@ -264,7 +264,7 @@ impl Buffer {
     }
 
     fn schedule_auto_save(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        // Berkas baru tidak disimpan otomatis: menyimpannya berarti memilih tempat.
+        // A new file is not auto-saved: saving it means choosing a location.
         if self.auto_save_mode(cx) != AutoSave::AfterDelay || !self.dirty || self.conflict || self.is_untitled() {
             return;
         }
@@ -302,7 +302,7 @@ impl Buffer {
                 if states.is_empty() {
                     self.initial = Some(file.text);
                 } else {
-                    // `set_value` tidak memancarkan event, jadi tidak diteruskan sebagai suntingan.
+                    // `set_value` does not emit an event, so it is not forwarded as an edit.
                     for state in states {
                         state.update(cx, |state, cx| state.set_value(file.text.clone(), window, cx));
                     }
@@ -325,7 +325,7 @@ impl Buffer {
         cx.notify();
     }
 
-    /// Memuat ulang dari disk, membuang perubahan yang belum disimpan.
+    /// Reloads from disk, discarding unsaved changes.
     pub fn reload(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.is_untitled() {
             return;
@@ -333,8 +333,8 @@ impl Buffer {
         self.load(window, cx);
     }
 
-    /// Menyimpan ke disk dengan encoding dan akhir baris aslinya. Hasil `false` bila gagal.
-    /// Berkas baru lebih dulu menanyakan tempat penyimpanannya.
+    /// Saves to disk with its original encoding and line ending. Resolves to `false` on failure.
+    /// A new file first asks where to save it.
     pub fn save(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Task<bool> {
         if self.is_untitled() {
             return self.save_untitled(window, cx);
@@ -352,13 +352,13 @@ impl Buffer {
                     this.mtime_ms = stat.mtime_ms;
                     this.size = stat.size;
                     this.conflict = false;
-                    // Suntingan bisa terjadi selagi menyimpan.
+                    // Edits can happen while saving.
                     this.dirty = this.primary().is_some_and(|primary| *primary.read(cx).text() != this.saved);
                     cx.emit(BufferEvent::Saved);
                     cx.notify();
                     let saved = WorkbenchEvent::FileSaved(this.path.clone());
                     if let Some(workbench) = this.env.workbench.upgrade() {
-                        // Ditunda: penyimpanan bisa dipicu dari dalam pembaruan `Workbench`.
+                        // Deferred: saving can be triggered from inside a `Workbench` update.
                         window.defer(cx, move |_, cx| workbench.update(cx, |workbench, cx| workbench.broadcast(saved, cx)));
                     }
                     true
@@ -374,8 +374,8 @@ impl Buffer {
         })
     }
 
-    /// "Save As" untuk berkas baru: pilih path di dalam folder proyek, simpan, lalu buffer dan
-    /// tabnya pindah ke path itu (bahasa dan highlight mengikuti nama berkas barunya).
+    /// "Save As" for a new file: pick a path inside the project folder, save, then the buffer and
+    /// its tab move to that path (the language and highlighting follow the new file name).
     fn save_untitled(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Task<bool> {
         let Some(text) = self.text(cx) else { return Task::ready(false) };
         let Some(root) = self.env.root.clone() else {
@@ -414,10 +414,10 @@ impl Buffer {
         })
     }
 
-    /// Memindahkan buffer berkas baru dan tabnya ke path tempat ia disimpan.
+    /// Moves the buffer of a new file and its tab to the path where it was saved.
     fn move_to_saved_path(&mut self, from: String, to: String, window: &mut Window, cx: &mut Context<Self>) {
         let Some(workbench) = self.env.workbench.upgrade() else { return };
-        // Buffer dan state editornya dipegang sampai tab baru menautkan diri ke buffer ini.
+        // The buffer and its editor state are held until the new tab links itself to this buffer.
         let held = (cx.entity(), self.primary());
         window.defer(cx, move |window, cx| {
             if let Some(registry) = super::buffers(workbench.read(cx)) {
@@ -441,7 +441,7 @@ impl Buffer {
         });
     }
 
-    /// Menanggapi perubahan berkas dari luar: buffer bersih dimuat ulang, buffer kotor ditandai konflik.
+    /// Reacts to a file change from outside: a clean buffer is reloaded, a dirty buffer is marked as conflicted.
     pub fn check_external_change(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Task<ExternalChange> {
         if self.status == BufferStatus::Loading || self.is_untitled() {
             return Task::ready(ExternalChange::Unchanged);
@@ -478,35 +478,35 @@ pub enum ExternalChange {
     Deleted,
 }
 
-/// Posisi yang harus ditampilkan saat sebuah berkas dibuka.
+/// The position to show when a file is opened.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Reveal {
-    /// Nomor baris mulai dari 1.
+    /// Line number starting at 1.
     pub line: u32,
-    /// Kolom mulai dari 0, dalam karakter.
+    /// Column starting at 0, in characters.
     pub column: u32,
-    /// Panjang pilihan dalam karakter (mis. kecocokan pencarian).
+    /// Length of the selection in characters (e.g. a search match).
     pub length: Option<u32>,
 }
 
 #[derive(Debug, Clone)]
 pub enum BuffersEvent {
-    /// Buffer baru dibuat (belum tentu selesai dimuat).
+    /// A new buffer was created (not necessarily finished loading).
     Opened(Entity<Buffer>),
-    /// Sebuah tampilan membuat `EditorState` untuk buffer ini (tempat LSP memasang penyedianya).
+    /// A view created an `EditorState` for this buffer (where LSP installs its providers).
     EditorCreated { buffer: Entity<Buffer>, state: Entity<EditorState> },
-    /// Ada posisi yang menunggu untuk path ini; diambil dengan [`Buffers::take_reveal`].
+    /// There is a pending position for this path; taken with [`Buffers::take_reveal`].
     Reveal(String),
-    /// Isi hint ujung baris berubah; tampilan editor menggambar ulang hint-nya.
+    /// The end-of-line hint content changed; the editor view repaints its hint.
     LineHintsChanged,
 }
 
-/// Penyedia teks samar di ujung baris kursor (mis. inline blame), seperti dekorasi "after"
-/// di VS Code. Menerima path berkas dan baris (mulai dari 0); dipanggil saat render, jadi
-/// harus murah dan tidak boleh memperbarui entitas.
+/// A provider of faint text at the end of the cursor line (e.g. inline blame), like the "after"
+/// decoration in VS Code. Takes the file path and the line (starting at 0); it is called during
+/// render, so it must be cheap and must not update entities.
 pub type LineHintProvider = Rc<dyn Fn(&str, u32, &App) -> Option<SharedString>>;
 
-/// Registry buffer milik satu jendela. Buffer dilepas saat tidak ada lagi tab yang memegangnya.
+/// The buffer registry of one window. A buffer is released when no tab holds it any more.
 pub struct Buffers {
     env: Env,
     buffers: HashMap<String, WeakEntity<Buffer>>,
@@ -521,7 +521,7 @@ impl Buffers {
         Self { env, buffers: HashMap::new(), reveals: HashMap::new(), line_hints: Vec::new() }
     }
 
-    /// Memasang penyedia hint ujung baris; id yang sama menggantikan yang lama.
+    /// Installs an end-of-line hint provider; the same id replaces the old one.
     pub fn set_line_hint_provider(&mut self, id: impl Into<SharedString>, provider: LineHintProvider, cx: &mut Context<Self>) {
         let id = id.into();
         self.line_hints.retain(|(existing, _)| *existing != id);
@@ -529,22 +529,22 @@ impl Buffers {
         cx.emit(BuffersEvent::LineHintsChanged);
     }
 
-    /// Hint untuk sebuah baris (mulai dari 0): dari penyedia pertama yang punya isi.
+    /// The hint for a line (starting at 0): from the first provider that has content.
     pub fn line_hint(&self, path: &str, row: u32, cx: &App) -> Option<SharedString> {
         self.line_hints.iter().find_map(|(_, provider)| provider(path, row, cx))
     }
 
-    /// Dipanggil penyedia saat isi hint-nya berubah.
+    /// Called by a provider when its hint content changes.
     pub fn refresh_line_hints(&mut self, cx: &mut Context<Self>) {
         cx.emit(BuffersEvent::LineHintsChanged);
     }
 
-    /// Path untuk berkas baru berikutnya: `untitled:Untitled-N` dengan N terkecil yang belum terbuka.
+    /// The path for the next new file: `untitled:Untitled-N` with the smallest N that is not open yet.
     pub fn next_untitled_path(&self) -> String {
         (1..)
             .map(|n| format!("{UNTITLED_PREFIX}Untitled-{n}"))
             .find(|path| self.get(path).is_none())
-            .expect("selalu ada nomor yang belum dipakai")
+            .expect("there is always an unused number")
     }
 
     pub fn get(&self, path: &str) -> Option<Entity<Buffer>> {
@@ -565,9 +565,9 @@ impl Buffers {
         buffer
     }
 
-    /// Berkas `from` diganti nama menjadi `to`: buffernya ikut pindah beserta isi yang belum
-    /// disimpan. Hasil `false` bila tidak ada buffer untuk `from`. Tab-nya ditulis ulang pemanggil
-    /// (`Workbench::update_tabs`); tampilan baru memakai buffer ini selama pemanggil memegangnya.
+    /// File `from` was renamed to `to`: its buffer moves along with its unsaved content.
+    /// Resolves to `false` if there is no buffer for `from`. Its tab is rewritten by the caller
+    /// (`Workbench::update_tabs`); new views use this buffer as long as the caller holds it.
     pub fn rename(&mut self, from: &str, to: &str, cx: &mut Context<Self>) -> bool {
         let Some(buffer) = self.get(from) else { return false };
         let (from, to) = (file_path(from), file_path(to));
@@ -581,7 +581,7 @@ impl Buffers {
         true
     }
 
-    /// Semua buffer yang masih dipakai.
+    /// All buffers that are still in use.
     pub fn all(&self) -> Vec<Entity<Buffer>> {
         self.buffers.values().filter_map(WeakEntity::upgrade).collect()
     }

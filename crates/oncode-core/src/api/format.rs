@@ -1,6 +1,6 @@
-//! Ekstensi Formatters: memformat isi berkas dengan formatter milik bahasanya (Prettier, rustfmt,
-//! gofmt, ruff, dart format, …). Isi dikirim lewat stdin, jadi perubahan yang belum disimpan pun
-//! ikut diformat. Hanya di folder yang dipercaya: Prettier milik proyek adalah kode proyek.
+//! The Formatters extension: formats file contents with the language's own formatter (Prettier, rustfmt,
+//! gofmt, ruff, dart format, …). The content is sent via stdin, so unsaved changes
+//! are formatted too. Only in trusted folders: a project's Prettier is project code.
 
 use std::path::Path;
 use std::process::Stdio;
@@ -12,20 +12,20 @@ use tokio::io::AsyncWriteExt as _;
 use crate::error::{AppError, AppResult};
 use crate::state::Shared;
 
-/// Batas waktu satu kali format.
+/// Time limit for a single format run.
 const TIMEOUT: Duration = Duration::from_secs(20);
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Formatted {
     pub text: String,
-    /// Nama formatter yang dipakai, mis. "Prettier".
+    /// Name of the formatter used, e.g. "Prettier".
     pub formatter: String,
 }
 
-/// Memformat `text` (isi berkas `path`, bahasa `language` menurut id LSP). `None` bila ekstensi
-/// Formatters mati atau tidak ada formatter terpasang untuk bahasa itu; pemanggil boleh mencoba
-/// language server sebagai gantinya.
+/// Formats `text` (the contents of file `path`, language `language` per the LSP id). `None` if the
+/// Formatters extension is off or no formatter is installed for that language; the caller may try
+/// the language server instead.
 pub async fn format_text(core: &Shared, window: &str, path: String, language: String, text: String) -> AppResult<Option<Formatted>> {
     if !core.workspace_trusted(window) {
         return Err(AppError::untrusted());
@@ -47,9 +47,9 @@ pub async fn format_text(core: &Shared, window: &str, path: String, language: St
         .kill_on_drop(true)
         .spawn()
         .map_err(|error| failed(error.to_string()))?;
-    let mut stdin = child.stdin.take().expect("stdin dipipa");
+    let mut stdin = child.stdin.take().expect("stdin piped");
     let input = text.clone();
-    // Ditulis bersamaan dengan pembacaan keluaran agar pipa yang penuh tidak saling menunggu.
+    // Written concurrently with reading the output so full pipes do not wait on each other.
     let writer = tokio::spawn(async move {
         let _ = stdin.write_all(input.as_bytes()).await;
     });
@@ -64,19 +64,19 @@ pub async fn format_text(core: &Shared, window: &str, path: String, language: St
         return Err(failed(if detail.is_empty() { format!("it exited with {}", output.status) } else { detail.join(" ") }));
     }
     let mut formatted = String::from_utf8(output.stdout).map_err(|_| failed("its output is not valid UTF-8".into()))?;
-    // Editor memakai LF; akhir baris berkas yang asli dipasang lagi saat disimpan. Formatter yang
-    // menulis CRLF di Windows (rustfmt dengan `newline_style = "Native"`) diselaraskan.
+    // The editor uses LF; the original file's line endings are restored on save. Formatters that
+    // write CRLF on Windows (rustfmt with `newline_style = "Native"`) are normalized.
     if !text.contains('\r') {
         formatted = formatted.replace("\r\n", "\n");
     }
-    // Keluaran kosong untuk isi yang tidak kosong berarti formatter tidak menulis ke stdout.
+    // Empty output for non-empty content means the formatter did not write to stdout.
     if formatted.trim().is_empty() && !text.trim().is_empty() {
         return Err(failed("it returned nothing".into()));
     }
     Ok(Some(Formatted { text: formatted, formatter: name.to_string() }))
 }
 
-/// Petunjuk pemasangan formatter untuk sebuah bahasa, bila dikenal.
+/// Installation hint for a language's formatter, if known.
 pub fn formatter_install_hint(language: &str) -> Option<&'static str> {
     oncode_format::install_hint(language)
 }
@@ -90,36 +90,36 @@ mod tests {
     #[tokio::test]
     async fn untrusted_folders_and_disabled_extension_do_not_format() {
         let t = TestCore::new();
-        let project = t.project("proyek");
+        let project = t.project("project");
         workspace_open(&t.core, "w1", project.to_string_lossy().into_owned()).await.unwrap();
         let path = project.join("a.rs").to_string_lossy().into_owned();
         let error = format_text(&t.core, "w1", path.clone(), "rust".into(), "fn  main(){}".into()).await.unwrap_err();
         assert_eq!(error.code, "untrusted");
 
-        let project = t.trusted_repo("dipercaya");
+        let project = t.trusted_repo("trusted");
         workspace_open(&t.core, "w2", project.to_string_lossy().into_owned()).await.unwrap();
         let mut settings = t.core.user_settings();
         settings.extensions.formatters = false;
         t.core.set_user_settings(settings).unwrap();
         assert_eq!(format_text(&t.core, "w2", path, "rust".into(), "fn  main(){}".into()).await.unwrap(), None);
-        // Bahasa tanpa formatter.
+        // A language without a formatter.
         let mut settings = t.core.user_settings();
         settings.extensions.formatters = true;
         t.core.set_user_settings(settings).unwrap();
         assert_eq!(format_text(&t.core, "w2", "x.txt".into(), "plaintext".into(), "x".into()).await.unwrap(), None);
     }
 
-    /// Format sungguhan dengan rustfmt bila terpasang di mesin uji (dilewati bila tidak ada).
+    /// A real format run with rustfmt if installed on the test machine (skipped if not).
     #[tokio::test]
     async fn rustfmt_formats_text_from_stdin() {
         if oncode_lsp::find_on_path("rustfmt").is_none() {
             return;
         }
         let t = TestCore::new();
-        let project = t.trusted_repo("proyek");
+        let project = t.trusted_repo("project");
         workspace_open(&t.core, "w1", project.to_string_lossy().into_owned()).await.unwrap();
         let path = project.join("main.rs").to_string_lossy().into_owned();
-        let formatted = format_text(&t.core, "w1", path.clone(), "rust".into(), "fn  main( ){let x=1;}".into()).await.unwrap().expect("rustfmt terpasang");
+        let formatted = format_text(&t.core, "w1", path.clone(), "rust".into(), "fn  main( ){let x=1;}".into()).await.unwrap().expect("rustfmt is installed");
         assert_eq!(formatted.formatter, "rustfmt");
         assert_eq!(formatted.text, "fn main() {\n    let x = 1;\n}\n");
 

@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
-description = "State aplikasi OnCode tanpa UI: registry repositori, workspace per jendela, pengaturan, data tersimpan, dan seluruh API perintah"
+description = "OnCode application state without UI: repository registry, per-window workspace, settings, persisted data, and the entire command API"
 
 [dependencies]
 oncode-git = { path = "../oncode-git" }
@@ -20,10 +20,10 @@ serde_json.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 uuid = { version = "1", features = ["v4"] }
-# Lokasi direktori konfigurasi dan data per OS, sama seperti yang dipakai Tauri di v0.2.
+# Per-OS config and data directory locations, same as what Tauri used in v0.2.
 dirs = "6"
 
 [dev-dependencies]
 tempfile.workspace = true
-# Server HTTP tiruan untuk uji login forge.
+# Mock HTTP server for the forge login tests.
 wiremock = "0.6"

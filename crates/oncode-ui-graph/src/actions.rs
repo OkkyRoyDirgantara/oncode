@@ -1,5 +1,5 @@
-//! Aksi Git dari menu dan tombol fitur Graph: konfirmasi untuk aksi destruktif, penanda operasi
-//! berjalan, dan galat yang bisa ditindaklanjuti.
+//! Git actions from the Graph feature's menus and buttons: confirmations for destructive actions,
+//! indicators for running operations, and actionable errors.
 
 use std::future::Future;
 use std::pin::Pin;
@@ -22,7 +22,7 @@ use crate::menus::GitAction;
 use crate::paths::validate_ref_name;
 use crate::store::{head_label, snapshot, Busy, GraphStore, RevealTarget};
 
-/// Repositori sasaran sebuah aksi, beserta store jendelanya.
+/// The target repository of an action, together with its window's store.
 #[derive(Clone)]
 pub struct Ctx {
     pub store: Entity<GraphStore>,
@@ -40,7 +40,7 @@ impl Ctx {
 }
 
 type OpFuture = Pin<Box<dyn Future<Output = AppResult<()>> + Send>>;
-/// Operasi backend yang bisa diulang (mis. setelah stash otomatis).
+/// A backend operation that can be repeated (e.g. after an automatic stash).
 pub type Op = Rc<dyn Fn(Shared, String) -> OpFuture>;
 
 pub fn op<F, Fut>(f: F) -> Op
@@ -65,7 +65,7 @@ fn window_gone() -> AppError {
     AppError::new("cancelled", "The window was closed")
 }
 
-/// Menjalankan operasi dengan penanda sibuk dan mengembalikan hasil mentahnya.
+/// Runs an operation with a busy indicator and returns its raw result.
 pub async fn run_raw(ctx: &Ctx, label: &str, operation: &Op, cx: &mut AsyncWindowContext) -> AppResult<()> {
     set_busy(ctx, Some(Busy { label: label.to_string().into(), operation_id: None }), cx);
     let task = cx.update(|_, cx| spawn_core(cx, operation(ctx.core(cx), ctx.root.clone())));
@@ -77,8 +77,8 @@ pub async fn run_raw(ctx: &Ctx, label: &str, operation: &Op, cx: &mut AsyncWindo
     result
 }
 
-/// Menjalankan operasi; galat ditampilkan (dengan tawaran lanjutan) dan hasilnya `false`.
-/// Dengan `retry`, galat "perubahan lokal akan tertimpa" menawarkan stash lalu mengulang.
+/// Runs an operation; an error is shown (with a follow-up offer) and the result is `false`.
+/// With `retry`, a "local changes would be overwritten" error offers to stash and then repeat.
 pub async fn run(ctx: &Ctx, label: &str, operation: Op, retry: bool, cx: &mut AsyncWindowContext) -> bool {
     match run_raw(ctx, label, &operation, cx).await {
         Ok(()) => true,
@@ -90,7 +90,7 @@ pub async fn run(ctx: &Ctx, label: &str, operation: Op, retry: bool, cx: &mut As
     }
 }
 
-/// Menjalankan operasi jaringan dengan progres dan id pembatalan.
+/// Runs a network operation with progress and a cancellation id.
 pub async fn run_with_progress<F, Fut>(ctx: &Ctx, label: &str, operation: F, cx: &mut AsyncWindowContext) -> bool
 where
     F: FnOnce(Shared, String, String, ProgressFn) -> Fut,
@@ -102,7 +102,7 @@ where
     let on_progress: ProgressFn = Arc::new(move |progress| {
         let _ = tx.send(progress);
     });
-    // Progres datang dari thread backend; diteruskan ke penanda sibuk di thread utama.
+    // Progress arrives from the backend thread; it is forwarded to the busy indicator on the main thread.
     let (progress_ctx, progress_label, progress_id) = (ctx.clone(), label.to_string(), operation_id.clone());
     let forward = cx.spawn(async move |cx| {
         while let Some(progress) = rx.recv().await {
@@ -112,7 +112,7 @@ where
             };
             let updated = cx.update(|_, cx| {
                 progress_ctx.store.update(cx, |store, cx| {
-                    // Operasi sudah selesai (atau diganti): jangan menghidupkan lagi penandanya.
+                    // The operation has finished (or been replaced): do not revive its indicator.
                     if store.busy(&progress_ctx.root).is_some_and(|b| b.operation_id.as_deref() == Some(progress_id.as_str())) {
                         store.set_busy(&progress_ctx.root, Some(Busy { label: text.into(), operation_id: Some(progress_id.clone()) }), cx);
                     }
@@ -140,7 +140,7 @@ where
     }
 }
 
-/// Membatalkan operasi jaringan yang sedang berjalan pada repositori ini.
+/// Cancels the network operation currently running on this repository.
 pub fn cancel_busy(ctx: &Ctx, cx: &mut App) {
     let Some(id) = ctx.store.read(cx).busy(&ctx.root).and_then(|b| b.operation_id.clone()) else { return };
     let core = ctx.core(cx);
@@ -160,7 +160,7 @@ fn show_sidebar(ctx: &Ctx, id: &str, cx: &mut App) {
     }
 }
 
-/// Menerjemahkan kode galat Git menjadi pesan dan, bila ada, tombol aksi berikutnya.
+/// Translates a Git error code into a message and, where applicable, a follow-up action button.
 pub fn handle_git_error(ctx: &Ctx, error: &AppError, label: &str, retry: Option<Op>, window: &mut Window, cx: &mut App) {
     match error.code.as_str() {
         "cancelled" => {}
@@ -218,7 +218,7 @@ fn stash_and_retry(ctx: Ctx, label: String, retry: Op, window: &mut Window, cx: 
         .detach();
 }
 
-// ----- Dialog dari tugas asinkron -----
+// ----- Dialogs from async tasks -----
 
 pub async fn ask(cx: &mut AsyncWindowContext, options: Confirm) -> bool {
     match cx.update(|window, cx| overlay::confirm(options, window, cx)) {
@@ -264,7 +264,7 @@ fn error(cx: &mut AsyncWindowContext, message: impl Into<SharedString>) {
     let _ = cx.update(|window, cx| overlay::toast_error(message, window, cx));
 }
 
-/// Meminta nama ref; nama yang tidak sah ditolak dengan pesan sebelum git dijalankan.
+/// Asks for a ref name; an invalid name is rejected with a message before git runs.
 async fn prompt_ref_name(cx: &mut AsyncWindowContext, options: TextPrompt) -> Option<String> {
     let value = prompt(cx, options).await?;
     let name = value.trim().to_string();
@@ -280,7 +280,7 @@ pub fn copy_text(text: &str, what: &str, window: &mut Window, cx: &mut App) {
     overlay::toast_info(format!("{what} copied to clipboard."), window, cx);
 }
 
-// ----- Checkout dan branch -----
+// ----- Checkout and branch -----
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum CheckoutTarget {
@@ -300,7 +300,7 @@ pub async fn checkout(ctx: &Ctx, target: CheckoutTarget, cx: &mut AsyncWindowCon
             async move { git::git_switch_detached(&core, root, rev).await }
         }),
         CheckoutTarget::Remote(name) => {
-            // Bila branch lokal dengan nama yang sama sudah ada, pindah ke sana saja.
+            // If a local branch with the same name already exists, just switch to it.
             let local = name.split_once('/').map(|(_, rest)| rest.to_string()).unwrap_or_default();
             let exists = cx.update(|_, cx| ctx.store.read(cx).refs(&ctx.root).is_some_and(|refs| refs.branches.iter().any(|b| b.name == local))).unwrap_or(false);
             if exists {
@@ -344,7 +344,7 @@ pub async fn rename_branch(ctx: &Ctx, name: String, cx: &mut AsyncWindowContext)
     run(ctx, "Rename branch", operation, false, cx).await;
 }
 
-/// Teks konfirmasi untuk menghapus branch yang belum tergabung.
+/// Confirmation text for deleting a branch that has not been merged.
 pub fn unmerged_branch_message(count: u32) -> String {
     let (exist, them) = if count == 1 { ("exists", "it") } else { ("exist", "them") };
     format!(
@@ -399,7 +399,7 @@ pub async fn delete_remote_branch(ctx: &Ctx, full_name: String, cx: &mut AsyncWi
     run(ctx, "Delete remote branch", operation, false, cx).await;
 }
 
-/// Memilih upstream untuk sebuah branch lokal dari daftar branch remote.
+/// Picks an upstream for a local branch from the list of remote branches.
 pub async fn set_upstream(ctx: &Ctx, branch: String, cx: &mut AsyncWindowContext) {
     const REMOVE: &str = "\0remove";
     let items = cx
@@ -552,7 +552,7 @@ pub fn reset_mode_name(mode: ResetMode) -> &'static str {
     }
 }
 
-/// Judul, pesan, dan label tombol konfirmasi reset; pesannya menyebut apa yang hilang.
+/// Title, message, and button label of the reset confirmation; the message states what is lost.
 pub fn reset_confirmation(current: &str, rev: &str, mode: ResetMode, changed_files: usize) -> Confirm {
     let short = short_rev(rev);
     let message = match mode {
@@ -705,9 +705,9 @@ pub async fn stash_branch(ctx: &Ctx, name: String, cx: &mut AsyncWindowContext) 
     run(ctx, "Stash to branch", operation, false, cx).await;
 }
 
-// ----- Penyalur -----
+// ----- Dispatcher -----
 
-/// Menjalankan aksi sebuah item menu. `CompareWithHead` ditangani tab Graph sendiri.
+/// Runs the action of a menu item. `CompareWithHead` is handled by the Graph tab itself.
 pub fn run_action(ctx: &Ctx, action: GitAction, window: &mut Window, cx: &mut App) {
     match action {
         GitAction::Copy { text, what } => return copy_text(&text, what, window, cx),

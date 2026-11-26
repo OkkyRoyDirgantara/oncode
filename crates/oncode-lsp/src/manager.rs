@@ -1,8 +1,8 @@
-//! Pengelola proses language server.
+//! Language server process manager.
 //!
-//! Tiap server memakai tiga task tokio: pembaca stdout (membingkai pesan dan memanggil `on_message`),
-//! pembaca stderr (menyimpan ekor keluaran), dan pengawas yang menunggu proses berakhir lalu
-//! memanggil `on_exit`.
+//! Each server uses three tokio tasks: a stdout reader (frames messages and calls `on_message`),
+//! a stderr reader (keeps the tail of the output), and a supervisor that waits for the process to end and then
+//! calls `on_exit`.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -23,35 +23,35 @@ use crate::model::{install_hint_for, ServerExitInfo, ServerSpec};
 use crate::path::resolve_command;
 
 const READ_CHUNK: usize = 64 * 1024;
-/// Ukuran maksimum ekor stderr yang disimpan.
+/// Maximum size of the stored stderr tail.
 const STDERR_TAIL_BYTES: usize = 4 * 1024;
-/// Waktu yang diberikan kepada server untuk keluar sendiri setelah stdin ditutup, sebelum dimatikan paksa.
+/// Time given to the server to exit on its own after stdin is closed, before it is forcibly killed.
 const STOP_GRACE: Duration = Duration::from_millis(500);
-/// Setelah proses berakhir, pembaca diberi waktu ini untuk menghabiskan sisa pipa. Diperlukan
-/// karena proses cucu bisa menahan pipa tetap terbuka sehingga EOF tidak pernah tiba.
+/// After the process ends, the readers are given this long to drain the rest of the pipe. Needed
+/// because a grandchild process can keep the pipe open so that EOF never arrives.
 const DRAIN_TIMEOUT: Duration = Duration::from_secs(1);
 
-/// Mengunci mutex dan mengabaikan status *poisoned*: callback pengguna yang panik
-/// tidak boleh membuat seluruh pengelola ikut macet.
+/// Locks a mutex and ignores the *poisoned* state: a user callback that panics
+/// must not leave the whole manager stuck.
 fn lock<T: ?Sized>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 struct Server {
-    /// `None` setelah server diminta berhenti atau prosesnya berakhir.
+    /// `None` after the server is asked to stop or its process ends.
     stdin: tokio::sync::Mutex<Option<ChildStdin>>,
-    /// Permintaan berhenti untuk task pengawas.
+    /// Stop request for the supervisor task.
     stop: Notify,
-    /// Menjadi `true` setelah `on_exit` dipanggil.
+    /// Becomes `true` after `on_exit` is called.
     done: watch::Receiver<bool>,
 }
 
 impl Server {
-    /// Meminta berhenti lalu menunggu sampai `on_exit` selesai dipanggil.
+    /// Requests a stop and then waits until `on_exit` has finished being called.
     async fn stop_and_wait(&self) {
         self.stop.notify_one();
         let mut done = self.done.clone();
-        // Err berarti task pengawas sudah hilang (runtime dimatikan); tidak ada lagi yang ditunggu.
+        // Err means the supervisor task is gone (the runtime was shut down); there is nothing left to wait for.
         let _ = done.wait_for(|done| *done).await;
     }
 }
@@ -62,8 +62,8 @@ struct Registry {
     servers: Mutex<HashMap<u32, Arc<Server>>>,
 }
 
-/// Pengelola semua language server milik satu aplikasi. Aman dipakai dari banyak task di balik `Arc`.
-/// Saat di-drop, semua server diminta berhenti.
+/// Manager of all language servers belonging to one application. Safe to use from many tasks behind an `Arc`.
+/// When dropped, all servers are asked to stop.
 #[derive(Default)]
 pub struct LspManager {
     registry: Arc<Registry>,
@@ -74,14 +74,14 @@ impl LspManager {
         Self::default()
     }
 
-    /// Menjalankan proses server di `cwd` dengan stdio berupa pipa dan mengembalikan id server.
+    /// Runs the server process in `cwd` with piped stdio and returns the server id.
     ///
-    /// Galat `ServerNotInstalled` bila perintahnya tidak ditemukan (path relatif yang memuat pemisah
-    /// dihitung dari `cwd`). `on_message` dipanggil untuk tiap isi pesan lengkap (teks JSON tanpa
-    /// header `Content-Length`) dari stdout server. `on_exit` dipanggil satu kali saat proses
-    /// berakhir, juga setelah [`Self::stop`], dan selalu sesudah pesan terakhir.
+    /// Errors with `ServerNotInstalled` if the command is not found (a relative path containing a separator
+    /// is resolved from `cwd`). `on_message` is called for each complete message body (JSON text without the
+    /// `Content-Length` header) from the server's stdout. `on_exit` is called once when the process
+    /// ends, also after [`Self::stop`], and always after the last message.
     ///
-    /// Kedua callback dijalankan di task tokio, jadi harus cepat dan tidak memblokir.
+    /// Both callbacks run on a tokio task, so they must be fast and must not block.
     pub async fn start(
         &self,
         spec: &ServerSpec,
@@ -105,7 +105,7 @@ impl LspManager {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
-        // CREATE_NO_WINDOW: jangan munculkan jendela konsol untuk server di aplikasi GUI.
+        // CREATE_NO_WINDOW: do not pop up a console window for the server in a GUI app.
         #[cfg(windows)]
         command.creation_flags(0x0800_0000);
 
@@ -114,7 +114,7 @@ impl LspManager {
         })?;
         let (Some(stdin), Some(stdout), Some(stderr)) = (child.stdin.take(), child.stdout.take(), child.stderr.take())
         else {
-            // `child` di-drop di sini dan prosesnya dimatikan (kill_on_drop).
+            // `child` is dropped here and its process is killed (kill_on_drop).
             return Err(LspError::spawn_failed(format!("Failed to open stdio pipes for `{}`", spec.command)));
         };
 
@@ -141,10 +141,10 @@ impl LspManager {
         Ok(id)
     }
 
-    /// Menulis `Content-Length: N\r\n\r\n<json>` ke stdin server (N = panjang dalam byte).
+    /// Writes `Content-Length: N\r\n\r\n<json>` to the server's stdin (N = length in bytes).
     ///
-    /// Future ini sebaiknya tidak dibatalkan di tengah jalan: pesan yang baru tertulis sebagian
-    /// akan merusak aliran ke server.
+    /// This future should preferably not be canceled midway: a message that is only partly written
+    /// would corrupt the stream to the server.
     pub async fn send(&self, id: u32, json: &str) -> Result<()> {
         let server = lock(&self.registry.servers).get(&id).cloned().ok_or_else(|| LspError::not_found(id))?;
         let frame = encode_frame(json);
@@ -154,8 +154,8 @@ impl LspManager {
         stdin.flush().await.map_err(|err| LspError::io("Failed to send message to language server", err))
     }
 
-    /// Menghentikan server: stdin ditutup, lalu prosesnya dimatikan bila belum keluar setelah
-    /// jeda singkat. Kembali setelah `on_exit` dipanggil. Id yang tidak dikenal bukan galat.
+    /// Stops the server: stdin is closed, then the process is killed if it has not exited after
+    /// a short delay. Returns after `on_exit` is called. An unknown id is not an error.
     pub async fn stop(&self, id: u32) {
         let server = lock(&self.registry.servers).remove(&id);
         if let Some(server) = server {
@@ -163,7 +163,7 @@ impl LspManager {
         }
     }
 
-    /// Menghentikan semua server secara bersamaan dan menunggu semuanya berakhir.
+    /// Stops all servers at the same time and waits for all of them to finish.
     pub async fn stop_all(&self) {
         let servers: Vec<Arc<Server>> = lock(&self.registry.servers).drain().map(|(_, server)| server).collect();
         for server in &servers {
@@ -174,7 +174,7 @@ impl LspManager {
         }
     }
 
-    /// Id semua server yang masih berjalan, terurut naik.
+    /// The ids of all servers still running, in ascending order.
     pub fn ids(&self) -> Vec<u32> {
         let mut ids: Vec<u32> = lock(&self.registry.servers).keys().copied().collect();
         ids.sort_unstable();
@@ -184,7 +184,7 @@ impl LspManager {
 
 impl Drop for LspManager {
     fn drop(&mut self) {
-        // Tidak bisa menunggu di sini; task pengawas menyelesaikan penghentian di latar belakang.
+        // Cannot wait here; the supervisor task finishes the shutdown in the background.
         for (_, server) in lock(&self.registry.servers).drain() {
             server.stop.notify_one();
         }
@@ -228,7 +228,7 @@ async fn read_stderr_tail(mut stderr: impl AsyncRead + Unpin, tail: Arc<Mutex<Ve
     }
 }
 
-/// Menambahkan `bytes` ke `tail` sambil hanya menyimpan `max` byte terakhir.
+/// Appends `bytes` to `tail` while keeping only the last `max` bytes.
 fn push_tail(tail: &mut Vec<u8>, bytes: &[u8], max: usize) {
     if bytes.len() >= max {
         tail.clear();
@@ -240,12 +240,12 @@ fn push_tail(tail: &mut Vec<u8>, bytes: &[u8], max: usize) {
     tail.extend_from_slice(bytes);
 }
 
-/// Mengubah ekor stderr menjadi teks paling banyak `max` byte tanpa memotong karakter UTF-8.
+/// Converts the stderr tail into text of at most `max` bytes without cutting a UTF-8 character.
 fn tail_to_string(tail: &[u8], max: usize) -> String {
-    // Buang byte lanjutan UTF-8 yang terpotong di awal ekor.
+    // Drop UTF-8 continuation bytes that were cut off at the start of the tail.
     let start = tail.iter().take(3).take_while(|byte| (**byte & 0xC0) == 0x80).count();
     let text = String::from_utf8_lossy(&tail[start..]);
-    // Byte tak sah menjadi U+FFFD (3 byte), jadi hasilnya bisa melebihi batas.
+    // An invalid byte becomes U+FFFD (3 bytes), so the result can exceed the limit.
     let mut cut = text.len().saturating_sub(max);
     while !text.is_char_boundary(cut) {
         cut += 1;
@@ -253,7 +253,7 @@ fn tail_to_string(tail: &[u8], max: usize) -> String {
     text[cut..].to_string()
 }
 
-/// Menunggu proses berakhir (sendiri atau karena diminta berhenti), lalu mengumpulkan sisa keluaran.
+/// Waits for the process to end (on its own or because it was asked to stop), then collects the remaining output.
 async fn supervise(
     mut child: Child,
     server: &Server,
@@ -264,8 +264,8 @@ async fn supervise(
     let status = tokio::select! {
         status = child.wait() => status,
         _ = server.stop.notified() => {
-            // Menutup stdin memberi server kesempatan keluar dengan rapi. Bila sedang ada
-            // pengiriman yang tertahan, langsung saja dimatikan.
+            // Closing stdin gives the server a chance to exit cleanly. If a send is
+            // currently held up, just kill it right away.
             let closed_stdin = match server.stdin.try_lock() {
                 Ok(mut stdin) => {
                     stdin.take();
@@ -295,7 +295,7 @@ async fn supervise(
     }
 }
 
-/// Menunggu task pembaca selesai; bila pipanya ditahan proses lain, task dibatalkan.
+/// Waits for the reader task to finish; if the pipe is held by another process, the task is aborted.
 async fn finish_reader(mut task: JoinHandle<()>) {
     if timeout(DRAIN_TIMEOUT, &mut task).await.is_err() {
         task.abort();
@@ -322,11 +322,11 @@ mod tests {
 
     #[test]
     fn tail_string_never_splits_a_character() {
-        // "é" = C3 A9; ekor dimulai di tengah karakter.
+        // "é" = C3 A9; the tail starts in the middle of a character.
         let bytes = "ééé".as_bytes();
         assert_eq!(tail_to_string(&bytes[1..], 16), "éé");
         assert_eq!(tail_to_string(bytes, 16), "ééé");
-        // Byte tak sah membengkak menjadi U+FFFD; hasil tetap dalam batas dan utuh.
+        // An invalid byte inflates into U+FFFD; the result stays within the limit and intact.
         let text = tail_to_string(&[0xff, 0xff, 0xff, b'a'], 4);
         assert!(text.len() <= 4);
         assert!(text.ends_with('a'));
@@ -339,7 +339,7 @@ mod tests {
         assert_eq!(err.code, LspErrorCode::ServerNotInstalled);
         assert!(err.message.contains("gopls"));
         assert!(err.message.contains("go install"));
-        let err = not_installed("server-buatan-sendiri");
+        let err = not_installed("custom-server");
         assert!(err.message.ends_with("was not found in PATH."));
     }
 

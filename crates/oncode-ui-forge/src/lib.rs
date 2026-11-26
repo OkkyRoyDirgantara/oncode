@@ -1,5 +1,5 @@
-//! Integrasi GitHub dan GitLab: akun, daftar dan detail pull/merge request, membuat PR, dan clone
-//! dari akun.
+//! GitHub and GitLab integration: accounts, pull/merge request lists and details, creating PRs, and
+//! cloning from an account.
 
 pub mod accounts;
 pub mod clone;
@@ -16,7 +16,7 @@ use serde_json::Value;
 use logic::{PrTabParams, PR_TAB_KIND};
 use views::{PullRequestTab, PullRequestsView, SIDEBAR_ID};
 
-/// Mendaftarkan fitur ini. Dipanggil sekali dari `app/src/main.rs` setelah `oncode_ui::init`.
+/// Registers this feature. Called once from `app/src/main.rs` after `oncode_ui::init`.
 pub fn init(cx: &mut App) {
     oncode_ui::register_tab_kind(cx, PR_TAB_KIND, PrKind);
     oncode_ui_settings::register_accounts_view(cx, |_, _, cx| accounts::accounts_view(cx).into());
@@ -27,7 +27,7 @@ struct PrKind;
 
 impl TabKind for PrKind {
     fn build(&self, tab: &TabData, env: &Env, _: &mut Window, cx: &mut App) -> Box<dyn TabContent> {
-        let params: PrTabParams = serde_json::from_value(tab.params.clone()).expect("parameter tab PR sah");
+        let params: PrTabParams = serde_json::from_value(tab.params.clone()).expect("valid PR tab params");
         let env = env.clone();
         Box::new(ViewTab(cx.new(|cx| PullRequestTab::new(env, params, cx))))
     }
@@ -40,7 +40,7 @@ impl TabKind for PrKind {
 fn setup(workbench: &mut Workbench, _: &mut Window, cx: &mut Context<Workbench>) {
     let env = workbench.env().clone();
     let core = env.core.clone();
-    // Masuk, keluar, dan clone tersedia juga tanpa folder (layar awal).
+    // Sign in, sign out, and clone are also available without a folder (welcome screen).
     workbench.register_command(Command::new("forge.signIn", "Sign In to GitHub or GitLab…", |_, window, cx| accounts::sign_in(window, cx)).category("Accounts"));
     workbench.register_command(Command::new("forge.signOut", "Sign Out…", |_, window, cx| accounts::sign_out(window, cx)).category("Accounts"));
     workbench.register_command(Command::new("git.clone", "Clone Repository…", move |_, window, cx| views::clone_repository(core.clone(), window, cx)).category("Git"));
@@ -68,7 +68,7 @@ fn setup(workbench: &mut Workbench, _: &mut Window, cx: &mut Context<Workbench>)
     workbench.register_command(Command::new("forge.createPullRequest", "Create Pull Request…", |_, window, cx| views::create_pull_request(window, cx)).category("Pull Requests"));
 }
 
-/// Daftar PR jendela ini (untuk uji).
+/// This window's PR list (for tests).
 pub fn pull_requests(workbench: &Workbench) -> Option<gpui_kit::Entity<PullRequestsView>> {
     workbench.extension::<gpui_kit::Entity<PullRequestsView>>()
 }

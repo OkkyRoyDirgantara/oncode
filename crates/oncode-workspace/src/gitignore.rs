@@ -1,8 +1,8 @@
-//! Aturan gitignore yang dipakai bersama oleh explorer, watcher, pencarian, dan indeks.
+//! The gitignore rules shared by the explorer, watcher, search, and index.
 //!
-//! Satu sumber kebenaran: [`IgnoreRules`]. Explorer dan watcher bertanya per path, sedangkan
-//! penelusuran pohon (pencarian, indeks) memakai `ignore::WalkBuilder` yang disaring dengan
-//! aturan yang sama lewat [`walk_builder`].
+//! A single source of truth: [`IgnoreRules`]. The explorer and watcher ask per path, while
+//! tree walks (search, index) use `ignore::WalkBuilder` filtered with the same
+//! rules through [`walk_builder`].
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -11,15 +11,15 @@ use std::sync::{Arc, RwLock};
 use ignore::gitignore::{Gitignore, GitignoreBuilder};
 use ignore::{Match, WalkBuilder};
 
-/// Akar repositori yang melingkupi `dir` (folder terdekat yang memiliki `.git`), bila ada.
+/// The root of the repository enclosing `dir` (the nearest folder that has `.git`), if any.
 pub(crate) fn find_repo_root(dir: &Path) -> Option<PathBuf> {
     dir.ancestors().find(|d| d.join(".git").symlink_metadata().is_ok()).map(Path::to_path_buf)
 }
 
-/// Direktori Git bersama untuk `.git` milik sebuah worktree.
+/// The shared Git directory for a worktree's `.git`.
 ///
-/// `.git` bisa berupa folder (repositori biasa) atau berkas penunjuk `gitdir: …`
-/// (worktree tertaut dan submodule).
+/// `.git` can be a folder (a regular repository) or a pointer file `gitdir: …`
+/// (linked worktrees and submodules).
 pub(crate) fn common_dir_of_dot_git(dot_git: &Path) -> Option<PathBuf> {
     let meta = std::fs::metadata(dot_git).ok()?;
     if meta.is_dir() {
@@ -31,7 +31,7 @@ pub(crate) fn common_dir_of_dot_git(dot_git: &Path) -> Option<PathBuf> {
     Some(read_common_dir(&git_dir).unwrap_or(git_dir))
 }
 
-/// Isi `<git_dir>/commondir` sebagai path absolut; `None` bila bukan worktree tertaut.
+/// The contents of `<git_dir>/commondir` as an absolute path; `None` if it is not a linked worktree.
 pub(crate) fn read_common_dir(git_dir: &Path) -> Option<PathBuf> {
     let text = std::fs::read_to_string(git_dir.join("commondir")).ok()?;
     let line = text.lines().next()?.trim();
@@ -41,8 +41,8 @@ pub(crate) fn read_common_dir(git_dir: &Path) -> Option<PathBuf> {
     Some(git_dir.join(line))
 }
 
-/// Penelusur pohon yang memakai [`IgnoreRules`]: berkas tersembunyi ikut, `.git` dan entri
-/// yang diabaikan dilewati, symlink tidak diikuti.
+/// A tree walker that uses [`IgnoreRules`]: hidden files are included, `.git` and ignored
+/// entries are skipped, symlinks are not followed.
 pub(crate) fn walk_builder(root: &Path) -> WalkBuilder {
     let rules = Arc::new(IgnoreRules::new(root));
     let mut builder = WalkBuilder::new(root);
@@ -63,53 +63,53 @@ pub(crate) fn walk_builder(root: &Path) -> WalkBuilder {
     builder
 }
 
-/// Aturan yang berlaku untuk anak langsung sebuah folder, sudah diurutkan menurut prioritas.
+/// The rules that apply to the direct children of a folder, already sorted by priority.
 struct Chain {
-    /// `.gitignore` dari folder ini ke atas sampai akar repositori terdekat.
+    /// `.gitignore` files from this folder upward to the nearest repository root.
     gitignores: Vec<Arc<Gitignore>>,
-    /// `.git/info/exclude` milik repositori terdekat.
+    /// The nearest repository's `.git/info/exclude`.
     exclude: Option<Arc<Gitignore>>,
-    /// Akar repositori terdekat; dasar pencocokan gitignore global.
+    /// The nearest repository root; the base for matching the global gitignore.
     base: PathBuf,
 }
 
-/// Menjawab apakah sebuah path diabaikan Git.
+/// Answers whether a path is ignored by Git.
 ///
-/// Urutannya mengikuti Git: `.gitignore` dari folder terdekat sampai akar repositori, lalu
-/// `.git/info/exclude`, lalu gitignore global pengguna. Repositori bersarang memakai aturannya
-/// sendiri. Bila `root` tidak berada di dalam repositori, `.gitignore` dari `root` ke bawah
-/// tetap dihormati, tetapi yang berada di atas `root` tidak.
+/// The order follows Git: `.gitignore` from the nearest folder up to the repository root, then
+/// `.git/info/exclude`, then the user's global gitignore. A nested repository uses its own
+/// rules. If `root` is not inside a repository, `.gitignore` files from `root` downward
+/// are still honored, but those above `root` are not.
 pub(crate) struct IgnoreRules {
     root: PathBuf,
-    /// Folder teratas yang `.gitignore`-nya masih berlaku: akar repositori yang melingkupi
-    /// `root`, atau `root` sendiri bila tidak berada di dalam repositori.
+    /// The topmost folder whose `.gitignore` still applies: the repository root enclosing
+    /// `root`, or `root` itself if it is not inside a repository.
     top: PathBuf,
     global: Gitignore,
     chains: RwLock<HashMap<PathBuf, Arc<Chain>>>,
 }
 
 impl IgnoreRules {
-    /// `root` harus absolut; path yang ditanyakan harus memakai awalan yang sama.
+    /// `root` must be absolute; the paths queried must use the same prefix.
     pub(crate) fn new(root: &Path) -> Self {
-        // Tes unit tidak boleh bergantung pada gitignore global milik mesin yang menjalankannya.
+        // Unit tests must not depend on the global gitignore of the machine running them.
         let global = if cfg!(test) { Gitignore::empty() } else { Gitignore::global().0 };
         Self::with_global(root, global)
     }
 
-    /// Seperti [`IgnoreRules::new`], dengan gitignore global (`core.excludesFile`) yang diberikan.
+    /// Like [`IgnoreRules::new`], with the given global gitignore (`core.excludesFile`).
     pub(crate) fn with_global(root: &Path, global: Gitignore) -> Self {
         let top = find_repo_root(root).unwrap_or_else(|| root.to_path_buf());
         Self { root: root.to_path_buf(), top, global, chains: RwLock::new(HashMap::new()) }
     }
 
-    /// Membuang aturan yang sudah dimuat; dipanggil saat sebuah `.gitignore` berubah.
+    /// Discards the rules that have been loaded; called when a `.gitignore` changes.
     pub(crate) fn invalidate(&self) {
         if let Ok(mut chains) = self.chains.write() {
             chains.clear();
         }
     }
 
-    /// Benar bila `path` atau salah satu folder di atasnya (sampai `root`) diabaikan.
+    /// True if `path` or one of the folders above it (up to `root`) is ignored.
     pub(crate) fn is_ignored(&self, path: &Path, is_dir: bool) -> bool {
         let Ok(rel) = path.strip_prefix(&self.root) else { return false };
         let mut current = self.root.clone();
@@ -125,7 +125,7 @@ impl IgnoreRules {
         false
     }
 
-    /// Benar bila `path` (anak langsung `parent`) diabaikan, dengan anggapan `parent` sendiri tidak.
+    /// True if `path` (a direct child of `parent`) is ignored, assuming `parent` itself is not.
     pub(crate) fn is_entry_ignored(&self, parent: &Path, path: &Path, is_dir: bool) -> bool {
         let chain = self.chain_for(parent);
         for gitignore in chain.gitignores.iter().chain(chain.exclude.iter()) {
@@ -153,7 +153,7 @@ impl IgnoreRules {
         let has_git = dot_git.symlink_metadata().is_ok();
         let parent = if has_git || dir == self.top { None } else { dir.parent() };
         let chain = match parent {
-            // Folder biasa: aturannya sendiri, lalu aturan folder di atasnya.
+            // A regular folder: its own rules, then the rules of the folder above it.
             Some(parent) => {
                 let above = self.chain_for(parent);
                 let mut gitignores = Vec::with_capacity(above.gitignores.len() + 1);
@@ -161,7 +161,7 @@ impl IgnoreRules {
                 gitignores.extend(above.gitignores.iter().cloned());
                 Chain { gitignores, exclude: above.exclude.clone(), base: above.base.clone() }
             }
-            // Akar repositori (atau batas atas): rantai berhenti di sini.
+            // The repository root (or the upper bound): the chain stops here.
             None => {
                 let exclude = if has_git {
                     common_dir_of_dot_git(&dot_git).and_then(|common| load_file(dir, &common.join("info").join("exclude")))
@@ -179,8 +179,8 @@ impl IgnoreRules {
     }
 }
 
-/// Memuat satu berkas pola dengan `dir` sebagai dasar pola berjangkar. Baris yang tidak valid
-/// dilewati; `None` bila berkas tidak ada atau tidak memuat pola.
+/// Loads a single pattern file with `dir` as the base for anchored patterns. Invalid lines
+/// are skipped; `None` if the file does not exist or contains no patterns.
 fn load_file(dir: &Path, file: &Path) -> Option<Arc<Gitignore>> {
     if !file.is_file() {
         return None;
@@ -205,7 +205,7 @@ mod tests {
         fs::write(path, text).unwrap();
     }
 
-    /// Semua berkas yang tidak diabaikan menurut `IgnoreRules`, relatif terhadap `root`.
+    /// All files that are not ignored according to `IgnoreRules`, relative to `root`.
     fn walk_with_rules(root: &Path) -> BTreeSet<String> {
         let rules = IgnoreRules::new(root);
         let mut out = BTreeSet::new();
@@ -343,7 +343,7 @@ mod tests {
         assert!(rules.is_ignored(&root.join("web/node_modules/pkg/index.js"), false));
         assert!(rules.is_ignored(&root.join("build"), true));
         assert!(!rules.is_ignored(&root.join("src/build"), true));
-        // Pola `node_modules/` hanya cocok dengan folder.
+        // The `node_modules/` pattern only matches folders.
         assert!(!rules.is_ignored(&root.join("node_modules"), false));
         assert!(rules.is_ignored(&root.join("node_modules"), true));
     }
@@ -365,7 +365,7 @@ mod tests {
         assert!(rules.is_ignored(&root.join("deep/dir/a.swp"), false));
         assert!(!rules.is_ignored(&root.join("keep.swp"), false));
         assert!(!rules.is_ignored(&root.join("a.txt"), false));
-        // Pola berjangkar dicocokkan dari akar repositori terdekat.
+        // Anchored patterns are matched from the nearest repository root.
         assert!(rules.is_ignored(&root.join("scratch"), true));
         assert!(!rules.is_ignored(&root.join("deep/scratch"), true));
         assert!(rules.is_ignored(&root.join("sub/scratch"), true));

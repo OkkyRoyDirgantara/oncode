@@ -1,40 +1,40 @@
-//! Geometri potongan graph per baris: posisi jalur, bentuk garis, dan lebar kolom graph.
+//! Per-row graph slice geometry: lane positions, edge shapes, and graph column width.
 
 use oncode_git::{Edge, EdgeKind, GraphRow};
 
 pub const LANE_WIDTH: f32 = 14.0;
 pub const ROW_HEIGHT: f32 = 26.0;
 pub const DOT_RADIUS: f32 = 4.0;
-/// Jalur di luar batas ini tidak digambar (kolom graph dipotong).
+/// Lanes beyond this limit are not drawn (the graph column is clipped).
 pub const MAX_LANES: usize = 20;
-/// Jumlah warna jalur.
+/// Number of lane colors.
 pub const LANE_COLORS: usize = 8;
 
-/// Koordinat x titik tengah sebuah jalur.
+/// The x coordinate of a lane's center.
 pub fn lane_x(lane: u16) -> f32 {
     lane as f32 * LANE_WIDTH + LANE_WIDTH / 2.0
 }
 
-/// Indeks warna jalur (0..LANE_COLORS) untuk nilai warna apa pun.
+/// Lane color index (0..LANE_COLORS) for any color value.
 pub fn lane_color_index(color: i32) -> usize {
     color.rem_euclid(LANE_COLORS as i32) as usize
 }
 
-/// Satu langkah lintasan, dengan arti yang sama seperti perintah path SVG.
+/// One step of a path, with the same meaning as an SVG path command.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Segment {
     MoveTo(f32, f32),
     LineTo(f32, f32),
-    /// Kurva kuadratik menuju `to` dengan titik kendali `ctrl`.
+    /// A quadratic curve towards `to` with control point `ctrl`.
     QuadTo { ctrl: (f32, f32), to: (f32, f32) },
 }
 
-/// Lintasan untuk satu garis pada baris setinggi `height`.
-/// - `Through`: lurus dari atas ke bawah.
-/// - `Top`: dari jalur `from` di tepi atas menuju titik commit di jalur `to`.
-/// - `Bottom`: dari titik commit di jalur `from` menuju jalur `to` di tepi bawah.
+/// Path for one edge in a row of height `height`.
+/// - `Through`: straight from top to bottom.
+/// - `Top`: from lane `from` at the top edge to the commit dot in lane `to`.
+/// - `Bottom`: from the commit dot in lane `from` to lane `to` at the bottom edge.
 ///
-/// Garis yang berpindah jalur berbelok dengan sudut membulat lalu mendatar ke titik commit.
+/// An edge that changes lanes turns with a rounded corner and then runs horizontally to the commit dot.
 pub fn edge_path(from: u16, to: u16, kind: EdgeKind, height: f32) -> Vec<Segment> {
     use Segment::*;
     let mid = height / 2.0;
@@ -52,10 +52,10 @@ pub fn edge_path(from: u16, to: u16, kind: EdgeKind, height: f32) -> Vec<Segment
     let dir = if x2 > x1 { 1.0 } else { -1.0 };
     let r = (LANE_WIDTH / 2.0).min(mid).min((x2 - x1).abs());
     if kind == EdgeKind::Top {
-        // Turun di jalur asal, belok, lalu mendatar ke titik commit.
+        // Go down the source lane, turn, then run horizontally to the commit dot.
         return vec![MoveTo(x1, 0.0), LineTo(x1, mid - r), QuadTo { ctrl: (x1, mid), to: (x1 + dir * r, mid) }, LineTo(x2, mid)];
     }
-    // Mendatar dari titik commit, belok, lalu turun di jalur tujuan.
+    // Run horizontally from the commit dot, turn, then go down the target lane.
     vec![MoveTo(x1, mid), LineTo(x2 - dir * r, mid), QuadTo { ctrl: (x2, mid), to: (x2, mid + r) }, LineTo(x2, height)]
 }
 
@@ -63,7 +63,7 @@ pub fn edge_segments(edge: &Edge, height: f32) -> Vec<Segment> {
     edge_path(edge.from, edge.to, edge.kind, height)
 }
 
-/// Lintasan dalam notasi path SVG (dipakai uji dan untuk memeriksa bentuk).
+/// The path in SVG path notation (used by tests and for checking shapes).
 pub fn to_svg(segments: &[Segment]) -> String {
     let mut out: Vec<String> = Vec::new();
     let mut cursor = (0.0f32, 0.0f32);
@@ -86,7 +86,7 @@ pub fn to_svg(segments: &[Segment]) -> String {
     out.join(" ")
 }
 
-/// Jalur paling kanan yang dipakai oleh baris-baris ini (-1 bila kosong).
+/// The rightmost lane used by these rows (-1 if empty).
 pub fn max_lane<'a>(rows: impl IntoIterator<Item = &'a GraphRow>) -> i32 {
     let mut max = -1;
     for row in rows {
@@ -98,7 +98,7 @@ pub fn max_lane<'a>(rows: impl IntoIterator<Item = &'a GraphRow>) -> i32 {
     max
 }
 
-/// Lebar kolom graph untuk jalur terkanan `lane`, dibatasi `MAX_LANES`.
+/// Width of the graph column for the rightmost lane `lane`, capped at `MAX_LANES`.
 pub fn graph_width(lane: i32) -> f32 {
     ((lane + 1).max(1) as usize).min(MAX_LANES) as f32 * LANE_WIDTH
 }
@@ -141,7 +141,7 @@ mod tests {
     #[test]
     fn top_edges_bend_towards_the_dot() {
         let h = ROW_HEIGHT;
-        // Jalur 2 menyatu ke titik di jalur 0: turun, belok ke kiri, mendatar.
+        // Lane 2 merges into the dot in lane 0: down, turn left, horizontal.
         assert_eq!(svg(2, 0, EdgeKind::Top, h), "M 35 0 V 6 Q 35 13 28 13 H 7");
         assert_eq!(svg(0, 1, EdgeKind::Top, h), "M 7 0 V 6 Q 7 13 14 13 H 21");
     }
@@ -149,7 +149,7 @@ mod tests {
     #[test]
     fn bottom_edges_leave_the_dot_and_bend_down() {
         let h = ROW_HEIGHT;
-        // Titik di jalur 0 bercabang ke jalur 2: mendatar, belok, turun.
+        // The dot in lane 0 branches to lane 2: horizontal, turn, down.
         assert_eq!(svg(0, 2, EdgeKind::Bottom, h), "M 7 13 H 28 Q 35 13 35 20 V 26");
         assert_eq!(svg(3, 1, EdgeKind::Bottom, h), "M 49 13 H 28 Q 21 13 21 20 V 26");
     }

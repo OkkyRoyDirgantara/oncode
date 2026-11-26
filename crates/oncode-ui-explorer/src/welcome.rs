@@ -1,5 +1,5 @@
-//! Isi area editor saat tidak ada tab: layar awal (belum ada folder) atau petunjuk pintasan
-//! (folder terbuka).
+//! The contents of the editor area when there are no tabs: the welcome screen (no folder yet) or shortcut
+//! hints (a folder is open).
 
 use std::path::PathBuf;
 
@@ -16,10 +16,10 @@ use serde_json::Value;
 
 use crate::tree::base_name;
 
-/// Jumlah folder terakhir yang ditampilkan.
+/// The number of recent folders shown.
 const RECENT_LIMIT: usize = 10;
 
-/// Pintasan utama: id command, keterangan, dan pintasan bawaan bila command-nya belum terdaftar.
+/// Main shortcuts: command id, caption, and the default shortcut if the command is not registered yet.
 const SHORTCUTS: [(&str, &str, &str); 4] = [
     ("workbench.commandPalette", "Command palette", "Mod+Shift+P"),
     ("workbench.quickOpen", "Go to file", "Mod+P"),
@@ -41,7 +41,7 @@ impl Welcome {
         this
     }
 
-    /// Info aplikasi (versi, git, folder terakhir); `None` selama belum dimuat.
+    /// App info (version, git, recent folders); `None` until loaded.
     pub fn info(&self) -> Option<&AppInfo> {
         self.info.as_ref()
     }
@@ -61,7 +61,7 @@ impl Welcome {
     }
 
     fn remove_recent(&mut self, path: String, cx: &mut Context<Self>) {
-        // Langsung hilang dari daftar; daftar dari backend menyusul.
+        // It disappears from the list immediately; the list from the backend follows.
         if let Some(info) = &mut self.info {
             info.recent.retain(|recent| *recent != path);
         }
@@ -82,7 +82,7 @@ impl Welcome {
         .detach();
     }
 
-    /// Alasan fitur Git tidak tersedia, bila ada.
+    /// The reason Git features are unavailable, if any.
     fn git_problem(&self) -> Option<String> {
         let info = self.info.as_ref()?;
         match &info.git {
@@ -95,7 +95,7 @@ impl Welcome {
     fn render_shortcuts(&self, window: &Window, cx: &App) -> impl IntoElement {
         let theme = cx.theme();
         v_flex().gap_1p5().text_sm().text_color(theme.muted_foreground).children(SHORTCUTS.iter().filter_map(|(id, label, fallback)| {
-            // Pintasan yang berlaku (termasuk penimpaan pengguna); command yang belum terdaftar memakai bawaannya.
+            // The shortcut in effect (including user overrides); a command that is not registered yet uses its default.
             let binding = match commands::get(id, window, cx) {
                 Some(command) => commands::keybindings_for(&command, cx).first().cloned(),
                 None => Some(keys::canonical_keybinding(fallback)),
@@ -206,7 +206,7 @@ impl Welcome {
 impl Render for Welcome {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if self.env.root.is_some() {
-            // Folder terbuka tanpa tab: cukup pengingat pintasan utama.
+            // A folder is open without tabs: just a reminder of the main shortcuts.
             return v_flex()
                 .id("editor-hint")
                 .test_support()

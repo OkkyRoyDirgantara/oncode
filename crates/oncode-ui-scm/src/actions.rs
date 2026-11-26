@@ -1,6 +1,6 @@
-//! Aksi Git dari sisi UI: konfirmasi untuk aksi destruktif, progres, dan galat yang bisa
-//! ditindaklanjuti. Setiap aksi adalah alur `async` di thread utama; pekerjaan backend
-//! dijalankan di runtime tokio lewat `spawn_core`.
+//! Git actions from the UI side: confirmation for destructive actions, progress, and errors that
+//! can be acted on. Each action is an `async` flow on the main thread; backend work
+//! runs on the tokio runtime through `spawn_core`.
 
 use std::future::Future;
 use std::pin::Pin;
@@ -24,18 +24,18 @@ use crate::logic::{self, plural, CheckoutTarget, FollowUp, NoticeLevel};
 use crate::prompts::{self, InputPrompt, ToastAction};
 use crate::store::{self, Busy, ScmStore};
 
-/// Id panel Git Output dan sidebar yang dituju tindak lanjut galat.
+/// Ids of the Git Output panel and the sidebars that error follow-ups point to.
 pub const GIT_OUTPUT_PANEL: &str = "git-output";
 pub const SCM_SIDEBAR: &str = "scm";
 const ACCOUNTS_SIDEBAR: &str = "pullRequests";
 
-/// Repositori sebuah jendela beserta semua yang dibutuhkan untuk menjalankan aksi padanya.
+/// A window's repository with everything needed to run actions on it.
 #[derive(Clone)]
 pub struct Git {
     pub core: Shared,
-    /// Label jendela untuk API `oncode-core`.
+    /// The window label for the `oncode-core` API.
     pub label: SharedString,
-    /// Akar repositori (worktree).
+    /// The repository root (worktree).
     pub root: String,
     pub store: Entity<ScmStore>,
     pub workbench: WeakEntity<Workbench>,
@@ -48,7 +48,7 @@ impl Git {
         Some(Self { core: env.core.clone(), label: env.window.clone(), root: state.root()?.to_string(), store: store.clone(), workbench: env.workbench.clone() })
     }
 
-    /// Repositori jendela ini. Jangan dipanggil selagi `Workbench` dipinjam.
+    /// This window's repository. Do not call while `Workbench` is borrowed.
     pub fn for_window(window: &Window, cx: &App) -> Option<Self> {
         let workbench = Workbench::for_window(window, cx)?;
         let store = store::store(workbench.read(cx))?;
@@ -63,7 +63,7 @@ impl Git {
         self.store.read(cx).snapshot(cx)
     }
 
-    /// Membuka tab diff sebuah berkas repositori ini.
+    /// Opens the diff tab of a file in this repository.
     pub fn open_diff(&self, path: &str, orig_path: Option<String>, source: DiffSource, preview: bool, window: &mut Window, cx: &mut App) {
         let request = DiffRequest { root: self.root.clone(), path: path.to_string(), orig_path, source, preview };
         let _ = self.workbench.update(cx, |workbench, cx| oncode_ui_diff::open_diff(workbench, request, window, cx));
@@ -74,7 +74,7 @@ impl Git {
         let _ = self.workbench.update(cx, |workbench, cx| oncode_ui_diff::open_conflict(workbench, root, path, window, cx));
     }
 
-    /// Membuka berkas kerja di editor (bukan pratinjau).
+    /// Opens the working file in the editor (not a preview).
     pub fn open_file(&self, path: &str, window: &mut Window, cx: &mut App) {
         let full = logic::repo_file(&self.root, path);
         let _ = self.workbench.update(cx, |workbench, cx| open_file(workbench, OpenFile::new(full), window, cx));
@@ -89,14 +89,14 @@ impl Git {
     }
 }
 
-/// Menjalankan sebuah alur aksi di thread utama jendela ini.
+/// Runs an action flow on this window's main thread.
 pub fn spawn(window: &mut Window, cx: &mut App, flow: impl AsyncFnOnce(&mut AsyncWindowContext) + 'static) {
     window.spawn(cx, async move |cx| flow(cx).await).detach();
 }
 
 pub type OpFuture = Pin<Box<dyn Future<Output = AppResult<()>> + Send>>;
 
-/// Operasi backend yang bisa dijalankan ulang (mis. setelah stash otomatis): menerima core dan akar repositori.
+/// A backend operation that can be run again (e.g. after an automatic stash): takes the core and the repository root.
 pub type Op = Rc<dyn Fn(Shared, String) -> OpFuture>;
 
 pub fn op<F, Fut>(f: F) -> Op
@@ -107,7 +107,7 @@ where
     Rc::new(move |core, root| Box::pin(f(core, root)))
 }
 
-// ----- Pembantu alur -----
+// ----- Flow helpers -----
 
 fn ui<R>(cx: &mut AsyncWindowContext, f: impl FnOnce(&mut Window, &mut App) -> R) -> Option<R> {
     cx.update(f).ok()
@@ -171,7 +171,7 @@ fn ref_name_validator(value: &str) -> Option<String> {
     logic::validate_ref_name(value).map(String::from)
 }
 
-/// Menjalankan operasi Git dengan indikator sibuk dan mengembalikan hasil mentahnya.
+/// Runs a Git operation with the busy indicator and returns its raw result.
 async fn run<T: Send + 'static>(git: &Git, label: &str, cx: &mut AsyncWindowContext, future: impl Future<Output = AppResult<T>> + Send + 'static) -> AppResult<T> {
     set_busy(git, Some(Busy::new(label.to_string())), cx);
     let result = core_call(cx, future).await;
@@ -179,7 +179,7 @@ async fn run<T: Send + 'static>(git: &Git, label: &str, cx: &mut AsyncWindowCont
     result
 }
 
-/// Seperti [`run`], tetapi galat ditampilkan; `None` berarti gagal.
+/// Like [`run`], but errors are shown; `None` means it failed.
 async fn run_shown<T: Send + 'static>(git: &Git, label: &str, cx: &mut AsyncWindowContext, future: impl Future<Output = AppResult<T>> + Send + 'static) -> Option<T> {
     match run(git, label, cx, future).await {
         Ok(value) => Some(value),
@@ -190,7 +190,7 @@ async fn run_shown<T: Send + 'static>(git: &Git, label: &str, cx: &mut AsyncWind
     }
 }
 
-/// Menjalankan operasi yang bisa diulang; bila gagal karena perubahan lokal, tawarkan stash lalu ulangi.
+/// Runs a repeatable operation; if it fails because of local changes, offers a stash and then repeats.
 async fn run_op(git: &Git, label: &str, operation: Op, cx: &mut AsyncWindowContext) -> bool {
     match run(git, label, cx, operation(git.core.clone(), git.root.clone())).await {
         Ok(()) => true,
@@ -201,7 +201,7 @@ async fn run_op(git: &Git, label: &str, operation: Op, cx: &mut AsyncWindowConte
     }
 }
 
-/// Menjalankan operasi jaringan dengan progres dan tombol batal; mengembalikan galatnya agar pemanggil bisa memutuskan.
+/// Runs a network operation with progress and a cancel button; returns its error so the caller can decide.
 async fn run_progress<Fut>(git: &Git, label: &str, cx: &mut AsyncWindowContext, make: impl FnOnce(Shared, String, String, ProgressFn) -> Fut) -> AppResult<()>
 where
     Fut: Future<Output = AppResult<()>> + Send + 'static,
@@ -212,7 +212,7 @@ where
         let _ = tx.send(progress);
     });
     set_busy(git, Some(Busy { label: label.to_string().into(), percent: None, operation_id: Some(operation_id.clone()) }), cx);
-    // Progres datang dari thread backend; diteruskan ke store di thread utama.
+    // Progress comes from the backend thread; it is forwarded to the store on the main thread.
     let pump = cx.spawn({
         let (store, id, label) = (git.store.downgrade(), operation_id.clone(), label.to_string());
         async move |cx| {
@@ -230,14 +230,14 @@ where
     result
 }
 
-/// Membatalkan operasi jaringan yang sedang berjalan.
+/// Cancels the network operation that is running.
 pub fn cancel_busy(git: &Git, cx: &mut App) {
     let Some(id) = git.store.read(cx).busy().and_then(|busy| busy.operation_id.clone()) else { return };
     let core = git.core.clone();
     spawn_core(cx, async move { app::app_cancel(&core, id).await }).detach();
 }
 
-/// Menerjemahkan kode galat Git menjadi pesan dengan tombol aksi berikutnya.
+/// Translates a Git error code into a message with next-action buttons.
 pub fn handle_error(git: &Git, error: &AppError, label: &str, retry: Option<Op>, cx: &mut AsyncWindowContext) {
     let Some(notice) = logic::error_notice(&error.code, &error.message, label, retry.is_some()) else { return };
     let mut actions: Vec<ToastAction> = notice.follow_ups.iter().map(|follow_up| follow_up_action(git, *follow_up, label, retry.clone())).collect();
@@ -310,7 +310,7 @@ pub async fn unstage_all(git: &Git, cx: &mut AsyncWindowContext) -> bool {
     run_shown(git, "Unstage all", cx, async move { backend::git_unstage_all(&core, root).await }).await.is_some()
 }
 
-/// Membuang perubahan setelah konfirmasi yang menyebut apa yang akan hilang.
+/// Discards changes after a confirmation that names what will be lost.
 pub async fn discard(git: &Git, tracked: Vec<String>, untracked: Vec<String>, cx: &mut AsyncWindowContext) -> bool {
     let Some((title, message)) = logic::discard_prompt(&tracked, &untracked) else { return false };
     if !confirm(cx, Confirm::new(title, message, "Discard").danger()).await {
@@ -320,7 +320,7 @@ pub async fn discard(git: &Git, tracked: Vec<String>, untracked: Vec<String>, cx
     run_shown(git, "Discard", cx, async move { backend::git_discard(&core, root, tracked, untracked).await }).await.is_some()
 }
 
-/// Membuang semua perubahan working tree (terlacak dan untracked).
+/// Discards all working tree changes (tracked and untracked).
 pub async fn discard_all(git: &Git, cx: &mut AsyncWindowContext) -> bool {
     let Some(snapshot) = snapshot(git, cx) else { return false };
     let tracked = snapshot.unstaged.iter().map(|change| change.path.clone()).collect();
@@ -349,7 +349,7 @@ fn valid_email(value: &str) -> bool {
     !value.chars().any(char::is_whitespace) && value.split_once('@').is_some_and(|(user, host)| !user.is_empty() && !host.is_empty())
 }
 
-/// Memastikan `user.name` dan `user.email` terisi; bila belum, tanyakan lalu simpan secara global.
+/// Makes sure `user.name` and `user.email` are set; if not, asks for them and saves them globally.
 async fn ensure_identity(git: &Git, cx: &mut AsyncWindowContext) -> bool {
     let (core, root) = (git.core.clone(), git.root.clone());
     let identity = match core_call(cx, async move { backend::git_identity(&core, root).await }).await {
@@ -444,7 +444,7 @@ pub async fn pull(git: &Git, cx: &mut AsyncWindowContext) -> bool {
     if error.code == "cancelled" {
         return false;
     }
-    // ff-only gagal karena riwayat bercabang: tawarkan cara lain.
+    // ff-only failed because the history diverged: offer another way.
     if strategy == PullStrategy::FfOnly && logic::is_diverged(&error.message, error.detail.as_deref()) {
         let message = "Your branch and its upstream both have new commits, so a fast-forward is not possible. How do you want to combine them?".to_string();
         let choices = vec![Choice::new("cancel", "Cancel"), Choice::new("merge", "Merge"), Choice::new("rebase", "Rebase").primary()];
@@ -465,7 +465,7 @@ pub async fn pull(git: &Git, cx: &mut AsyncWindowContext) -> bool {
     false
 }
 
-/// Daftar remote: dari store bila sudah dimuat, selain itu langsung dari backend.
+/// The list of remotes: from the store if already loaded, otherwise straight from the backend.
 async fn remotes(git: &Git, cx: &mut AsyncWindowContext) -> Vec<Remote> {
     if let Some(refs) = refs(git, cx).await {
         return refs.remotes;
@@ -529,7 +529,7 @@ pub async fn push(git: &Git, mut options: PushOptions, cx: &mut AsyncWindowConte
     }
 }
 
-/// Pull lalu push.
+/// Pull, then push.
 pub async fn sync(git: &Git, cx: &mut AsyncWindowContext) -> bool {
     let published = snapshot(git, cx).is_some_and(|s| s.upstream.is_some_and(|u| u.exists));
     if !published {
@@ -538,7 +538,7 @@ pub async fn sync(git: &Git, cx: &mut AsyncWindowContext) -> bool {
     if !pull(git, cx).await {
         return false;
     }
-    // Push tanpa commit baru tidak berbahaya ("Everything up-to-date").
+    // A push without new commits is harmless ("Everything up-to-date").
     push(git, PushOptions::default(), cx).await
 }
 
@@ -549,7 +549,7 @@ pub async fn add_remote(git: &Git, cx: &mut AsyncWindowContext) {
     run_shown(git, "Add remote", cx, async move { backend::git_remote_add(&core, root, name, url).await }).await;
 }
 
-/// Memilih salah satu remote; langsung mengembalikannya bila hanya ada satu.
+/// Picks one of the remotes; returns it right away if there is only one.
 async fn pick_remote(git: &Git, placeholder: &str, cx: &mut AsyncWindowContext) -> Option<Remote> {
     let remotes = remotes(git, cx).await;
     match remotes.len() {
@@ -632,7 +632,7 @@ pub async fn checkout(git: &Git, target: CheckoutTarget, cx: &mut AsyncWindowCon
             async move { backend::git_switch(&core, root, name).await }
         }),
         CheckoutTarget::Remote(name) => {
-            // Bila branch lokal dengan nama yang sama sudah ada, pindah ke sana saja.
+            // If a local branch with the same name already exists, just switch to it.
             let local = logic::local_name_of_remote(&name).to_string();
             let exists = refs(git, cx).await.is_some_and(|refs| refs.branches.iter().any(|b| b.name == local));
             op(move |core, root| {
@@ -654,7 +654,7 @@ pub async fn checkout(git: &Git, target: CheckoutTarget, cx: &mut AsyncWindowCon
     run_op(git, "Checkout", operation, cx).await
 }
 
-/// Daftar pilih branch untuk berpindah (dari status bar).
+/// The branch pick list for switching (from the status bar).
 pub async fn pick_branch(git: &Git, cx: &mut AsyncWindowContext) {
     let Some(refs) = refs(git, cx).await else { return };
     let items = logic::branch_pick_items(&refs)
@@ -674,14 +674,14 @@ pub async fn pick_branch(git: &Git, cx: &mut AsyncWindowContext) {
     }
 }
 
-/// Memilih branch, branch remote, atau tag selain branch aktif.
+/// Picks a branch, remote branch, or tag other than the current branch.
 async fn pick_ref(git: &Git, placeholder: &'static str, cx: &mut AsyncWindowContext) -> Option<String> {
     let refs = refs(git, cx).await?;
     let items = logic::ref_pick_items(&refs).into_iter().map(|(name, kind)| PickItem::new(name.clone(), name).description(kind)).collect();
     pick(cx, QuickPickOptions::new(placeholder, items)).await.map(|item| item.value)
 }
 
-// ----- Merge, rebase, operasi berlanjut -----
+// ----- Merge, rebase, continuing operations -----
 
 pub async fn merge(git: &Git, rev: Option<String>, mode: MergeMode, cx: &mut AsyncWindowContext) {
     let rev = match rev {
@@ -722,7 +722,7 @@ pub async fn rebase_onto(git: &Git, onto: Option<String>, cx: &mut AsyncWindowCo
     run_op(git, "Rebase", operation, cx).await;
 }
 
-/// Continue / Skip / Abort untuk operasi yang sedang berhenti.
+/// Continue / Skip / Abort for an operation that is stopped.
 pub async fn operation(git: &Git, action: OperationAction, cx: &mut AsyncWindowContext) {
     let snapshot = snapshot(git, cx);
     let pretty = logic::operation_name(snapshot.as_ref().and_then(|s| s.operation.as_ref()));
@@ -778,9 +778,9 @@ pub async fn create_tag(git: &Git, rev: Option<String>, cx: &mut AsyncWindowCont
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct StashRequest {
     pub paths: Vec<String>,
-    /// `None` = tanyakan bila ada berkas untracked.
+    /// `None` = ask if there are untracked files.
     pub include_untracked: Option<bool>,
-    /// Hanya perubahan yang sudah di-stage (`git stash push --staged`).
+    /// Only changes that are already staged (`git stash push --staged`).
     pub staged_only: bool,
 }
 
@@ -807,7 +807,7 @@ pub async fn stash_apply(git: &Git, name: String, pop: bool, cx: &mut AsyncWindo
     run_shown(git, if pop { "Pop stash" } else { "Apply stash" }, cx, async move { backend::git_stash_apply(&core, root, name, pop).await }).await.is_some()
 }
 
-/// Pop stash terbaru, atau beri tahu bila tidak ada.
+/// Pops the latest stash, or says so if there is none.
 pub async fn stash_pop_latest(git: &Git, cx: &mut AsyncWindowContext) {
     let (core, root) = (git.core.clone(), git.root.clone());
     let latest = core_call(cx, async move { backend::git_stash_list(&core, root).await }).await.ok().and_then(|stashes| stashes.into_iter().next());
@@ -834,7 +834,7 @@ pub async fn stash_branch(git: &Git, name: String, cx: &mut AsyncWindowContext) 
     run_shown(git, "Stash to branch", cx, async move { backend::git_stash_branch(&core, root, name, branch).await }).await;
 }
 
-/// Menampilkan berkas-berkas sebuah stash; memilih salah satunya membuka diff-nya.
+/// Shows the files of a stash; picking one opens its diff.
 pub async fn show_stash(git: &Git, name: String, cx: &mut AsyncWindowContext) {
     let (core, root, stash) = (git.core.clone(), git.root.clone(), name.clone());
     let files = match core_call(cx, async move { backend::git_stash_files(&core, root, stash).await }).await {
@@ -857,7 +857,7 @@ pub async fn show_stash(git: &Git, name: String, cx: &mut AsyncWindowContext) {
     ui(cx, |window, cx| git.open_diff(&picked.value, orig_path, DiffSource::Stash { name }, false, window, cx));
 }
 
-// ----- Konflik -----
+// ----- Conflicts -----
 
 pub async fn resolve_with_side(git: &Git, path: String, side: ConflictSide, cx: &mut AsyncWindowContext) {
     let (core, root) = (git.core.clone(), git.root.clone());
@@ -875,9 +875,9 @@ mod tests {
 
     #[test]
     fn email_needs_a_user_and_a_host() {
-        assert!(valid_email("ana@contoh.id"));
-        assert!(valid_email("  ana@contoh.id  "));
-        for bad in ["", "ana", "ana@", "@contoh.id", "ana budi@contoh.id"] {
+        assert!(valid_email("ana@example.com"));
+        assert!(valid_email("  ana@example.com  "));
+        for bad in ["", "ana", "ana@", "@example.com", "ana budi@example.com"] {
             assert!(!valid_email(bad), "{bad:?}");
         }
     }

@@ -1,5 +1,5 @@
-//! State pencarian tanpa UI: kueri, hasil yang dialirkan backend, baris yang disingkirkan, dan
-//! teks yang ditampilkan. Semuanya fungsi murni agar bisa diuji tanpa jendela.
+//! Search state without UI: the query, results streamed by the backend, dismissed rows, and
+//! the displayed text. All of it is pure functions so it can be tested without a window.
 
 use std::collections::{HashMap, HashSet};
 use std::ops::Range;
@@ -8,10 +8,10 @@ use oncode_workspace::{FileMatches, LineMatch, SearchQuery, SearchSummary};
 
 use crate::matcher::{utf16_len, utf16_to_byte, LineMatcher, MatchKey};
 
-/// Jeda setelah ketikan terakhir sebelum pencarian dimulai.
+/// Delay after the last keystroke before the search starts.
 pub const SEARCH_DEBOUNCE_MS: u64 = 250;
 pub const MAX_RESULTS: u32 = 5000;
-/// Hasil yang datang beruntun dikumpulkan sebentar agar daftar tidak digambar ulang per berkas.
+/// Results that arrive in succession are briefly batched so the list isn't redrawn per file.
 pub const FLUSH_MS: u64 = 40;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -23,14 +23,14 @@ pub enum SearchStatus {
     Failed,
 }
 
-/// Isian formulir pencarian.
+/// Search form inputs.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Inputs {
     pub pattern: String,
     pub is_regex: bool,
     pub case_sensitive: bool,
     pub whole_word: bool,
-    /// Glob dipisah koma, apa adanya seperti diketik.
+    /// Comma-separated globs, exactly as typed.
     pub include: String,
     pub exclude: String,
 }
@@ -52,8 +52,8 @@ pub fn build_query(inputs: &Inputs) -> SearchQuery {
     }
 }
 
-/// Teks terpilih di editor sebagai kueri: pada mode regex karakter khususnya di-escape agar
-/// dicari apa adanya.
+/// Text selected in the editor as a query: in regex mode its special characters are escaped so
+/// it is searched for as is.
 pub fn prefill_from_selection(selection: &str, is_regex: bool) -> Option<String> {
     if selection.is_empty() || selection.contains(['\n', '\r']) {
         return None;
@@ -79,14 +79,14 @@ pub fn match_key(m: &LineMatch) -> MatchKey {
     MatchKey { line: m.line, column: m.column, length: m.length }
 }
 
-/// Baris pada pohon hasil yang diratakan; indeks menunjuk ke [`Results::files`].
+/// A row in the flattened result tree; indices point into [`Results::files`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Row {
     File { file: usize },
     Match { file: usize, index: usize },
 }
 
-/// Identitas baris yang tetap berlaku walau daftar berubah.
+/// Row identity that stays valid even when the list changes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RowKey {
     File(String),
@@ -99,38 +99,38 @@ pub struct Counts {
     pub matches: usize,
 }
 
-/// Hasil pencarian yang sedang tampil.
+/// The search results currently displayed.
 #[derive(Debug, Default)]
 pub struct Results {
     pub status: SearchStatus,
     pub error: Option<String>,
     pub summary: Option<SearchSummary>,
-    /// Urut menurut path. Berkas dan kecocokan yang disingkirkan pengguna sudah tidak ada di sini.
+    /// Sorted by path. Files and matches the user dismissed are no longer here.
     pub files: Vec<FileMatches>,
-    /// Kecocokan yang disingkirkan dari berkas yang masih tampil; penggantian tidak boleh menyentuhnya.
+    /// Matches dismissed from files that are still displayed; replacement must not touch them.
     pub dismissed: HashMap<String, Vec<MatchKey>>,
     pub collapsed: HashSet<String>,
     pub selected: Option<RowKey>,
-    /// Kueri yang menghasilkan `files`; dipakai penggantian agar sama persis dengan yang tampil.
+    /// The query that produced `files`; used by replacement so it matches exactly what is displayed.
     pub query: Option<SearchQuery>,
-    /// Isian berubah dan pencarian baru belum dimulai; hasil yang tampil sudah tidak mewakili isian.
+    /// The inputs changed and the new search has not started yet; the displayed results no longer represent the inputs.
     pub pending: bool,
 }
 
 impl Results {
-    /// Mengosongkan semuanya (kueri kosong atau folder berganti).
+    /// Clears everything (empty query or the folder changed).
     pub fn clear(&mut self) {
         *self = Self::default();
     }
 
-    /// Pencarian baru dimulai.
+    /// A new search starts.
     pub fn start(&mut self, query: SearchQuery) {
         self.clear();
         self.status = SearchStatus::Running;
         self.query = Some(query);
     }
 
-    /// Menambahkan berkas yang baru datang; daftar tetap urut menurut path, apa pun urutan backend.
+    /// Adds newly arrived files; the list stays sorted by path, whatever order the backend uses.
     pub fn merge(&mut self, incoming: Vec<FileMatches>) {
         if incoming.is_empty() {
             return;
@@ -161,7 +161,7 @@ impl Results {
         self.files.iter().find(|file| file.path == path)
     }
 
-    /// Pohon hasil yang diratakan: baris berkas diikuti kecocokannya, kecuali berkas yang dilipat.
+    /// The flattened result tree: a file row followed by its matches, except for collapsed files.
     pub fn rows(&self) -> Vec<Row> {
         let mut rows = Vec::with_capacity(self.files.len());
         for (file, matches) in self.files.iter().enumerate() {
@@ -204,13 +204,13 @@ impl Results {
         self.collapsed = if collapsed { self.files.iter().map(|file| file.path.clone()).collect() } else { HashSet::new() };
     }
 
-    /// Menyingkirkan satu berkas dari hasil (dan dari penggantian).
+    /// Dismisses a file from the results (and from replacement).
     pub fn dismiss_file(&mut self, path: &str) {
         self.files.retain(|file| file.path != path);
         self.dismissed.remove(path);
     }
 
-    /// Menyingkirkan satu kecocokan; berkas yang kehabisan kecocokan ikut hilang.
+    /// Dismisses a single match; a file left with no matches disappears too.
     pub fn dismiss_match(&mut self, path: &str, key: MatchKey) {
         let Some(file) = self.files.iter_mut().find(|file| file.path == path) else { return };
         file.matches.retain(|m| !(m.line == key.line && m.column == key.column));
@@ -221,15 +221,15 @@ impl Results {
         }
     }
 
-    /// Satu kecocokan sudah diganti dengan `inserted`: barisnya dibuang, dan kecocokan lain pada
-    /// baris yang sama digeser (kolom dan pratinjaunya) agar tetap menunjuk ke teks yang benar.
+    /// A match has been replaced with `inserted`: its row is removed, and other matches on
+    /// the same line are shifted (their column and preview) so they still point at the right text.
     pub fn match_replaced(&mut self, path: &str, key: MatchKey, inserted: &str) {
         let Some(file) = self.files.iter_mut().find(|file| file.path == path) else { return };
         file.matches.retain(|m| !(m.line == key.line && m.column == key.column));
         let delta = utf16_len(inserted) as i64 - i64::from(key.length);
         let shift = |column: u32| u32::try_from(i64::from(column) + delta).unwrap_or(0);
         for m in file.matches.iter_mut().filter(|m| m.line == key.line) {
-            // Posisi kecocokan yang diganti di dalam pratinjau baris ini (bisa di luar potongannya).
+            // The position of the replaced match within this line's preview (may be outside its excerpt).
             let at = i64::from(m.preview_offset) + i64::from(key.column) - i64::from(m.column);
             let patched = patch_preview(&mut m.preview, at, key.length, inserted);
             if m.column > key.column {
@@ -249,12 +249,12 @@ impl Results {
         }
     }
 
-    /// "Replace All" hanya boleh untuk pencarian yang sudah selesai dan masih mewakili isian.
+    /// "Replace All" is only allowed for a finished search that still represents the inputs.
     pub fn can_replace(&self, replacing: bool) -> bool {
         self.status == SearchStatus::Done && !self.pending && !replacing && !self.files.is_empty()
     }
 
-    /// Baris ringkasan di atas hasil; `true` bila berupa pesan galat.
+    /// The summary line above the results; `true` if it is an error message.
     pub fn status_line(&self, replacing: bool) -> Option<(String, bool)> {
         if replacing {
             return Some(("Replacing…".into(), false));
@@ -271,8 +271,8 @@ impl Results {
     }
 }
 
-/// Mengganti `old_len` unit UTF-16 mulai posisi `at` di `preview` dengan `inserted`. Hasil
-/// `false` bila rentang itu tidak (seluruhnya) berada di dalam pratinjau.
+/// Replaces `old_len` UTF-16 units starting at position `at` in `preview` with `inserted`. Returns
+/// `false` if that range is not (entirely) inside the preview.
 fn patch_preview(preview: &mut String, at: i64, old_len: u32, inserted: &str) -> bool {
     let Ok(at) = usize::try_from(at) else { return false };
     let end = at + old_len as usize;
@@ -288,12 +288,12 @@ pub fn counts_of(files: &[FileMatches]) -> Counts {
     Counts { files: files.len(), matches: files.iter().map(|file| file.matches.len()).sum() }
 }
 
-/// "3 results in 2 files", dengan catatan bila backend berhenti sebelum selesai.
+/// "3 results in 2 files", with a note if the backend stopped before finishing.
 pub fn summary_text(counts: Counts, truncated: bool) -> String {
     format!("{} in {}{}", plural(counts.matches, "result"), plural(counts.files, "file"), if truncated { " — results truncated" } else { "" })
 }
 
-/// Pertanyaan konfirmasi untuk hasil yang sedang tampil: `(judul, pesan)`.
+/// The confirmation prompt for the results currently displayed: `(title, message)`.
 pub fn confirmation_text(counts: Counts, replacement: &str, truncated: bool) -> (String, String) {
     let what = if replacement.is_empty() {
         "Each occurrence will be deleted (the replacement is empty).".to_string()
@@ -307,20 +307,20 @@ pub fn confirmation_text(counts: Counts, replacement: &str, truncated: bool) -> 
     )
 }
 
-/// Hasil sebuah penggantian.
+/// The outcome of a replacement.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ReplaceOutcome {
     pub replacements: usize,
     pub files: usize,
-    /// Berkas yang diubah di editor tetapi tidak disimpan (sudah berisi perubahan lain
-    /// sebelumnya, atau gagal disimpan).
+    /// Files changed in the editor but not saved (already contained other changes
+    /// beforehand, or failed to save).
     pub unsaved: usize,
     pub skipped_read_only: Vec<String>,
     pub errors: Vec<String>,
 }
 
 impl ReplaceOutcome {
-    /// Mencatat hasil satu berkas.
+    /// Records the result of one file.
     pub fn count(&mut self, replacements: usize) -> bool {
         if replacements == 0 {
             return false;
@@ -331,13 +331,13 @@ impl ReplaceOutcome {
     }
 }
 
-/// Pemberitahuan setelah penggantian.
+/// Notifications after a replacement.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Report {
     pub success: Option<String>,
     pub info: Option<String>,
     pub warning: Option<String>,
-    /// `(pesan, rincian)`.
+    /// `(message, details)`.
     pub error: Option<(String, String)>,
 }
 
@@ -362,7 +362,7 @@ pub fn report(outcome: &ReplaceOutcome) -> Report {
     report
 }
 
-/// Pratinjau sebuah kecocokan, dipecah untuk ditampilkan: teks sebelum, kecocokan, dan sesudahnya.
+/// The preview of a match, split for display: the text before, the match, and the text after.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PreviewParts<'a> {
     pub before: &'a str,
@@ -370,7 +370,7 @@ pub struct PreviewParts<'a> {
     pub after: &'a str,
 }
 
-/// Memecah pratinjau; lekukan di awal baris dibuang agar kecocokan lebih cepat terlihat.
+/// Splits the preview; leading indentation is dropped so the match is seen sooner.
 pub fn split_preview(m: &LineMatch) -> PreviewParts<'_> {
     let preview = m.preview.as_str();
     let start = utf16_to_byte(preview, m.preview_offset as usize);
@@ -379,7 +379,7 @@ pub fn split_preview(m: &LineMatch) -> PreviewParts<'_> {
     PreviewParts { before: &preview[lead..start], hit: &preview[start..end], after: &preview[end..] }
 }
 
-/// Teks satu baris hasil beserta rentang byte kecocokan dan (bila ada) teks penggantinya.
+/// The text of one result row along with the byte range of the match and (if any) its replacement text.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RowText {
     pub text: String,
@@ -387,7 +387,7 @@ pub struct RowText {
     pub inserted: Option<Range<usize>>,
 }
 
-/// Menyusun teks baris hasil: `sebelum` + kecocokan + teks pengganti (bila mode ganti) + `sesudah`.
+/// Builds the result row text: `before` + match + replacement text (in replace mode) + `after`.
 pub fn row_text(m: &LineMatch, replacement: Option<&str>) -> RowText {
     let parts = split_preview(m);
     let mut text = String::with_capacity(m.preview.len() + replacement.map_or(0, str::len));
@@ -403,7 +403,7 @@ pub fn row_text(m: &LineMatch, replacement: Option<&str>) -> RowText {
     RowText { text, hit, inserted }
 }
 
-/// Teks pengganti untuk satu kecocokan (dengan `$1` dkk. terisi bila bisa dihitung dari pratinjau).
+/// The replacement text for a single match (with `$1` etc. filled in when it can be computed from the preview).
 pub fn replacement_preview(matcher: Option<&LineMatcher>, interpolate: bool, replacement: &str, m: &LineMatch) -> String {
     if !interpolate {
         return replacement.to_string();
@@ -418,8 +418,8 @@ pub fn replacement_preview(matcher: Option<&LineMatcher>, interpolate: bool, rep
     }
 }
 
-/// Posisi untuk editor: `(baris mulai dari 1, kolom dalam karakter, panjang dalam karakter)`.
-/// Backend melaporkan unit UTF-16; selisihnya dihitung dari bagian baris yang ada di pratinjau.
+/// Position for the editor: `(line starting at 1, column in characters, length in characters)`.
+/// The backend reports UTF-16 units; the difference is computed from the part of the line that is in the preview.
 pub fn reveal_position(m: &LineMatch) -> (u32, u32, u32) {
     let preview = m.preview.as_str();
     let start = utf16_to_byte(preview, m.preview_offset as usize);
@@ -538,7 +538,7 @@ mod tests {
         assert_eq!(results.counts(), Counts { files: 2, matches: 2 });
         assert_eq!(results.dismissed["a.ts"], [MatchKey { line: 1, column: 0, length: 3 }]);
 
-        // Kecocokan terakhir sebuah berkas membawa berkasnya ikut hilang, termasuk catatan yang disingkirkan.
+        // A file's last match takes the file with it, including the dismissed record.
         results.dismiss_match("a.ts", MatchKey { line: 2, column: 4, length: 3 });
         assert_eq!(results.files.iter().map(|f| f.path.as_str()).collect::<Vec<_>>(), ["b.ts"]);
         assert!(!results.dismissed.contains_key("a.ts"));
@@ -554,12 +554,12 @@ mod tests {
         let mut results = Results::default();
         results.start(build_query(&Inputs { pattern: "foo".into(), ..Default::default() }));
         results.merge(vec![file("a.ts", vec![m(1, 0, "foo", 3)])]);
-        assert!(!results.can_replace(false), "pencarian masih berjalan");
+        assert!(!results.can_replace(false), "the search is still running");
         results.finish(SearchSummary { files: 1, matches: 1, truncated: false });
         assert!(results.can_replace(false));
-        assert!(!results.can_replace(true), "penggantian sedang berjalan");
+        assert!(!results.can_replace(true), "a replacement is in progress");
         results.pending = true;
-        assert!(!results.can_replace(false), "isian sudah berubah");
+        assert!(!results.can_replace(false), "the inputs have changed");
     }
 
     #[test]
@@ -598,10 +598,10 @@ mod tests {
         let hit = m(2, 4, "    let foo = 1;", 3);
         let hit = LineMatch { column: 8, preview_offset: 8, ..hit };
         assert_eq!(split_preview(&hit), PreviewParts { before: "let ", hit: "foo", after: " = 1;" });
-        // Kecocokan di dalam lekukan: lekukannya tidak dibuang melewati awal kecocokan.
+        // A match inside the indentation: the indentation isn't dropped past the start of the match.
         let spaces = m(1, 2, "    x", 2);
         assert_eq!(split_preview(&spaces), PreviewParts { before: "", hit: "  ", after: "x" });
-        // Offset dalam unit UTF-16, teks dalam UTF-8.
+        // Offsets in UTF-16 units, text in UTF-8.
         let astral = m(1, 3, "😀 foo é", 3);
         assert_eq!(split_preview(&astral), PreviewParts { before: "😀 ", hit: "foo", after: " é" });
     }
@@ -612,9 +612,9 @@ mod tests {
         let matcher = LineMatcher::new(&options).unwrap();
         let hit = m(1, 2, "  let alpha = 1;", 9);
         assert_eq!(replacement_preview(Some(&matcher), true, "const $1", &hit), "const alpha");
-        // Mode literal: teks pengganti apa adanya.
+        // Literal mode: the replacement text as is.
         assert_eq!(replacement_preview(Some(&matcher), false, "const $1", &hit), "const $1");
-        // Kecocokan tidak ditemukan lagi di pratinjau (mis. terpotong): teks pengganti apa adanya.
+        // The match is no longer found in the preview (e.g. truncated): the replacement text as is.
         let cut = m(1, 2, "  let", 9);
         assert_eq!(replacement_preview(Some(&matcher), true, "const $1", &cut), "const $1");
 
@@ -624,14 +624,14 @@ mod tests {
         assert_eq!(&row.text[row.inserted.clone().unwrap()], "const alpha");
         let plain = row_text(&hit, None);
         assert_eq!((plain.text.as_str(), plain.inserted), ("let alpha = 1;", None));
-        // Pengganti kosong (menghapus): hanya kecocokan yang ditandai.
+        // Empty replacement (deleting): only the match is marked.
         assert_eq!(row_text(&hit, Some("")).inserted, None);
     }
 
     #[test]
     fn converts_utf16_columns_to_editor_characters() {
-        assert_eq!(reveal_position(&m(2, 4, "    println!(\"halo\");", 7)), (2, 4, 7));
-        // Karakter astral di depan kecocokan dihitung dua unit oleh backend, satu karakter oleh editor.
+        assert_eq!(reveal_position(&m(2, 4, "    println!(\"hello\");", 7)), (2, 4, 7));
+        // An astral character before the match counts as two units for the backend, one character for the editor.
         assert_eq!(reveal_position(&m(1, 7, "a 😀😀 foo", 3)), (1, 5, 3));
         assert_eq!(reveal_position(&m(1, 0, "😀x", 3)), (1, 0, 2));
     }
@@ -641,7 +641,7 @@ mod tests {
         assert_eq!(prefill_from_selection("a.b(c)", false).as_deref(), Some("a.b(c)"));
         assert_eq!(prefill_from_selection("a.b(c)", true).as_deref(), Some("a\\.b\\(c\\)"));
         assert_eq!(prefill_from_selection("", false), None);
-        assert_eq!(prefill_from_selection("dua\nbaris", false), None);
+        assert_eq!(prefill_from_selection("two\nlines", false), None);
     }
 
     #[test]
@@ -655,13 +655,13 @@ mod tests {
         assert_eq!(matches.iter().map(|m| (m.line, m.column)).collect::<Vec<_>>(), [(1, 0), (2, 0)]);
         assert_eq!(matches[0].preview, "foo = quux + foo;");
         assert_eq!(matches[0].preview_offset, 0);
-        // Kecocokan yang disingkirkan di kanan ikut bergeser, agar tetap dilewati penggantian berikutnya.
+        // A dismissed match to the right shifts too, so it is still skipped by the next replacement.
         assert_eq!(results.dismissed["a.ts"], [MatchKey { line: 1, column: 13, length: 3 }]);
 
         results.match_replaced("a.ts", MatchKey { line: 1, column: 0, length: 3 }, "");
         assert_eq!(results.dismissed["a.ts"], [MatchKey { line: 1, column: 10, length: 3 }]);
         results.match_replaced("a.ts", MatchKey { line: 2, column: 0, length: 3 }, "x");
-        assert!(results.files.is_empty(), "berkas tanpa kecocokan tersisa ikut hilang");
+        assert!(results.files.is_empty(), "a file with no matches left disappears too");
     }
 
     #[test]

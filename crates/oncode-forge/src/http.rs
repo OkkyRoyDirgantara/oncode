@@ -1,4 +1,4 @@
-//! Perkakas HTTP bersama: klien, pemetaan galat, paginasi, dan parse waktu.
+//! Shared HTTP tooling: client, error mapping, pagination, and time parsing.
 
 use std::fmt;
 use std::sync::OnceLock;
@@ -12,12 +12,12 @@ use serde::Serialize;
 use crate::error::{ForgeError, ForgeErrorCode, Result};
 
 pub(crate) const USER_AGENT: &str = "OnCode";
-/// Ukuran halaman untuk semua daftar yang ditampilkan ke pengguna.
+/// Page size for all lists shown to the user.
 pub(crate) const PER_PAGE: u32 = 30;
-/// Ukuran halaman untuk daftar yang dipindai habis di sisi klien.
+/// Page size for lists that are scanned in full on the client side.
 pub(crate) const SCAN_PER_PAGE: u32 = 100;
 
-/// String rahasia yang tidak pernah tercetak lewat `Debug`.
+/// A secret string that is never printed via `Debug`.
 #[derive(Clone)]
 pub(crate) struct Secret(String);
 
@@ -37,9 +37,9 @@ impl fmt::Debug for Secret {
     }
 }
 
-/// Membuat klien HTTP baru. Klien tidak dibagi secara global: pool koneksinya terikat pada
-/// runtime async tempat koneksi dibuat, sehingga klien bersama lintas runtime (seperti pada
-/// uji, tiap uji punya runtime sendiri) bisa kehilangan koneksi di tengah permintaan.
+/// Creates a new HTTP client. The client is not shared globally: its connection pool is tied to
+/// the async runtime where the connection was created, so a client shared across runtimes (as in
+/// tests, where each test has its own runtime) can lose connections in the middle of a request.
 pub(crate) fn client() -> Result<reqwest::Client> {
     reqwest::Client::builder()
         .user_agent(USER_AGENT)
@@ -49,20 +49,20 @@ pub(crate) fn client() -> Result<reqwest::Client> {
         .map_err(|err| ForgeError::network(format!("Could not set up the HTTP client: {}", err.without_url())))
 }
 
-/// Detik sejak epoch Unix menurut jam lokal.
+/// Seconds since the Unix epoch according to the local clock.
 pub(crate) fn now_epoch() -> f64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or(0.0)
 }
 
-/// Jawaban HTTP yang sudah dibaca seluruhnya.
+/// An HTTP response that has been read in full.
 pub(crate) struct Reply {
     pub status: StatusCode,
     pub headers: HeaderMap,
     pub body: Vec<u8>,
 }
 
-/// Mengirim permintaan dan membaca seluruh badan jawaban. Galat transport menjadi
-/// `Network`; status HTTP belum diperiksa di sini.
+/// Sends a request and reads the entire response body. Transport errors become
+/// `Network`; the HTTP status is not checked here.
 pub(crate) async fn send(request: RequestBuilder, server: &str) -> Result<Reply> {
     let response = request.send().await.map_err(|err| transport_error(err, server))?;
     let status = response.status();
@@ -72,7 +72,7 @@ pub(crate) async fn send(request: RequestBuilder, server: &str) -> Result<Reply>
 }
 
 fn transport_error(err: reqwest::Error, server: &str) -> ForgeError {
-    // URL dibuang dari pesan; rinciannya cukup jenis kegagalannya.
+    // The URL is dropped from the message; the kind of failure is detail enough.
     let err = err.without_url();
     let message = if err.is_timeout() {
         format!("Timed out while contacting {server}. Check your internet connection and try again.")
@@ -84,23 +84,23 @@ fn transport_error(err: reqwest::Error, server: &str) -> ForgeError {
     ForgeError::network(message)
 }
 
-/// Gaya API, menentukan header bawaan.
+/// API flavor, determines the default headers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Flavor {
     GitHub,
     GitLab,
 }
 
-/// Klien REST untuk satu instance dan satu token.
+/// REST client for one instance and one token.
 #[derive(Debug, Clone)]
 pub(crate) struct Api {
     flavor: Flavor,
-    /// Basis REST tanpa garis miring di akhir.
+    /// REST base without a trailing slash.
     base: String,
-    /// Nama server untuk pesan galat, misalnya `github.com`.
+    /// Server name for error messages, for example `github.com`.
     server: String,
     token: Secret,
-    /// Klien milik penyedia ini; dibuat saat pertama dipakai dan dipakai ulang untuk semua permintaannya.
+    /// This provider's client; created on first use and reused for all of its requests.
     client: OnceLock<reqwest::Client>,
 }
 
@@ -135,7 +135,7 @@ impl Api {
         })
     }
 
-    /// `GET` yang mengembalikan JSON beserta header (untuk paginasi).
+    /// A `GET` that returns JSON along with the headers (for pagination).
     pub(crate) async fn get<T: DeserializeOwned>(&self, path: &str, query: &[(&str, String)]) -> Result<(T, HeaderMap)> {
         let request = self.request(Method::GET, path)?.query(query);
         let reply = send(request, &self.server).await?;
@@ -143,7 +143,7 @@ impl Api {
         Ok((value, reply.headers))
     }
 
-    /// `POST` dengan badan JSON.
+    /// A `POST` with a JSON body.
     pub(crate) async fn post<B: Serialize + ?Sized, T: DeserializeOwned>(&self, path: &str, body: &B) -> Result<T> {
         let request = self.request(Method::POST, path)?.json(body);
         let reply = send(request, &self.server).await?;
@@ -153,7 +153,7 @@ impl Api {
     fn decode<T: DeserializeOwned>(&self, reply: &Reply) -> Result<T> {
         if !reply.status.is_success() {
             let mut error = status_error(reply, &self.server);
-            // Jaga-jaga bila server menggemakan kredensial di pesan galatnya.
+            // Just in case the server echoes the credential in its error message.
             let token = self.token.expose();
             if !token.is_empty() && error.message.contains(token) {
                 error.message = error.message.replace(token, "***");
@@ -166,7 +166,7 @@ impl Api {
     }
 }
 
-/// Memetakan status HTTP selain 2xx ke [`ForgeError`].
+/// Maps a non-2xx HTTP status to a [`ForgeError`].
 pub(crate) fn status_error(reply: &Reply, server: &str) -> ForgeError {
     let status = reply.status;
     let detail = server_message(&reply.body);
@@ -222,7 +222,7 @@ fn is_rate_limited(headers: &HeaderMap, detail: Option<&str>) -> bool {
     exhausted || detail.is_some_and(|d| d.to_ascii_lowercase().contains("rate limit"))
 }
 
-/// Berapa detik lagi boleh mencoba, dari `retry-after` atau waktu reset batas laju.
+/// How many more seconds until a retry is allowed, from `retry-after` or the rate limit reset time.
 fn retry_after_seconds(headers: &HeaderMap) -> Option<u64> {
     if let Some(seconds) = header_str(headers, "retry-after").and_then(|v| v.parse::<u64>().ok()) {
         return Some(seconds);
@@ -234,9 +234,9 @@ fn retry_after_seconds(headers: &HeaderMap) -> Option<u64> {
     (wait > 0.0).then(|| wait.ceil() as u64)
 }
 
-/// Mengambil pesan galat dari badan JSON, dengan toleransi pada bentuk yang dipakai
-/// GitHub (`message`, `errors[].message`), GitLab (`message` berupa string, larik, atau
-/// objek; `error`), dan OAuth (`error_description`).
+/// Extracts the error message from a JSON body, tolerating the shapes used by
+/// GitHub (`message`, `errors[].message`), GitLab (`message` as a string, array, or
+/// object; `error`), and OAuth (`error_description`).
 pub(crate) fn server_message(body: &[u8]) -> Option<String> {
     let value: serde_json::Value = serde_json::from_slice(body).ok()?;
     let object = value.as_object()?;
@@ -296,8 +296,8 @@ fn flatten_message(value: &serde_json::Value, parts: &mut Vec<String>) {
     }
 }
 
-/// Halaman berikutnya dari header `Link` (GitHub): nilai parameter `page` pada tautan
-/// `rel="next"`.
+/// The next page from the `Link` header (GitHub): the value of the `page` parameter in the
+/// `rel="next"` link.
 pub(crate) fn next_page_from_link(headers: &HeaderMap) -> Option<u32> {
     let link = header_str(headers, "link")?;
     for part in link.split(',') {
@@ -321,7 +321,7 @@ pub(crate) fn next_page_from_link(headers: &HeaderMap) -> Option<u32> {
     None
 }
 
-/// Halaman berikutnya dari header `x-next-page` (GitLab); kosong berarti sudah habis.
+/// The next page from the `x-next-page` header (GitLab); empty means there are no more.
 pub(crate) fn next_page_from_gitlab(headers: &HeaderMap) -> Option<u32> {
     match header_str(headers, "x-next-page") {
         Some(value) if !value.is_empty() => value.parse::<u32>().ok(),
@@ -330,8 +330,8 @@ pub(crate) fn next_page_from_gitlab(headers: &HeaderMap) -> Option<u32> {
     }
 }
 
-/// Meng-encode satu segmen path. Semua selain karakter *unreserved* (RFC 3986) diubah
-/// ke `%XX`, termasuk `/`, sehingga `grup/proyek` menjadi `grup%2Fproyek`.
+/// Encodes a single path segment. Everything other than *unreserved* characters (RFC 3986) is turned
+/// into `%XX`, including `/`, so `group/project` becomes `group%2Fproject`.
 pub(crate) fn encode_segment(segment: &str) -> String {
     let mut out = String::with_capacity(segment.len());
     for byte in segment.bytes() {
@@ -344,8 +344,8 @@ pub(crate) fn encode_segment(segment: &str) -> String {
     out
 }
 
-/// Mem-parse waktu ISO 8601 / RFC 3339 (`2024-05-01T12:34:56.789Z`,
-/// `2024-05-01T19:34:56+07:00`) menjadi detik sejak epoch Unix.
+/// Parses an ISO 8601 / RFC 3339 time (`2024-05-01T12:34:56.789Z`,
+/// `2024-05-01T19:34:56+07:00`) into seconds since the Unix epoch.
 pub(crate) fn parse_timestamp(text: &str) -> Option<f64> {
     let text = text.trim();
     let bytes = text.as_bytes();
@@ -398,7 +398,7 @@ pub(crate) fn parse_timestamp(text: &str) -> Option<f64> {
         }
     };
 
-    // Hari sejak epoch untuk kalender Gregorian proleptik (algoritme "days from civil").
+    // Days since the epoch for the proleptic Gregorian calendar (the "days from civil" algorithm).
     let y = if month <= 2 { year - 1 } else { year };
     let era = y.div_euclid(400);
     let year_of_era = y.rem_euclid(400);
@@ -411,13 +411,13 @@ pub(crate) fn parse_timestamp(text: &str) -> Option<f64> {
     Some(seconds as f64 + fraction)
 }
 
-/// Waktu opsional dari API menjadi [`Timestamp`](crate::model::Timestamp); 0 bila tidak
-/// ada atau tidak terbaca.
+/// An optional time from the API becomes a [`Timestamp`](crate::model::Timestamp); 0 if it is
+/// absent or unreadable.
 pub(crate) fn timestamp_or_zero(text: Option<&str>) -> f64 {
     text.and_then(parse_timestamp).unwrap_or(0.0)
 }
 
-/// Menjadikan string kosong sebagai `None`.
+/// Turns an empty string into `None`.
 pub(crate) fn non_empty(value: Option<String>) -> Option<String> {
     value.filter(|v| !v.trim().is_empty())
 }
@@ -441,14 +441,14 @@ mod tests {
         assert_eq!(parse_timestamp("2011-01-26T19:01:12Z"), Some(1_296_068_472.0));
         assert_eq!(parse_timestamp("2024-02-29T23:59:59Z"), Some(1_709_251_199.0));
         assert_eq!(parse_timestamp("2024-05-01T12:34:56.500Z"), Some(1_714_566_896.5));
-        // Zona waktu: 19:34:56+07:00 sama dengan 12:34:56Z.
+        // Time zone: 19:34:56+07:00 equals 12:34:56Z.
         assert_eq!(parse_timestamp("2024-05-01T19:34:56+07:00"), Some(1_714_566_896.0));
         assert_eq!(parse_timestamp("2024-05-01T07:04:56.000-05:30"), Some(1_714_566_896.0));
         assert_eq!(parse_timestamp("2024-05-01T19:34:56+0700"), Some(1_714_566_896.0));
         assert_eq!(parse_timestamp("2024-05-01 12:34:56"), Some(1_714_566_896.0));
         assert_eq!(parse_timestamp("1969-12-31T23:59:59Z"), Some(-1.0));
         assert_eq!(parse_timestamp(""), None);
-        assert_eq!(parse_timestamp("kemarin sore"), None);
+        assert_eq!(parse_timestamp("yesterday evening"), None);
         assert_eq!(parse_timestamp("2024-13-01T00:00:00Z"), None);
         assert_eq!(parse_timestamp("2024-05-01T12:34:56+7"), None);
         assert_eq!(timestamp_or_zero(None), 0.0);
@@ -467,7 +467,7 @@ mod tests {
             "<https://api.github.com/user/repos?page=1>; rel=\"prev\", <https://api.github.com/user/repos?page=1>; rel=\"first\"",
         )]);
         assert_eq!(next_page_from_link(&last_only), None);
-        // `per_page` tidak boleh terbaca sebagai `page`.
+        // `per_page` must not be read as `page`.
         let per_page_first = headers(&[("link", "<https://x/y?per_page=30&page=2>; rel=\"next\"")]);
         assert_eq!(next_page_from_link(&per_page_first), Some(2));
         assert_eq!(next_page_from_link(&HeaderMap::new()), None);
@@ -486,8 +486,8 @@ mod tests {
 
     #[test]
     fn encodes_path_segments() {
-        assert_eq!(encode_segment("grup/subgrup/proyek"), "grup%2Fsubgrup%2Fproyek");
-        assert_eq!(encode_segment("nama.repo-1_x~"), "nama.repo-1_x~");
+        assert_eq!(encode_segment("group/subgroup/project"), "group%2Fsubgroup%2Fproject");
+        assert_eq!(encode_segment("name.repo-1_x~"), "name.repo-1_x~");
         assert_eq!(encode_segment("a b#c"), "a%20b%23c");
     }
 
@@ -517,9 +517,9 @@ mod tests {
 
     #[test]
     fn secret_debug_is_redacted() {
-        let api = Api::new(Flavor::GitHub, "https://api.github.com/", "github.com", "gho_sangat_rahasia");
+        let api = Api::new(Flavor::GitHub, "https://api.github.com/", "github.com", "gho_very_secret");
         let debug = format!("{api:?}");
-        assert!(!debug.contains("gho_sangat_rahasia"), "{debug}");
+        assert!(!debug.contains("gho_very_secret"), "{debug}");
         assert!(debug.contains("***"));
     }
 }

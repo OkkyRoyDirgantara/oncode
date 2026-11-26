@@ -1,5 +1,5 @@
-//! Keadaan repositori yang terbuka, dipakai bersama oleh explorer, editor, status bar, dan
-//! panel Source Control. Diisi dari event `RepoChanged` milik `oncode-core`.
+//! The state of open repositories, shared by the explorer, editor, status bar, and
+//! Source Control panel. Fed by the `RepoChanged` event of `oncode-core`.
 
 use std::collections::HashMap;
 
@@ -13,13 +13,13 @@ use crate::{core_bus, spawn_core};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ReposEvent {
-    /// Snapshot repositori ini berganti.
+    /// This repository's snapshot was replaced.
     Changed(String),
-    /// Branch, tag, atau HEAD berubah; daftar ref dan graph perlu dimuat ulang.
+    /// A branch, tag, or HEAD changed; the ref list and graph need to be reloaded.
     RefsChanged(String),
 }
 
-/// Status Git sebuah berkas untuk penanda di explorer dan tab.
+/// The Git status of a file, for the markers in the explorer and tabs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FileMark {
     Modified,
@@ -31,7 +31,7 @@ pub enum FileMark {
 }
 
 impl FileMark {
-    /// Huruf penanda seperti di VS Code.
+    /// The marker letter, as in VS Code.
     pub fn letter(self) -> &'static str {
         match self {
             Self::Modified => "M",
@@ -47,7 +47,7 @@ impl FileMark {
 #[derive(Default)]
 pub struct Repos {
     snapshots: HashMap<String, RepoSnapshot>,
-    /// Penanda per path absolut (dengan pemisah `/`), dihitung ulang tiap snapshot.
+    /// Markers per absolute path (with `/` separators), recomputed for every snapshot.
     marks: HashMap<String, HashMap<String, FileMark>>,
     _subscriptions: Vec<Subscription>,
 }
@@ -58,7 +58,7 @@ struct ReposGlobal(Entity<Repos>);
 
 impl Global for ReposGlobal {}
 
-/// Store repositori global.
+/// The global repository store.
 pub fn repos(cx: &App) -> Entity<Repos> {
     cx.global::<ReposGlobal>().0.clone()
 }
@@ -67,8 +67,8 @@ fn join(root: &str, rel: &str) -> String {
     format!("{}/{}", root.trim_end_matches(['/', '\\']).replace('\\', "/"), rel)
 }
 
-/// Penanda untuk semua berkas yang berubah dalam sebuah snapshot. Konflik mengalahkan yang lain;
-/// perubahan di working tree mengalahkan yang sudah di-stage.
+/// Markers for all changed files in a snapshot. Conflicts win over everything else;
+/// working tree changes win over staged ones.
 pub fn marks_for(snapshot: &RepoSnapshot) -> HashMap<String, FileMark> {
     use oncode_git::ChangeKind;
     let kind_mark = |kind: &ChangeKind| match kind {
@@ -94,7 +94,7 @@ pub fn marks_for(snapshot: &RepoSnapshot) -> HashMap<String, FileMark> {
 }
 
 impl Repos {
-    /// Snapshot repositori dengan root ini; `C:\proyek` dan `C:/proyek` dianggap sama.
+    /// The repository snapshot with this root; `C:\project` and `C:/project` are treated as the same.
     pub fn snapshot(&self, root: &str) -> Option<&RepoSnapshot> {
         self.snapshots.get(root).or_else(|| {
             let key = root_key(root);
@@ -108,13 +108,13 @@ impl Repos {
         roots
     }
 
-    /// Penanda Git untuk sebuah path absolut.
+    /// The Git marker for an absolute path.
     pub fn mark(&self, path: &str) -> Option<FileMark> {
         let path = path.replace('\\', "/");
         self.marks.values().find_map(|marks| marks.get(&path).copied())
     }
 
-    /// Penanda untuk sebuah folder: ada perubahan di dalamnya.
+    /// The marker for a folder: there are changes inside it.
     pub fn folder_mark(&self, dir: &str) -> Option<FileMark> {
         let prefix = format!("{}/", dir.replace('\\', "/").trim_end_matches('/'));
         let mut found = None;
@@ -131,7 +131,7 @@ impl Repos {
         found
     }
 
-    /// Jumlah berkas yang berubah (untuk lencana di activity bar).
+    /// The number of changed files (for the badge in the activity bar).
     pub fn change_count(&self, root: &str) -> usize {
         self.snapshot(root).map_or(0, |s| s.staged.len() + s.unstaged.len() + s.untracked.len() + s.conflicted.len())
     }
@@ -161,7 +161,7 @@ pub(crate) fn install(cx: &mut App) {
     register_feature(cx, setup);
 }
 
-/// Membuka repositori folder proyek (bila ada dan dipercaya) agar snapshot-nya mulai mengalir.
+/// Opens the project folder's repository (if there is one and it is trusted) so its snapshots start flowing.
 fn setup(workbench: &mut Workbench, _: &mut Window, cx: &mut Context<Workbench>) {
     let env = workbench.env().clone();
     let Some(repo_root) = env.repo_root.clone() else { return };
@@ -180,10 +180,10 @@ mod tests {
 
     #[test]
     fn roots_match_across_separators_and_trailing_slashes() {
-        assert_eq!(root_key("/home/ana/proyek/"), "/home/ana/proyek");
+        assert_eq!(root_key("/home/ana/project/"), "/home/ana/project");
         assert_ne!(root_key("/a/b"), root_key("/a/bc"));
-        // Di Windows `\` sama dengan `/`, dan huruf besar-kecil tidak dibedakan.
-        assert_eq!(root_key(r"C:\Users\ana\proyek") == root_key("C:/Users/ana/proyek"), cfg!(windows));
-        assert_eq!(root_key(r"c:\Proyek") == root_key("C:/proyek"), cfg!(windows));
+        // On Windows `\` is the same as `/`, and case is not distinguished.
+        assert_eq!(root_key(r"C:\Users\ana\project") == root_key("C:/Users/ana/project"), cfg!(windows));
+        assert_eq!(root_key(r"c:\Project") == root_key("C:/project"), cfg!(windows));
     }
 }

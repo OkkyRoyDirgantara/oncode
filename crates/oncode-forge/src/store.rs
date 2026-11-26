@@ -1,4 +1,4 @@
-//! Penyimpanan token: keychain OS untuk pemakaian nyata, memori untuk tes dan cadangan.
+//! Token storage: the OS keychain for real use, memory for tests and as a fallback.
 
 use std::collections::HashMap;
 use std::fmt;
@@ -7,25 +7,25 @@ use std::sync::{Mutex, MutexGuard};
 use crate::auth::TokenSet;
 use crate::error::{ForgeError, Result};
 
-/// Nama layanan di keychain OS.
+/// Service name in the OS keychain.
 const SERVICE: &str = "OnCode";
 
-/// Tempat menyimpan token per akun. `account_id` adalah [`Account::id`](crate::Account).
+/// Where tokens are stored per account. `account_id` is [`Account::id`](crate::Account).
 pub trait TokenStore: Send + Sync {
-    /// Menyimpan token, menimpa yang lama bila ada.
+    /// Saves a token, overwriting the old one if present.
     fn save(&self, account_id: &str, tokens: &TokenSet) -> Result<()>;
-    /// Memuat token; `None` bila akun ini belum punya token tersimpan.
+    /// Loads a token; `None` if this account has no stored token yet.
     fn load(&self, account_id: &str) -> Result<Option<TokenSet>>;
-    /// Menghapus token; tidak dianggap galat bila memang tidak ada.
+    /// Deletes a token; not an error if there is none.
     fn delete(&self, account_id: &str) -> Result<()>;
 }
 
-/// Penyimpanan di keychain OS lewat `keyring`: Keychain di macOS, Credential Manager di
-/// Windows, Secret Service (GNOME Keyring, KWallet) di Linux. Nama layanannya `OnCode`,
-/// nama entrinya id akun, dan nilainya JSON dari [`TokenSet`].
+/// Storage in the OS keychain via `keyring`: Keychain on macOS, Credential Manager on
+/// Windows, Secret Service (GNOME Keyring, KWallet) on Linux. The service name is `OnCode`,
+/// the entry name is the account id, and the value is the JSON of the [`TokenSet`].
 ///
-/// Semua metodenya memblokir (di Linux berbicara lewat D-Bus dan bisa menunggu pengguna
-/// membuka keyring), jadi dari konteks async panggil lewat `tokio::task::spawn_blocking`.
+/// All of its methods block (on Linux they talk over D-Bus and may wait for the user to
+/// unlock the keyring), so from an async context call them via `tokio::task::spawn_blocking`.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct KeychainStore;
 
@@ -34,8 +34,8 @@ impl KeychainStore {
         Self
     }
 
-    /// `true` bila keychain OS bisa dipakai. Bila `false`, pemanggil dapat beralih ke
-    /// [`MemoryStore`] (token hilang saat aplikasi ditutup).
+    /// `true` if the OS keychain is usable. If `false`, the caller can switch to
+    /// [`MemoryStore`] (the token is lost when the app closes).
     pub fn is_available() -> bool {
         keyring::Entry::store_status().is_ok()
     }
@@ -51,7 +51,7 @@ impl KeychainStore {
 impl TokenStore for KeychainStore {
     fn save(&self, account_id: &str, tokens: &TokenSet) -> Result<()> {
         let entry = Self::entry(account_id)?;
-        // Galat serialisasi tidak diteruskan apa adanya agar isi token tidak ikut tercetak.
+        // The serialization error is not passed along as-is so the token contents are not printed with it.
         let json = serde_json::to_string(tokens)
             .map_err(|_| ForgeError::keychain("The token could not be prepared for storage"))?;
         entry.set_password(&json).map_err(keychain_error)
@@ -78,8 +78,8 @@ impl TokenStore for KeychainStore {
     }
 }
 
-/// Memetakan galat `keyring` ke pesan yang aman. Varian yang membawa data mentah
-/// (`BadEncoding`, `BadDataFormat`) tidak pernah dicetak isinya.
+/// Maps a `keyring` error to a safe message. Variants that carry raw data
+/// (`BadEncoding`, `BadDataFormat`) never have their contents printed.
 fn keychain_error(err: keyring::Error) -> ForgeError {
     let message = match &err {
         keyring::Error::NoStorageAccess(cause) => {
@@ -104,8 +104,8 @@ fn keychain_error(err: keyring::Error) -> ForgeError {
     ForgeError::keychain(message)
 }
 
-/// Penyimpanan di memori, untuk tes dan sebagai cadangan saat keychain tidak tersedia.
-/// Isinya hilang saat proses berakhir.
+/// In-memory storage, for tests and as a fallback when the keychain is unavailable.
+/// Its contents are lost when the process ends.
 #[derive(Default)]
 pub struct MemoryStore {
     tokens: Mutex<HashMap<String, TokenSet>>,
@@ -117,7 +117,7 @@ impl MemoryStore {
     }
 
     fn lock(&self) -> MutexGuard<'_, HashMap<String, TokenSet>> {
-        // Mutex yang teracuni tetap dipakai: isinya hanya peta token, tanpa invarian lain.
+        // A poisoned mutex is still used: it only holds a token map, with no other invariants.
         self.tokens.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 }
@@ -162,31 +162,31 @@ mod tests {
         store.save(id, &tokens).expect("save");
         assert_eq!(store.load(id).expect("load"), Some(tokens));
 
-        // Menyimpan lagi menimpa yang lama; akun lain tidak terpengaruh.
+        // Saving again overwrites the old one; other accounts are unaffected.
         let newer = TokenSet::new("gho_2");
         store.save(id, &newer).expect("save");
-        store.save("gitlab:gitlab.com:budi", &TokenSet::new("glpat")).expect("save");
+        store.save("gitlab:gitlab.com:alice", &TokenSet::new("glpat")).expect("save");
         assert_eq!(store.load(id).expect("load"), Some(newer));
 
         store.delete(id).expect("delete");
         assert_eq!(store.load(id).expect("load"), None);
-        assert_eq!(store.load("gitlab:gitlab.com:budi").expect("load"), Some(TokenSet::new("glpat")));
-        // Menghapus yang tidak ada bukan galat.
+        assert_eq!(store.load("gitlab:gitlab.com:alice").expect("load"), Some(TokenSet::new("glpat")));
+        // Deleting a nonexistent entry is not an error.
         store.delete(id).expect("delete");
     }
 
     #[test]
     fn memory_store_rejects_empty_id_and_hides_tokens() {
         let store = MemoryStore::new();
-        let err = store.save(" ", &TokenSet::new("rahasia")).expect_err("harus ditolak");
+        let err = store.save(" ", &TokenSet::new("secret")).expect_err("must be rejected");
         assert_eq!(err.code, ForgeErrorCode::InvalidInput);
-        store.save("a", &TokenSet::new("rahasia")).expect("save");
-        assert!(!format!("{store:?}").contains("rahasia"));
+        store.save("a", &TokenSet::new("secret")).expect("save");
+        assert!(!format!("{store:?}").contains("secret"));
     }
 
     #[test]
     fn stores_are_usable_as_trait_objects() {
-        // Hanya uji kompilasi: keychain asli tidak disentuh.
+        // Compile-only test: the real keychain is not touched.
         fn assert_store<T: TokenStore + 'static>() {}
         assert_store::<KeychainStore>();
         assert_store::<MemoryStore>();
@@ -197,9 +197,9 @@ mod tests {
 
     #[test]
     fn keychain_errors_never_carry_secret_bytes() {
-        let err = keychain_error(keyring::Error::BadEncoding(b"token_rahasia".to_vec()));
+        let err = keychain_error(keyring::Error::BadEncoding(b"token_secret".to_vec()));
         assert_eq!(err.code, ForgeErrorCode::Keychain);
-        assert!(!err.message.contains("token_rahasia"));
-        assert!(!err.message.contains("116"), "byte mentah tidak boleh tercetak: {}", err.message);
+        assert!(!err.message.contains("token_secret"));
+        assert!(!err.message.contains("116"), "raw bytes must not be printed: {}", err.message);
     }
 }

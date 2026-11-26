@@ -1,11 +1,11 @@
-//! Panel bawah "Terminal": kelompok terminal yang tampil berdampingan (split), daftar terminal di
-//! kanan, dan seret-lepas antara panel dan area editor.
+//! The bottom "Terminal" panel: groups of terminals shown side by side (split), the terminal list on
+//! the right, and drag and drop between the panel and the editor area.
 //!
-//! Semua terminal jendela ini dimiliki panel ini, termasuk yang tampil sebagai tab di area editor
-//! (jenis tab [`TAB_KIND`]). Sebuah terminal dimatikan begitu tidak ada lagi di panel maupun di
-//! area editor (mis. tabnya ditutup). Panggilan ke `Workbench` dari sini selalu ditunda
-//! (`window.defer`): membuka tab terminal membangun isinya lewat panel ini, yang tidak boleh
-//! sedang dipinjam saat itu.
+//! All of this window's terminals are owned by this panel, including those shown as tabs in the editor
+//! area (tab kind [`TAB_KIND`]). A terminal is killed as soon as it is no longer in the panel or in the
+//! editor area (e.g. its tab is closed). Calls to `Workbench` from here are always deferred
+//! (`window.defer`): opening a terminal tab builds its content through this panel, which must not
+//! be borrowed at that moment.
 
 use std::any::Any;
 use std::collections::HashMap;
@@ -27,22 +27,22 @@ use serde_json::json;
 use crate::layout::{Layout, PanelDrop, SessionId};
 use crate::view::{SessionEvent, TerminalSession};
 
-/// Jenis tab terminal di area editor.
+/// The terminal tab kind in the editor area.
 pub const TAB_KIND: &str = "terminal";
 
 static NEXT_SESSION: AtomicU64 = AtomicU64::new(1);
 
-/// Id untuk terminal baru (unik di seluruh aplikasi, sehingga id tabnya juga unik).
+/// An id for a new terminal (unique across the whole application, so its tab id is unique too).
 pub fn fresh_session_id() -> SessionId {
     NEXT_SESSION.fetch_add(1, Ordering::Relaxed)
 }
 
-/// Tab area editor untuk sebuah terminal. Terminal yang belum ada dibuat saat tabnya dibangun.
+/// An editor-area tab for a terminal. A terminal that does not exist yet is created when its tab is built.
 pub fn session_tab(id: SessionId, title: &str) -> TabData {
     TabData::new(TAB_KIND, title, json!({ "session": id }))
 }
 
-/// Id terminal dari sebuah tab terminal.
+/// The terminal id of a terminal tab.
 pub fn tab_session(tab: &TabData) -> Option<SessionId> {
     if tab.kind != TAB_KIND {
         return None;
@@ -50,24 +50,24 @@ pub fn tab_session(tab: &TabData) -> Option<SessionId> {
     tab.params.get("session")?.as_u64()
 }
 
-/// Yang sedang diseret adalah terminal (dari daftar panel atau tab area editor).
+/// What is being dragged is a terminal (from the panel list or an editor-area tab).
 fn is_terminal_drag(value: &dyn Any) -> bool {
     value.downcast_ref::<DraggedTab>().is_some_and(|dragged| dragged.tab.kind == TAB_KIND)
 }
 
 pub struct TerminalPanel {
     env: Env,
-    /// Semua terminal jendela ini, di panel maupun di area editor.
+    /// All of this window's terminals, in the panel and in the editor area.
     sessions: HashMap<SessionId, Entity<TerminalSession>>,
-    /// Susunan terminal di panel.
+    /// The layout of the terminals in the panel.
     layout: Layout,
-    /// Terminal yang tampil sebagai tab di area editor.
+    /// Terminals shown as tabs in the editor area.
     in_editor: Vec<SessionId>,
-    /// Terminal yang terakhir menerima fokus (di panel atau area editor): sasaran command seperti
-    /// Kill dan Clear.
+    /// The terminal that received focus last (in the panel or the editor area): the target of commands
+    /// like Kill and Clear.
     last_focused: Option<SessionId>,
     next_number: usize,
-    /// Zona jatuh selama terminal diseret di atas sebuah terminal panel.
+    /// The drop zone while a terminal is dragged over a panel terminal.
     pane_drop: Option<(SessionId, DropZone)>,
     focus_handle: FocusHandle,
     session_subscriptions: HashMap<SessionId, Vec<Subscription>>,
@@ -107,19 +107,19 @@ impl TerminalPanel {
         }
     }
 
-    // ----- Keadaan -----
+    // ----- State -----
 
-    /// Terminal di panel, menurut urutan daftar.
+    /// The terminals in the panel, in list order.
     pub fn sessions(&self) -> Vec<Entity<TerminalSession>> {
         self.layout.order().iter().filter_map(|id| self.sessions.get(id).cloned()).collect()
     }
 
-    /// Terminal yang tampil sebagai tab di area editor.
+    /// The terminals shown as tabs in the editor area.
     pub fn editor_sessions(&self) -> Vec<Entity<TerminalSession>> {
         self.in_editor.iter().filter_map(|id| self.sessions.get(id).cloned()).collect()
     }
 
-    /// Ada terminal, di panel maupun di area editor.
+    /// There are terminals, in the panel or in the editor area.
     pub fn has_sessions(&self) -> bool {
         !self.sessions.is_empty()
     }
@@ -128,12 +128,12 @@ impl TerminalPanel {
         self.sessions.get(&id)
     }
 
-    /// Terminal aktif di panel.
+    /// The active terminal in the panel.
     pub fn active_session(&self) -> Option<&Entity<TerminalSession>> {
         self.layout.active.and_then(|id| self.sessions.get(&id))
     }
 
-    /// Terminal yang tampil berdampingan di panel saat ini (kelompok terminal aktif).
+    /// The terminals currently shown side by side in the panel (the active terminal's group).
     pub fn visible_sessions(&self) -> Vec<Entity<TerminalSession>> {
         self.layout.active_group().iter().filter_map(|id| self.sessions.get(id).cloned()).collect()
     }
@@ -146,13 +146,13 @@ impl TerminalPanel {
         self.in_editor.contains(&id)
     }
 
-    /// Terminal yang sedang fokus.
+    /// The terminal that is focused.
     pub fn focused(&self, window: &Window, cx: &App) -> Option<SessionId> {
         self.sessions.iter().find(|(_, session)| session.read(cx).focus_handle_is_focused(window)).map(|(id, _)| *id)
     }
 
-    /// Sasaran command terminal: yang fokus, yang terakhir difokus, lalu yang aktif di panel.
-    /// `panel_only`: hanya terminal panel (tombol di bilah panel).
+    /// The target of terminal commands: the focused one, the one focused last, then the one active in the panel.
+    /// `panel_only`: only the panel's terminal (the buttons in the panel bar).
     pub fn target(&self, panel_only: bool, window: &Window, cx: &App) -> Option<SessionId> {
         if panel_only {
             return self.layout.active;
@@ -160,7 +160,7 @@ impl TerminalPanel {
         self.focused(window, cx).or(self.last_focused.filter(|id| self.sessions.contains_key(id))).or(self.layout.active)
     }
 
-    // ----- Membuat dan mematikan -----
+    // ----- Creating and killing -----
 
     fn create_session(&mut self, id: SessionId, window: &mut Window, cx: &mut Context<Self>) -> Entity<TerminalSession> {
         let number = self.next_number;
@@ -176,7 +176,7 @@ impl TerminalPanel {
         session
     }
 
-    /// Terminal dengan id ini; dibuat bila belum ada (tab terminal baru di area editor).
+    /// The terminal with this id; created if it does not exist yet (a new terminal tab in the editor area).
     pub fn session_or_create(&mut self, id: SessionId, window: &mut Window, cx: &mut Context<Self>) -> Entity<TerminalSession> {
         match self.sessions.get(&id) {
             Some(session) => session.clone(),
@@ -184,7 +184,7 @@ impl TerminalPanel {
         }
     }
 
-    /// Terminal baru di folder proyek sebagai kelompok sendiri di panel, langsung fokus.
+    /// A new terminal in the project folder as its own group in the panel, focused right away.
     pub fn new_session(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Entity<TerminalSession> {
         let id = fresh_session_id();
         let session = self.create_session(id, window, cx);
@@ -194,7 +194,7 @@ impl TerminalPanel {
         session
     }
 
-    /// Terminal baru di samping terminal panel `beside` (bawaan: yang aktif), seperti VS Code.
+    /// A new terminal beside the panel terminal `beside` (default: the active one), like VS Code.
     pub fn split(&mut self, beside: Option<SessionId>, window: &mut Window, cx: &mut Context<Self>) -> Entity<TerminalSession> {
         let Some(target) = beside.filter(|id| self.layout.contains(*id)).or(self.layout.active) else {
             return self.new_session(window, cx);
@@ -207,14 +207,14 @@ impl TerminalPanel {
         session
     }
 
-    /// Mengeluarkan terminal dari kelompok split-nya.
+    /// Takes a terminal out of its split group.
     pub fn unsplit(&mut self, id: SessionId, window: &mut Window, cx: &mut Context<Self>) {
         self.layout.unsplit(id);
         self.focus_active(window, cx);
         cx.notify();
     }
 
-    /// Memastikan ada minimal satu terminal di panel (saat panel dibuka).
+    /// Makes sure there is at least one terminal in the panel (when the panel is opened).
     pub fn ensure_session(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.layout.is_empty() {
             self.new_session(window, cx);
@@ -230,7 +230,7 @@ impl TerminalPanel {
         }
     }
 
-    /// Mematikan terminal. Terminal di area editor ditutup tabnya (dan dimatikan karenanya).
+    /// Kills a terminal. For a terminal in the editor area its tab is closed (which kills it).
     pub fn kill(&mut self, id: SessionId, window: &mut Window, cx: &mut Context<Self>) {
         if self.in_editor.contains(&id) {
             let tab_id = session_tab(id, "").id;
@@ -284,25 +284,25 @@ impl TerminalPanel {
         }
     }
 
-    // ----- Panel dan area editor -----
+    // ----- Panel and editor area -----
 
-    /// Menjalankan `f` pada `Workbench` setelah pembaruan yang sedang berjalan selesai.
+    /// Runs `f` on the `Workbench` after the update that is in progress has finished.
     fn with_workbench(&self, window: &mut Window, cx: &mut App, f: impl FnOnce(&mut Workbench, &mut Window, &mut Context<Workbench>) + 'static) {
         let Some(workbench) = self.env.workbench.upgrade() else { return };
         window.defer(cx, move |window, cx| workbench.update(cx, |workbench, cx| f(workbench, window, cx)));
     }
 
-    /// Memindahkan terminal panel ke area editor sebagai tab di grup aktif.
+    /// Moves a panel terminal to the editor area as a tab in the active group.
     pub fn move_to_editor(&mut self, id: SessionId, window: &mut Window, cx: &mut Context<Self>) {
         let Some(session) = self.sessions.get(&id) else { return };
         let tab = session_tab(id, session.read(cx).title());
-        // Panel mencabutnya sendiri saat tabnya terbuka (`sync_editor_tabs`).
+        // The panel removes it by itself once its tab is open (`sync_editor_tabs`).
         self.with_workbench(window, cx, move |workbench, window, cx| {
             workbench.open_tab(tab, OpenOptions::default(), window, cx);
         });
     }
 
-    /// Memindahkan terminal (dari area editor, atau di dalam panel) ke tempat ini di panel.
+    /// Moves a terminal (from the editor area, or within the panel) to this place in the panel.
     pub fn move_to_panel(&mut self, id: SessionId, place: PanelDrop, window: &mut Window, cx: &mut Context<Self>) {
         if !self.sessions.contains_key(&id) {
             return;
@@ -314,7 +314,7 @@ impl TerminalPanel {
             let tab_id = session_tab(id, "").id;
             self.with_workbench(window, cx, move |workbench, window, cx| workbench.force_close_where(|tab| tab.id == tab_id, window, cx));
         }
-        // Ditunda setelah penutupan tab, yang memfokus tab editor berikutnya.
+        // Deferred after the tab closing, which focuses the next editor tab.
         self.focus_active(window, cx);
         cx.notify();
     }
@@ -325,9 +325,9 @@ impl TerminalPanel {
         }
     }
 
-    /// Menyamakan panel dengan tab terminal yang terbuka di area editor: terminal yang pindah ke
-    /// area editor dicabut dari panel, terminal yang tidak ada di mana pun dimatikan, dan judul tab
-    /// mengikuti judul terminal.
+    /// Syncs the panel with the terminal tabs open in the editor area: a terminal that moved to the
+    /// editor area is removed from the panel, a terminal that is nowhere is killed, and the tab title
+    /// follows the terminal's title.
     fn sync_editor_tabs(&mut self, workbench: &Entity<Workbench>, window: &mut Window, cx: &mut Context<Self>) {
         let tabs: Vec<(SessionId, String)> = workbench.read(cx).model().all_tabs().filter_map(|tab| Some((tab_session(tab)?, tab.title.clone()))).collect();
         self.in_editor = tabs.iter().map(|(id, _)| *id).collect();
@@ -382,8 +382,8 @@ impl TerminalPanel {
         cx.notify();
     }
 
-    /// Menghitung zona jatuh selama terminal diseret di atas terminal panel `pane`: tepi kiri/kanan
-    /// membelah di sisi itu, tengah menjadikannya terminal sendiri.
+    /// Computes the drop zone while a terminal is dragged over the panel terminal `pane`: the left/right
+    /// edge splits on that side, the middle makes it its own terminal.
     fn track_pane_drop(&mut self, pane: SessionId, event: &DragMoveEvent<DraggedTab>, cx: &mut Context<Self>) {
         let (bounds, position) = (event.bounds, event.event.position);
         let dragged = tab_session(&event.drag(cx).tab);
@@ -401,7 +401,7 @@ impl TerminalPanel {
         }
     }
 
-    // ----- Tampilan -----
+    // ----- Views -----
 
     fn render_pane(&self, id: SessionId, split: bool, cx: &mut Context<Self>) -> AnyElement {
         let theme = cx.theme();
@@ -415,7 +415,7 @@ impl TerminalPanel {
                 DropZone::Center => base.top_0().left_0().size_full(),
             }
         });
-        // Garis atas penanda terminal aktif; selalu ada (transparan) agar ukuran grid tidak berubah.
+        // The top line marking the active terminal; always present (transparent) so the grid size does not change.
         let marker = if self.layout.active == Some(id) { theme.primary } else { theme.primary.opacity(0.) };
         div()
             .id(SharedString::from(format!("terminal-pane-{id}")))
@@ -466,7 +466,7 @@ impl TerminalPanel {
             .child(Icon::new(Lucide::SquareTerminal).small())
             .child(div().flex_1().min_w_0().overflow_hidden().text_ellipsis().whitespace_nowrap().child(title.clone()))
             .on_click(cx.listener(move |this, _, window, cx| this.select(id, window, cx)))
-            // Seret ke area editor untuk menjadikannya tab, atau ke terminal lain untuk membelah.
+            // Drag to the editor area to make it a tab, or onto another terminal to split.
             .on_drag(DraggedTab { tab: session_tab(id, &title), from: None }, |dragged, _, _, cx| {
                 cx.stop_propagation();
                 cx.new(|_| TabDragPreview::new(dragged.tab.title.clone(), Some(Lucide::SquareTerminal)))
@@ -496,7 +496,7 @@ impl TerminalPanel {
         let mut entries = Vec::new();
         for group in &self.layout.groups {
             for (index, id) in group.iter().enumerate() {
-                // Garis pohon seperti VS Code untuk terminal yang tampil berdampingan.
+                // A tree line like VS Code for terminals shown side by side.
                 let glyph = match (group.len(), index) {
                     (1, _) => None,
                     (_, 0) => Some("┌"),
@@ -518,7 +518,7 @@ impl TerminalPanel {
             .border_color(theme.border)
             .overflow_y_scroll()
             .children(entries)
-            // Ruang kosong di bawah daftar: terminal yang dijatuhkan di sini menjadi terminal sendiri.
+            // The empty space below the list: a terminal dropped here becomes its own terminal.
             .child(
                 div()
                     .id("terminal-list-end")
@@ -554,7 +554,7 @@ impl Render for TerminalPanel {
                 .into_any_element(),
             [only] => self.render_pane(*only, false, cx),
             _ => {
-                // Id menurut susunan kelompok: ukuran dibagi rata lagi saat isinya berubah.
+                // The id follows the group layout: sizes are divided evenly again when the contents change.
                 let key = visible.iter().map(|id| id.to_string()).collect::<Vec<_>>().join("-");
                 h_resizable(SharedString::from(format!("terminal-split-{key}")))
                     .children(visible.iter().map(|id| resizable_panel().child(self.render_pane(*id, true, cx))))
@@ -571,18 +571,18 @@ impl Render for TerminalPanel {
     }
 }
 
-/// Panel terminal milik jendela ini.
+/// This window's terminal panel.
 pub fn panel(workbench: &Workbench) -> Option<Entity<TerminalPanel>> {
     workbench.extension::<Entity<TerminalPanel>>()
 }
 
-/// Panel jendela yang sedang membangun tab; diisi lewat `Workbench::on_before_build_tabs`.
+/// The panel of the window that is currently building tabs; filled in via `Workbench::on_before_build_tabs`.
 pub(crate) struct CurrentPanel(pub WeakEntity<TerminalPanel>);
 
 impl Global for CurrentPanel {}
 
-/// Isi tab terminal di area editor: terminal yang sama dengan yang ada di panel (proses shell-nya
-/// tetap berjalan saat dipindah).
+/// The content of a terminal tab in the editor area: the same terminal as the one in the panel (its
+/// shell process keeps running when it is moved).
 pub(crate) struct TerminalKind;
 
 impl TabKind for TerminalKind {
@@ -599,14 +599,14 @@ impl TabKind for TerminalKind {
         Some(Lucide::SquareTerminal)
     }
 
-    /// "Split Editor" pada terminal membuka terminal baru di sebelahnya (satu terminal tidak bisa
-    /// tampil di dua tempat).
+    /// "Split Editor" on a terminal opens a new terminal next to it (a single terminal cannot be
+    /// shown in two places).
     fn split_copy(&self, _: &TabData) -> Option<TabData> {
         Some(session_tab(fresh_session_id(), "Terminal"))
     }
 }
 
-/// Tab terminal di jendela tanpa folder (tidak ada terminal di sana).
+/// A terminal tab in a window without a folder (there are no terminals there).
 struct Unavailable {
     focus_handle: FocusHandle,
 }

@@ -1,13 +1,13 @@
-//! Satu proses OnCode per pengguna, seperti VS Code.
+//! A single OnCode process per user, like VS Code.
 //!
-//! `oncode .` di terminal menjalankan `oncode-app` lagi. Bila OnCode sudah berjalan, proses baru
-//! hanya mengirim argumen dan folder kerjanya lewat socket lokal lalu selesai, sebelum memuat GPU,
-//! font, atau runtime. Proses lama membuka jendela untuk folder itu atau memfokuskan jendela yang
-//! sudah membukanya. Tanpa ini setiap `oncode .` menambah satu proses penuh beserta memorinya.
+//! `oncode .` in a terminal runs `oncode-app` again. If OnCode is already running, the new process
+//! only sends its arguments and working folder over a local socket and then finishes, before loading the GPU,
+//! fonts, or the runtime. The existing process opens a window for that folder or focuses the window that
+//! already has it open. Without this, every `oncode .` adds a whole extra process along with its memory.
 //!
-//! Endpoint-nya per pengguna: named pipe di Windows, socket Unix di `XDG_RUNTIME_DIR` atau folder
-//! sementara di tempat lain. Build debug memakai endpoint sendiri agar tidak diteruskan ke OnCode
-//! yang terpasang.
+//! The endpoint is per user: a named pipe on Windows, a Unix socket in `XDG_RUNTIME_DIR` or the temporary
+//! folder elsewhere. Debug builds use their own endpoint so they are not forwarded to an installed
+//! OnCode.
 
 use std::io::{Read, Write};
 use std::time::Duration;
@@ -16,12 +16,12 @@ use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt as _, AsyncRead, AsyncReadExt as _, AsyncWrite, AsyncWriteExt as _, BufReader};
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 
-/// Batas waktu menunggu jawaban proses utama; lewat dari itu proses ini berjalan sendiri.
+/// Time limit for waiting for the main process's reply; past that this process runs on its own.
 const REPLY_TIMEOUT: Duration = Duration::from_secs(5);
-/// Ukuran maksimal satu permintaan, agar klien yang salah tidak menghabiskan memori.
+/// The maximum size of a single request, so a faulty client cannot exhaust memory.
 const MAX_REQUEST: u64 = 256 * 1024;
 
-/// Argumen baris perintah dan folder kerja proses yang meneruskan.
+/// The command-line arguments and working folder of the forwarding process.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Request {
     pub cwd: String,
@@ -43,7 +43,7 @@ impl Request {
     }
 }
 
-/// Mati saat dijalankan dengan `ONCODE_DEV_SCRIPT` (build debug): skrip itu harus berjalan di proses ini.
+/// Off when run with `ONCODE_DEV_SCRIPT` (debug builds): that script must run in this process.
 pub fn enabled() -> bool {
     !(cfg!(debug_assertions) && std::env::var_os("ONCODE_DEV_SCRIPT").is_some())
 }
@@ -52,10 +52,10 @@ pub fn endpoint() -> String {
     transport::endpoint(if cfg!(debug_assertions) { "-dev" } else { "" })
 }
 
-/// Meneruskan `request` ke proses OnCode yang sudah berjalan. `true` bila diterima; `false` bila
-/// tidak ada proses lain atau proses itu tidak menjawab, dan proses ini berjalan seperti biasa.
+/// Forwards `request` to the OnCode process that is already running. `true` if it was accepted; `false` if
+/// there is no other process or it does not reply, and this process runs as usual.
 ///
-/// Di macOS dan Linux tidak membuat thread, sehingga aman dipanggil sebelum `shell_env`.
+/// On macOS and Linux it does not create threads, so it is safe to call before `shell_env`.
 pub fn forward(endpoint: &str, request: &Request) -> bool {
     let Some(mut stream) = transport::connect(endpoint) else { return false };
     if stream.write_all(request.to_line().as_bytes()).and_then(|()| stream.flush()).is_err() {
@@ -64,15 +64,15 @@ pub fn forward(endpoint: &str, request: &Request) -> bool {
     transport::read_reply(stream)
 }
 
-/// Menjadi proses utama: permintaan dari proses berikutnya masuk ke penerima yang dikembalikan.
-/// `None` bila endpoint tidak bisa dibuka (mis. dipegang proses lain); aplikasi tetap berjalan.
+/// Becomes the main process: requests from later processes arrive on the returned receiver.
+/// `None` if the endpoint cannot be opened (e.g. held by another process); the application keeps running.
 pub fn listen(endpoint: &str, runtime: &tokio::runtime::Runtime) -> Option<UnboundedReceiver<Request>> {
     let _context = runtime.enter();
     let (sender, receiver) = unbounded_channel();
     transport::listen(endpoint, sender).then_some(receiver)
 }
 
-/// Membaca satu permintaan lalu menjawab `ok` setelah permintaan masuk antrean.
+/// Reads a single request and replies `ok` once the request has entered the queue.
 async fn handle<S: AsyncRead + AsyncWrite + Unpin>(stream: S, sender: UnboundedSender<Request>) {
     let (read, mut write) = tokio::io::split(stream);
     let mut line = String::new();
@@ -102,8 +102,8 @@ mod transport {
     use super::*;
 
     pub fn endpoint(suffix: &str) -> String {
-        // `XDG_RUNTIME_DIR` dan `TMPDIR` macOS hanya milik pengguna ini; `/tmp` dipakai bersama,
-        // karena itu nama berkas memuat uid dan pemiliknya diperiksa sebelum dihubungi.
+        // `XDG_RUNTIME_DIR` and macOS's `TMPDIR` belong to this user only; `/tmp` is shared,
+        // so the file name contains the uid and its owner is checked before connecting.
         let dir = std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from).filter(|dir| dir.is_dir()).unwrap_or_else(std::env::temp_dir);
         let uid = unsafe { libc::getuid() };
         dir.join(format!("oncode-{uid}{suffix}.sock")).to_string_lossy().into_owned()
@@ -128,7 +128,7 @@ mod transport {
         let listener = match UnixListener::bind(endpoint) {
             Ok(listener) => listener,
             Err(error) if error.kind() == std::io::ErrorKind::AddrInUse => {
-                // Proses lain masih menjawab: biarkan. Selain itu sisa proses yang berhenti mendadak.
+                // Another process still replies: leave it. Otherwise it is a leftover from a process that stopped abruptly.
                 if UnixStream::connect(endpoint).is_ok() {
                     return false;
                 }
@@ -171,7 +171,7 @@ mod transport {
     }
 
     pub fn connect(endpoint: &str) -> Option<File> {
-        // Semua instance pipe sedang melayani klien lain: coba lagi sebentar.
+        // All pipe instances are serving other clients: retry for a moment.
         const ERROR_PIPE_BUSY: i32 = 231;
         for _ in 0..20 {
             match std::fs::OpenOptions::new().read(true).write(true).open(endpoint) {
@@ -183,8 +183,8 @@ mod transport {
         None
     }
 
-    /// Pipe yang dibuka sebagai berkas tidak punya batas waktu baca, jadi jawabannya ditunggu di
-    /// thread lain. Di Windows `shell_env` tidak berbuat apa-apa, jadi thread ini tidak mengganggu.
+    /// A pipe opened as a file has no read timeout, so the reply is awaited on another
+    /// thread. On Windows `shell_env` does nothing, so this thread does not interfere.
     pub fn read_reply(stream: File) -> bool {
         let (sender, receiver) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
@@ -194,7 +194,7 @@ mod transport {
     }
 
     pub fn listen(endpoint: &str, sender: UnboundedSender<Request>) -> bool {
-        // `first_pipe_instance` gagal bila proses lain sudah memegang nama ini.
+        // `first_pipe_instance` fails if another process already holds this name.
         let Ok(first) = ServerOptions::new().first_pipe_instance(true).reject_remote_clients(true).create(endpoint) else { return false };
         let endpoint = endpoint.to_string();
         tokio::spawn(async move {
@@ -203,7 +203,7 @@ mod transport {
                 if pipe.connect().await.is_err() {
                     tokio::time::sleep(Duration::from_millis(100)).await;
                 }
-                // Instance berikutnya dibuat sebelum melayani klien ini, agar selalu ada yang menunggu.
+                // The next instance is created before serving this client, so there is always one waiting.
                 let Ok(next) = ServerOptions::new().reject_remote_clients(true).create(&endpoint) else { break };
                 let connected = std::mem::replace(&mut pipe, next);
                 tokio::spawn(handle(connected, sender.clone()));
@@ -224,7 +224,7 @@ mod tests {
 
     #[test]
     fn requests_round_trip_as_json_lines() {
-        let request = Request { cwd: r"C:\kode".to_string(), args: vec!["oncode-app".to_string(), ".".to_string(), "folder \"aneh\"\n".to_string()] };
+        let request = Request { cwd: r"C:\code".to_string(), args: vec!["oncode-app".to_string(), ".".to_string(), "folder \"odd\"\n".to_string()] };
         let line = request.to_line();
         assert_eq!(line.matches('\n').count(), 1);
         assert_eq!(Request::parse(&line), Some(request));
@@ -235,13 +235,13 @@ mod tests {
     fn second_process_hands_its_request_to_the_first() {
         let runtime = tokio::runtime::Builder::new_multi_thread().worker_threads(1).enable_all().build().unwrap();
         let endpoint = test_endpoint();
-        let request = Request { cwd: "/proyek".to_string(), args: vec!["oncode-app".to_string(), ".".to_string()] };
+        let request = Request { cwd: "/project".to_string(), args: vec!["oncode-app".to_string(), ".".to_string()] };
 
-        // Belum ada proses utama: permintaan tidak bisa diteruskan.
+        // There is no main process yet: the request cannot be forwarded.
         assert!(!forward(&endpoint, &request));
 
-        let mut requests = listen(&endpoint, &runtime).expect("endpoint terbuka");
-        // Endpoint yang sama tidak bisa dipegang dua proses.
+        let mut requests = listen(&endpoint, &runtime).expect("endpoint is open");
+        // The same endpoint cannot be held by two processes.
         assert!(listen(&endpoint, &runtime).is_none());
 
         for _ in 0..3 {

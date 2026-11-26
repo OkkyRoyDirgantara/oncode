@@ -1,16 +1,16 @@
-//! Parse URL remote Git menjadi host, pemilik, dan nama repositori.
+//! Parses a Git remote URL into the host, owner, and repository name.
 
 use crate::model::RepoRef;
 
-/// Mem-parse URL remote menjadi [`RepoRef`].
+/// Parses a remote URL into a [`RepoRef`].
 ///
-/// Bentuk yang dikenali: `https://host/owner/name(.git)`, `http://…`,
-/// `ssh://git@host[:port]/owner/name.git`, `git://…`, dan bentuk scp
-/// `git@host:owner/name.git`; `user@` dan garis miring di akhir boleh ada. Port dibuang
-/// dan nama host dijadikan huruf kecil. Untuk subgrup GitLab, `owner` memuat seluruh
-/// jalur namespace (`grup/subgrup`).
+/// Recognized forms: `https://host/owner/name(.git)`, `http://…`,
+/// `ssh://git@host[:port]/owner/name.git`, `git://…`, and the scp form
+/// `git@host:owner/name.git`; a `user@` and a trailing slash are allowed. The port is dropped
+/// and the hostname is lowercased. For GitLab subgroups, `owner` contains the whole
+/// namespace path (`group/subgroup`).
 ///
-/// Mengembalikan `None` untuk path lokal dan URL `file://`.
+/// Returns `None` for local paths and `file://` URLs.
 pub fn parse_remote_url(url: &str) -> Option<RepoRef> {
     let url = url.trim();
     if url.is_empty() {
@@ -26,13 +26,13 @@ pub fn parse_remote_url(url: &str) -> Option<RepoRef> {
             rest.split_once('/')?
         }
         None => {
-            // Bentuk scp: [user@]host:path. Titik dua harus muncul sebelum garis miring
-            // pertama; kalau tidak, ini path lokal.
+            // The scp form: [user@]host:path. The colon must appear before the first
+            // slash; otherwise this is a local path.
             let (left, path) = url.split_once(':')?;
             if left.contains(['/', '\\']) {
                 return None;
             }
-            // Satu huruf sebelum titik dua adalah drive Windows (`C:\repo`), bukan host.
+            // A single letter before the colon is a Windows drive (`C:\repo`), not a host.
             if left.len() < 2 {
                 return None;
             }
@@ -54,11 +54,11 @@ pub fn parse_remote_url(url: &str) -> Option<RepoRef> {
     Some(RepoRef { host, owner: segments.join("/"), name })
 }
 
-/// Mengambil nama host dari `[user[:pass]@]host[:port]`.
+/// Extracts the hostname from `[user[:pass]@]host[:port]`.
 fn host_from_authority(authority: &str) -> Option<String> {
     let host_port = authority.rsplit_once('@').map_or(authority, |(_, host)| host);
     let host = if host_port.starts_with('[') {
-        // IPv6 literal: kurung siku dipertahankan.
+        // IPv6 literal: the square brackets are kept.
         let end = host_port.find(']')?;
         &host_port[..=end]
     } else {
@@ -97,49 +97,49 @@ mod tests {
             ("https://github.com/octocat/hello-world", expect("github.com", "octocat", "hello-world")),
             ("https://github.com/octocat/hello-world/", expect("github.com", "octocat", "hello-world")),
             ("https://github.com/octocat/hello-world.git/", expect("github.com", "octocat", "hello-world")),
-            ("http://git.lokal/tim/proyek.git", expect("git.lokal", "tim", "proyek")),
-            ("  https://gitlab.com/tim/proyek.git\n", expect("gitlab.com", "tim", "proyek")),
-            // user@ dan user:pass@ di HTTPS
-            ("https://budi@github.com/octocat/hello-world.git", expect("github.com", "octocat", "hello-world")),
-            ("https://budi:rahasia@gitlab.com/tim/proyek.git", expect("gitlab.com", "tim", "proyek")),
-            // Port di HTTPS dibuang
-            ("https://git.perusahaan.id:8443/tim/proyek.git", expect("git.perusahaan.id", "tim", "proyek")),
-            // Host huruf besar
+            ("http://git.local/team/project.git", expect("git.local", "team", "project")),
+            ("  https://gitlab.com/team/project.git\n", expect("gitlab.com", "team", "project")),
+            // user@ and user:pass@ in HTTPS
+            ("https://alice@github.com/octocat/hello-world.git", expect("github.com", "octocat", "hello-world")),
+            ("https://alice:secret@gitlab.com/team/project.git", expect("gitlab.com", "team", "project")),
+            // The port in HTTPS is dropped
+            ("https://git.example.com:8443/team/project.git", expect("git.example.com", "team", "project")),
+            // Uppercase host
             ("https://GitHub.COM/Octocat/Hello-World.git", expect("github.com", "Octocat", "Hello-World")),
-            ("git@GITLAB.com:Tim/Proyek.git", expect("gitlab.com", "Tim", "Proyek")),
-            // Bentuk scp
+            ("git@GITLAB.com:Team/Project.git", expect("gitlab.com", "Team", "Project")),
+            // The scp form
             ("git@github.com:octocat/hello-world.git", expect("github.com", "octocat", "hello-world")),
             ("git@github.com:octocat/hello-world", expect("github.com", "octocat", "hello-world")),
             ("git@github.com:/octocat/hello-world.git", expect("github.com", "octocat", "hello-world")),
             ("github.com:octocat/hello-world.git", expect("github.com", "octocat", "hello-world")),
             ("org-1234@github.com:octocat/hello-world.git", expect("github.com", "octocat", "hello-world")),
-            // ssh://, dengan dan tanpa port
+            // ssh://, with and without a port
             ("ssh://git@github.com/octocat/hello-world.git", expect("github.com", "octocat", "hello-world")),
-            ("ssh://git@git.perusahaan.id:2222/tim/proyek.git", expect("git.perusahaan.id", "tim", "proyek")),
-            ("ssh://git.perusahaan.id:2222/tim/proyek", expect("git.perusahaan.id", "tim", "proyek")),
+            ("ssh://git@git.example.com:2222/team/project.git", expect("git.example.com", "team", "project")),
+            ("ssh://git.example.com:2222/team/project", expect("git.example.com", "team", "project")),
             ("git://github.com/octocat/hello-world.git", expect("github.com", "octocat", "hello-world")),
-            // Subgrup GitLab
-            ("https://gitlab.com/grup/subgrup/proyek.git", expect("gitlab.com", "grup/subgrup", "proyek")),
-            ("git@gitlab.com:grup/subgrup/lagi/proyek.git", expect("gitlab.com", "grup/subgrup/lagi", "proyek")),
-            ("ssh://git@gitlab.com:22/grup/subgrup/proyek/", expect("gitlab.com", "grup/subgrup", "proyek")),
-            // Nama yang memuat titik
-            ("https://github.com/octocat/situs.github.io.git", expect("github.com", "octocat", "situs.github.io")),
+            // GitLab subgroups
+            ("https://gitlab.com/group/subgroup/project.git", expect("gitlab.com", "group/subgroup", "project")),
+            ("git@gitlab.com:group/subgroup/more/project.git", expect("gitlab.com", "group/subgroup/more", "project")),
+            ("ssh://git@gitlab.com:22/group/subgroup/project/", expect("gitlab.com", "group/subgroup", "project")),
+            // A name containing a dot
+            ("https://github.com/octocat/site.github.io.git", expect("github.com", "octocat", "site.github.io")),
             // IPv6
-            ("ssh://git@[::1]:2222/tim/proyek.git", expect("[::1]", "tim", "proyek")),
-            // Bukan remote forge
-            ("/home/budi/repo", None),
-            ("/home/budi/repo.git", None),
+            ("ssh://git@[::1]:2222/team/project.git", expect("[::1]", "team", "project")),
+            // Not a forge remote
+            ("/home/alice/repo", None),
+            ("/home/alice/repo.git", None),
             ("./repo", None),
-            ("../tim/repo.git", None),
+            ("../team/repo.git", None),
             ("repo", None),
-            ("tim/repo", None),
-            ("C:\\Users\\budi\\repo", None),
-            ("C:/Users/budi/repo", None),
-            ("file:///home/budi/repo.git", None),
-            ("file://server/share/tim/repo.git", None),
+            ("team/repo", None),
+            ("C:\\Users\\alice\\repo", None),
+            ("C:/Users/alice/repo", None),
+            ("file:///home/alice/repo.git", None),
+            ("file://server/share/team/repo.git", None),
             ("", None),
             ("   ", None),
-            // Kurang lengkap
+            // Incomplete
             ("https://github.com/octocat", None),
             ("https://github.com/", None),
             ("https://github.com", None),

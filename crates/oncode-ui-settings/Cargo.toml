@@ -4,12 +4,12 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
-description = "Tampilan pengaturan untuk OnCode"
+description = "Settings view for OnCode"
 
 [dependencies]
 oncode-core = { path = "../oncode-core" }
 oncode-ui = { path = "../oncode-ui" }
-# Hanya untuk tipe yang muncul di `Settings`: `PullStrategy` dan `ServerSpec`.
+# Only for the types that appear in `Settings`: `PullStrategy` and `ServerSpec`.
 oncode-git = { path = "../oncode-git" }
 oncode-lsp = { path = "../oncode-lsp" }
 gpui-kit = "=0.10.0"

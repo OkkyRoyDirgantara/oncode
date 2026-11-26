@@ -1,5 +1,5 @@
-//! Uji ujung-ke-ujung: klien LSP di atas `LspManager` terhadap server tiruan sebagai proses
-//! stdio sungguhan (`examples/mock_lsp_server.rs`).
+//! End-to-end test: the LSP client on top of `LspManager` against the mock server as a real
+//! stdio process (`examples/mock_lsp_server.rs`).
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -15,18 +15,18 @@ use tokio::time::timeout;
 
 const TIMEOUT: Duration = Duration::from_secs(20);
 
-/// Binary contoh dibangun `cargo test` ke `target/<profil>/examples/`. Dicari dari folder binary
-/// uji ke atas, karena letak binary uji berbeda antar versi Cargo: `target/<profil>/deps/` atau
-/// `target/<profil>/build/<crate>/<hash>/out/` (layout build-dir baru).
+/// The example binary is built by `cargo test` into `target/<profile>/examples/`. It is looked up from the test
+/// binary's folder upward, because the location of the test binary differs between Cargo versions: `target/<profile>/deps/` or
+/// `target/<profile>/build/<crate>/<hash>/out/` (the new build-dir layout).
 fn mock_server() -> PathBuf {
-    let exe = std::env::current_exe().expect("path uji");
+    let exe = std::env::current_exe().expect("test path");
     let name = if cfg!(windows) { "mock_lsp_server.exe" } else { "mock_lsp_server" };
     let relative = Path::new("examples").join(name);
     exe.ancestors()
         .skip(1)
         .map(|dir| dir.join(&relative))
         .find(|path| path.is_file())
-        .unwrap_or_else(|| panic!("server tiruan belum dibangun (cargo test -p oncode-lsp): {} tidak ada di atas {}", relative.display(), exe.display()))
+        .unwrap_or_else(|| panic!("mock server has not been built (cargo test -p oncode-lsp): {} not found above {}", relative.display(), exe.display()))
 }
 
 struct Forward(UnboundedSender<(String, Value)>);
@@ -47,7 +47,7 @@ struct Session {
 impl Session {
     async fn notification(&mut self, method: &str) -> Value {
         loop {
-            let (name, params) = timeout(TIMEOUT, self.notifications.recv()).await.expect("notifikasi tidak datang").expect("kanal tertutup");
+            let (name, params) = timeout(TIMEOUT, self.notifications.recv()).await.expect("notification did not arrive").expect("channel closed");
             if name == method {
                 return params;
             }
@@ -55,12 +55,12 @@ impl Session {
     }
 
     async fn exit(&mut self) -> ServerExitInfo {
-        timeout(TIMEOUT, self.exit.recv()).await.expect("on_exit tidak dipanggil").expect("kanal exit tertutup")
+        timeout(TIMEOUT, self.exit.recv()).await.expect("on_exit was not called").expect("exit channel closed")
     }
 }
 
-/// Merangkai klien dengan proses server: pesan keluar ditulis berurutan ke stdin server,
-/// pesan dari stdout diserahkan ke klien, dan klien ditutup saat proses berakhir.
+/// Wires the client to the server process: outgoing messages are written in order to the server's stdin,
+/// messages from stdout are handed to the client, and the client is closed when the process ends.
 async fn start(manager: &Arc<LspManager>, args: &[&str], root: &Path) -> Session {
     let (notification_tx, notifications) = unbounded_channel();
     let (exit_tx, exit) = unbounded_channel();
@@ -74,7 +74,7 @@ async fn start(manager: &Arc<LspManager>, args: &[&str], root: &Path) -> Session
             let _ = exit_tx.send(info);
         })
         .await
-        .expect("server tiruan berjalan");
+        .expect("mock server runs");
     let writer = manager.clone();
     tokio::spawn(async move {
         while let Some(message) = outgoing.recv().await {
@@ -87,9 +87,9 @@ async fn start(manager: &Arc<LspManager>, args: &[&str], root: &Path) -> Session
 }
 
 fn project() -> tempfile::TempDir {
-    let dir = tempfile::tempdir().expect("direktori sementara");
-    std::fs::write(dir.path().join("pustaka.txt"), "def tambah\ndef kurang\n").unwrap();
-    std::fs::write(dir.path().join("utama.txt"), "tambah ERROR\nkurang WARN\n").unwrap();
+    let dir = tempfile::tempdir().expect("temporary directory");
+    std::fs::write(dir.path().join("library.txt"), "def append\ndef remove\n").unwrap();
+    std::fs::write(dir.path().join("main.txt"), "append ERROR\nremove WARN\n").unwrap();
     dir
 }
 
@@ -107,18 +107,18 @@ async fn full_session_over_stdio() {
     let manager = Arc::new(LspManager::new());
     let mut session = start(&manager, &[], &root).await;
 
-    let result = timeout(TIMEOUT, session.client.initialize()).await.expect("initialize tepat waktu").expect("initialize");
+    let result = timeout(TIMEOUT, session.client.initialize()).await.expect("initialize on time").expect("initialize");
     assert_eq!(result.server_info.unwrap().name, "mock-lsp");
     assert!(session.client.is_ready());
 
-    // Diagnostics proyek diterbitkan setelah `initialized`, juga untuk berkas yang belum dibuka.
-    let utama = root.join("utama.txt");
+    // Project diagnostics are published after `initialized`, also for files that have not been opened.
+    let utama = root.join("main.txt");
     let published = session.notification("textDocument/publishDiagnostics").await;
     assert_eq!(uri_to_path(published["uri"].as_str().unwrap()), utama.to_string_lossy());
     let severities: Vec<i64> = published["diagnostics"].as_array().unwrap().iter().map(|d| d["severity"].as_i64().unwrap()).collect();
     assert_eq!(severities, [1, 2]);
 
-    // Membuka dokumen, lalu go-to-definition ke berkas lain yang hanya ada di disk.
+    // Open the document, then go-to-definition into another file that only exists on disk.
     let uri = path_to_lsp_uri(&utama.to_string_lossy()).unwrap();
     session.client.did_open(&uri, "plaintext", std::fs::read_to_string(&utama).unwrap()).unwrap();
     assert_eq!(session.notification("textDocument/publishDiagnostics").await["version"], 1);
@@ -127,17 +127,17 @@ async fn full_session_over_stdio() {
         work_done_progress_params: Default::default(),
         partial_result_params: Default::default(),
     };
-    let Some(GotoDefinitionResponse::Array(locations)) = session.client.request::<lsp_types::request::GotoDefinition>(params).await.unwrap() else { panic!("lokasi definisi") };
+    let Some(GotoDefinitionResponse::Array(locations)) = session.client.request::<lsp_types::request::GotoDefinition>(params).await.unwrap() else { panic!("definition location") };
     assert_eq!(locations.len(), 1);
-    assert_eq!(uri_to_path(locations[0].uri.as_str()), root.join("pustaka.txt").to_string_lossy());
+    assert_eq!(uri_to_path(locations[0].uri.as_str()), root.join("library.txt").to_string_lossy());
     assert_eq!((locations[0].range.start.line, locations[0].range.start.character), (1, 4));
 
-    // Server menerima jawaban klien atas permintaannya lewat pipa yang sama.
+    // The server receives the client's answers to its requests over the same pipe.
     let state = session.client.request::<MockState>(Value::Null).await.unwrap();
     assert_eq!(state["answers"].as_array().unwrap().len(), 3);
     assert_eq!(state["open"], json!([uri.as_str()]));
 
-    // Penutupan rapi: shutdown + exit, proses keluar dengan kode 0 dan klien tertutup.
+    // Clean shutdown: shutdown + exit, the process exits with code 0 and the client is closed.
     session.client.shutdown(Duration::from_secs(5)).await;
     let info = session.exit().await;
     assert_eq!(info.code, Some(0));
@@ -167,7 +167,7 @@ async fn a_crash_fails_pending_requests() {
     }
     let pending = session.client.request::<Hang>(Value::Null);
     session.client.notify::<Crash>(json!({ "code": 7 }));
-    assert_eq!(timeout(TIMEOUT, pending).await.expect("permintaan gagal saat server mati").unwrap_err(), RpcError::Closed);
+    assert_eq!(timeout(TIMEOUT, pending).await.expect("request fails when the server dies").unwrap_err(), RpcError::Closed);
     let info = session.exit().await;
     assert_eq!(info.code, Some(7));
     assert!(info.stderr_tail.contains("exiting with code 7"));
@@ -180,7 +180,7 @@ async fn a_server_that_exits_on_start_never_answers_initialize() {
     let manager = Arc::new(LspManager::new());
     let mut session = start(&manager, &["--exit-on-start", "3"], &root).await;
     let seen = Arc::new(Mutex::new(None));
-    let result = timeout(TIMEOUT, session.client.initialize()).await.expect("initialize berakhir saat proses keluar");
+    let result = timeout(TIMEOUT, session.client.initialize()).await.expect("initialize ends when the process exits");
     *seen.lock().unwrap() = result.as_ref().err().cloned();
     assert_eq!(seen.lock().unwrap().clone(), Some(RpcError::Closed));
     let info = session.exit().await;

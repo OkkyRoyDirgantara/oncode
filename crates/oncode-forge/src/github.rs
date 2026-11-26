@@ -1,4 +1,4 @@
-//! Penyedia GitHub: github.com, GitHub Enterprise Cloud, dan GitHub Enterprise Server.
+//! GitHub provider: github.com, GitHub Enterprise Cloud, and GitHub Enterprise Server.
 
 use futures_util::stream::{self, StreamExt};
 use serde::{Deserialize, Serialize};
@@ -13,11 +13,11 @@ use crate::model::{
 };
 use crate::provider::ForgeProvider;
 
-/// Batas halaman (masing-masing 100 butir) yang dipindai dalam satu panggilan.
+/// Limit on pages (100 items each) scanned in a single call.
 const MAX_SCAN_PAGES: u32 = 5;
-/// Batas halaman check run yang diambil untuk satu commit.
+/// Limit on check run pages fetched for a single commit.
 const MAX_CHECK_PAGES: u32 = 10;
-/// Jumlah permintaan detail PR yang berjalan bersamaan saat melengkapi hasil pencarian.
+/// Number of PR detail requests running concurrently when completing search results.
 const HYDRATE_CONCURRENCY: usize = 6;
 
 #[derive(Debug)]
@@ -38,10 +38,10 @@ impl GitHubProvider {
         Ok(pull)
     }
 
-    /// PR lewat API pencarian. Hasil pencarian tidak memuat branch dan SHA, jadi tiap
-    /// butir dilengkapi dengan `GET /pulls/{n}`.
+    /// PRs via the search API. Search results do not include the branch and SHA, so each
+    /// item is completed with `GET /pulls/{n}`.
     async fn search_pulls(&self, repo: &RepoRef, qualifier: &str, page: u32) -> Result<Page<PullRequest>> {
-        // Validasi lebih dulu supaya pemilik/nama yang kosong tidak sampai ke query.
+        // Validate first so an empty owner/name never reaches the query.
         repo_path(repo)?;
         let q = format!("repo:{}/{} is:pr is:open {qualifier}", repo.owner, repo.name);
         let query = [
@@ -89,7 +89,7 @@ impl GitHubProvider {
     }
 
     async fn commit_statuses(&self, commit_path: &str) -> Result<Vec<Check>> {
-        // Status gabungan hanya memuat status terbaru untuk tiap konteks.
+        // The combined status only contains the latest status for each context.
         let path = format!("{commit_path}/status");
         let query = [("per_page", SCAN_PER_PAGE.to_string())];
         let (combined, _) = self.api.get::<GhCombinedStatus>(&path, &query).await?;
@@ -137,8 +137,8 @@ impl ForgeProvider for GitHubProvider {
             return Ok(Page::new(repos.into_iter().map(RemoteRepo::from).collect(), next_page_from_link(&headers)));
         }
 
-        // Pindai halaman berukuran 100 sampai cukup banyak yang cocok. Halaman tidak pernah
-        // dipotong di tengah, sehingga `next_page` selalu aman dipakai untuk melanjutkan.
+        // Scan pages of 100 until enough matches are found. A page is never cut in the
+        // middle, so `next_page` is always safe to use for continuing.
         let mut items = Vec::new();
         let mut next = Some(page);
         let mut scanned = 0;
@@ -162,7 +162,7 @@ impl ForgeProvider for GitHubProvider {
         let state = match filter {
             PrFilter::Open => "open",
             PrFilter::All => "all",
-            // Endpoint daftar PR tidak bisa menyaring per penulis atau reviewer.
+            // The PR list endpoint cannot filter by author or reviewer.
             PrFilter::Mine => return self.search_pulls(repo, "author:@me", page).await,
             PrFilter::ReviewRequested => return self.search_pulls(repo, "review-requested:@me", page).await,
         };
@@ -179,8 +179,8 @@ impl ForgeProvider for GitHubProvider {
     }
 
     async fn get_pull_request(&self, repo: &RepoRef, number: u32) -> Result<PullRequestDetail> {
-        // `requested_reviewers` hanya memuat yang belum memberi review, jadi daftar review
-        // diambil juga supaya reviewer yang sudah selesai tetap muncul.
+        // `requested_reviewers` only contains those who have not reviewed yet, so the review list
+        // is fetched too so that reviewers who have finished still show up.
         let reviews_path = format!("{}/pulls/{number}/reviews", repo_path(repo)?);
         let reviews_query = [("per_page", SCAN_PER_PAGE.to_string())];
         let (pull, (reviews, _)) = tokio::try_join!(
@@ -252,7 +252,7 @@ fn repo_path(repo: &RepoRef) -> Result<String> {
     Ok(format!("/repos/{}/{}", encode_segment(&repo.owner), encode_segment(&repo.name)))
 }
 
-/// Memetakan `status` dan `conclusion` check run ke [`CheckState`].
+/// Maps a check run's `status` and `conclusion` to a [`CheckState`].
 fn check_run_state(status: &str, conclusion: Option<&str>) -> CheckState {
     match status {
         "completed" => match conclusion.unwrap_or_default() {
@@ -267,7 +267,7 @@ fn check_run_state(status: &str, conclusion: Option<&str>) -> CheckState {
     }
 }
 
-/// Memetakan `state` commit status ke [`CheckState`].
+/// Maps a commit status `state` to a [`CheckState`].
 fn commit_status_state(state: &str) -> CheckState {
     match state {
         "success" => CheckState::Success,
@@ -372,7 +372,7 @@ struct GhPull {
     updated_at: Option<String>,
     #[serde(default)]
     html_url: Option<String>,
-    // Hanya ada di jawaban detail.
+    // Only present in the detail response.
     #[serde(default)]
     body: Option<String>,
     #[serde(default)]
@@ -402,7 +402,7 @@ impl From<GhPull> for PullRequest {
         } else {
             PrState::Closed
         };
-        // Repositori sumber bisa `null` bila fork-nya sudah dihapus.
+        // The source repository can be `null` if its fork has been deleted.
         let is_cross_repo = match (&pull.head.repo, &pull.base.repo) {
             (Some(head), Some(base)) => head.full_name != base.full_name,
             (None, _) => true,
@@ -410,7 +410,7 @@ impl From<GhPull> for PullRequest {
         };
         let (author, author_avatar) = match pull.user {
             Some(user) => (user.login, non_empty(user.avatar_url)),
-            // Akun yang sudah dihapus.
+            // A deleted account.
             None => ("ghost".to_string(), None),
         };
         PullRequest {

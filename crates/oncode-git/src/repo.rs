@@ -1,4 +1,4 @@
-//! Pegangan ke satu worktree repositori.
+//! A handle to a single repository worktree.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -18,12 +18,12 @@ struct Inner {
     root: PathBuf,
     git_dir: PathBuf,
     common_dir: PathBuf,
-    /// Antrean operasi tulis: hanya satu yang berjalan pada satu waktu.
+    /// Write operation queue: only one runs at a time.
     write_lock: Mutex<()>,
 }
 
 impl Repo {
-    /// Membuka repositori yang memuat `path`.
+    /// Opens the repository that contains `path`.
     pub async fn open(git: Arc<Git>, path: &Path) -> Result<Self> {
         let out = git
             .run(
@@ -47,7 +47,7 @@ impl Repo {
         })
     }
 
-    /// Akar worktree yang memuat `path`, atau `None` bila bukan repositori.
+    /// The root of the worktree that contains `path`, or `None` if it is not a repository.
     pub async fn find_root(git: &Git, path: &Path) -> Option<PathBuf> {
         let out = git.run(path, Cmd::new(["rev-parse", "--path-format=absolute", "--show-toplevel"])).await.ok()?;
         let root = out.trimmed();
@@ -62,12 +62,12 @@ impl Repo {
         &self.inner.root
     }
 
-    /// Direktori git milik worktree ini (berisi HEAD, index, penanda operasi).
+    /// The git directory of this worktree (holds HEAD, index, operation markers).
     pub fn git_dir(&self) -> &Path {
         &self.inner.git_dir
     }
 
-    /// Direktori git bersama (berisi refs dan objects).
+    /// The shared git directory (holds refs and objects).
     pub fn common_dir(&self) -> &Path {
         &self.inner.common_dir
     }
@@ -84,12 +84,12 @@ impl Repo {
         self.inner.git.run_raw(&self.inner.root, cmd).await
     }
 
-    /// Mengambil giliran untuk operasi tulis. Jangan dipanggil bersarang.
+    /// Takes a turn for a write operation. Do not call it nested.
     pub(crate) async fn lock(&self) -> MutexGuard<'_, ()> {
         self.inner.write_lock.lock().await
     }
 
-    /// Menunggu operasi tulis yang sedang berjalan selesai.
+    /// Waits for the write operation currently running to finish.
     pub async fn wait_idle(&self) {
         drop(self.inner.write_lock.lock().await);
     }

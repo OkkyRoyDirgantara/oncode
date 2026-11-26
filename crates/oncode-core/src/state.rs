@@ -1,5 +1,5 @@
-//! State aplikasi: instalasi git, repositori terbuka, workspace per jendela,
-//! operasi yang bisa dibatalkan, dan permintaan yang menunggu jawaban pengguna.
+//! Application state: the git installation, open repositories, per-window workspaces,
+//! cancelable operations, and requests waiting for a user answer.
 
 use std::collections::HashMap;
 use std::future::Future;
@@ -26,14 +26,14 @@ use crate::tokens::FallbackStore;
 
 pub type Shared = Arc<Core>;
 
-/// Variabel lingkungan berisi path absolut ke `oncode-helper`; diperiksa sebelum folder binary aplikasi.
+/// Environment variable holding the absolute path to `oncode-helper`; checked before the app's binary folder.
 pub const HELPER_ENV: &str = "ONCODE_HELPER";
 
-/// Bentuk pembanding root repositori: pemisah `/`, tanpa `/` di akhir, dan di Windows tanpa
-/// membedakan huruf besar-kecil. Git melaporkan root sebagai `C:/proyek`, sedangkan path Windows
-/// ditulis `C:\proyek`; keduanya menunjuk repositori yang sama.
+/// Comparison form of a repository root: `/` separators, no trailing `/`, and on Windows
+/// case-insensitive. Git reports the root as `C:/project`, while Windows paths
+/// are written `C:\project`; both point to the same repository.
 pub fn root_key(root: &str) -> String {
-    // Di Linux/macOS `\` adalah karakter nama yang sah, jadi hanya disamakan dengan `/` di Windows.
+    // On Linux/macOS `\` is a valid name character, so it is only treated as `/` on Windows.
     if cfg!(windows) {
         root.replace('\\', "/").trim_end_matches('/').to_lowercase()
     } else {
@@ -41,7 +41,7 @@ pub fn root_key(root: &str) -> String {
     }
 }
 
-/// Entri registry untuk `root`: dicocokkan persis, atau lewat [`root_key`].
+/// Registry entry for `root`: matched exactly, or via [`root_key`].
 fn find_repo(repos: &HashMap<String, Arc<RepoEntry>>, root: &str) -> Option<(String, Arc<RepoEntry>)> {
     if let Some(entry) = repos.get(root) {
         return Some((root.to_string(), entry.clone()));
@@ -56,19 +56,19 @@ pub struct RepoEntry {
     dirty: AtomicBool,
 }
 
-/// Satu jendela membuka satu folder.
+/// One window opens one folder.
 pub struct Workspace {
     pub root: PathBuf,
     pub trusted: bool,
     watcher: Option<Watcher>,
     pub index: Arc<RwLock<FileIndex>>,
-    /// Akar repositori yang dibuka dari jendela ini.
+    /// Roots of the repositories opened from this window.
     pub repos: Vec<String>,
     pub terminals: Vec<u32>,
     pub servers: Vec<u32>,
 }
 
-/// State aplikasi tanpa UI. Jendela dikenali lewat label string yang ditentukan lapisan UI.
+/// Application state without UI. Windows are identified by a string label chosen by the UI layer.
 pub struct Core {
     runtime: Handle,
     events: EventSink,
@@ -85,22 +85,22 @@ pub struct Core {
     pub terminals: Arc<TerminalManager>,
     pub lsp: Arc<LspManager>,
     pub tokens: Arc<FallbackStore>,
-    /// Login device flow yang sedang menunggu, menurut kode pengguna.
+    /// Device flow logins currently waiting, keyed by user code.
     pub pending_logins: Mutex<HashMap<String, PendingLogin>>,
 }
 
-/// Satu login device flow yang menunggu persetujuan di browser.
+/// One device flow login waiting for approval in the browser.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PendingLogin {
     pub host: oncode_forge::ForgeHost,
     pub device_code: String,
-    /// Client ID yang dipakai saat memulai; polling wajib memakai yang sama.
+    /// The Client ID used when starting; polling must use the same one.
     pub client_id: String,
 }
 
 impl Core {
-    /// `runtime` adalah runtime tokio tempat semua pekerjaan latar dan fungsi `api::*` dijalankan;
-    /// `events` menerima setiap [`CoreEvent`] (dipanggil dari thread mana pun).
+    /// `runtime` is the tokio runtime where all background work and `api::*` functions run;
+    /// `events` receives every [`CoreEvent`] (called from any thread).
     pub fn new(runtime: Handle, dirs: Dirs, tokens: Arc<FallbackStore>, events: EventSink) -> Shared {
         let settings_path = dirs.settings_path();
         Arc::new(Self {
@@ -127,13 +127,13 @@ impl Core {
         self.next_id.fetch_add(1, Ordering::Relaxed)
     }
 
-    // ----- Runtime dan event -----
+    // ----- Runtime and events -----
 
     pub fn runtime(&self) -> &Handle {
         &self.runtime
     }
 
-    /// Menjalankan `fut` di runtime tokio milik core; boleh dipanggil dari thread mana pun.
+    /// Runs `fut` on the core's tokio runtime; may be called from any thread.
     pub fn spawn<F>(&self, fut: F) -> JoinHandle<F::Output>
     where
         F: Future + Send + 'static,
@@ -142,23 +142,23 @@ impl Core {
         self.runtime.spawn(fut)
     }
 
-    /// Menyiarkan event ke UI.
+    /// Broadcasts an event to the UI.
     pub fn emit(&self, event: CoreEvent) {
         (self.events)(event);
     }
 
-    /// Menampilkan pemberitahuan di semua jendela.
+    /// Shows a notification in all windows.
     pub fn notify(&self, kind: NoticeKind, message: impl Into<String>) {
         self.emit(CoreEvent::Notice { kind, message: message.into() });
     }
 
-    /// Dipanggil saat aplikasi keluar: mematikan semua terminal dan language server.
+    /// Called when the app exits: kills all terminals and language servers.
     pub async fn shutdown(&self) {
         self.terminals.kill_all();
         self.lsp.stop_all().await;
     }
 
-    // ----- Pengaturan -----
+    // ----- Settings -----
 
     pub fn settings_path(&self) -> &Path {
         &self.settings_path
@@ -178,7 +178,7 @@ impl Core {
         Ok(())
     }
 
-    /// Pengaturan efektif untuk sebuah jendela (pengaturan proyek hanya berlaku pada folder yang dipercaya).
+    /// Effective settings for a window (project settings only apply to trusted folders).
     pub fn effective_settings(&self, label: &str) -> Settings {
         let user = self.user_settings();
         match self.workspaces.lock().unwrap().get(label) {
@@ -189,7 +189,7 @@ impl Core {
 
     // ----- Git -----
 
-    /// Instalasi git; dicari sekali saat pertama dibutuhkan.
+    /// The git installation; looked up once, the first time it is needed.
     pub async fn git(self: &Arc<Self>) -> AppResult<Arc<Git>> {
         self.git.get_or_init(|| self.init_git()).await.clone()
     }
@@ -209,7 +209,7 @@ impl Core {
         git.set_logger(Arc::new(move |entry| events(CoreEvent::GitOutput { entry })));
 
         if let Some(helper) = helper_path() {
-            // Referensi lemah: `Git` disimpan di dalam core, jadi referensi kuat akan membentuk siklus.
+            // Weak reference: `Git` is stored inside the core, so a strong reference would form a cycle.
             let core = Arc::downgrade(self);
             let prompt: PromptFn = Arc::new(move |prompt: Prompt| {
                 let core = core.upgrade();
@@ -234,14 +234,14 @@ impl Core {
         Ok(git)
     }
 
-    /// Repositori yang sudah dibuka untuk `root`.
+    /// The repository already opened for `root`.
     pub fn repo(&self, root: &str) -> AppResult<Repo> {
         find_repo(&self.repos.lock().unwrap(), root)
             .map(|(_, entry)| entry.repo.clone())
             .ok_or_else(|| AppError::new("notARepo", format!("Repository is not open: {root}")))
     }
 
-    /// Membuka repositori yang memuat `path` untuk jendela `label`. Folder harus dipercaya.
+    /// Opens the repository containing `path` for window `label`. The folder must be trusted.
     pub async fn open_repo(self: &Arc<Self>, label: &str, path: &Path) -> AppResult<Repo> {
         if !self.store.is_trusted(path) {
             return Err(AppError::untrusted());
@@ -284,9 +284,9 @@ impl Core {
         dirs
     }
 
-    /// Menjadwalkan penyiaran snapshot baru untuk `root`. Permintaan beruntun digabung.
+    /// Schedules broadcasting a new snapshot for `root`. Consecutive requests are coalesced.
     pub fn refresh(self: &Arc<Self>, root: &str) {
-        // Disiarkan dengan root seperti terdaftar (dari Git), apa pun bentuk yang diberikan pemanggil.
+        // Broadcast with the root as registered (from Git), whatever form the caller gave.
         let Some((root, entry)) = find_repo(&self.repos.lock().unwrap(), root) else { return };
         entry.dirty.store(true, Ordering::SeqCst);
         if entry.scheduled.swap(true, Ordering::SeqCst) {
@@ -297,7 +297,7 @@ impl Core {
             loop {
                 tokio::time::sleep(Duration::from_millis(60)).await;
                 entry.dirty.store(false, Ordering::SeqCst);
-                // Selama aplikasi sendiri sedang menulis, tunggu sampai selesai agar tidak menyiarkan keadaan antara.
+                // While the app itself is writing, wait until it finishes so no intermediate state is broadcast.
                 entry.repo.wait_idle().await;
                 match entry.repo.snapshot().await {
                     Ok(snapshot) => state.emit(CoreEvent::RepoChanged { root: root.clone(), snapshot }),
@@ -309,7 +309,7 @@ impl Core {
                 }
                 if !entry.dirty.load(Ordering::SeqCst) {
                     entry.scheduled.store(false, Ordering::SeqCst);
-                    // Permintaan yang datang tepat di antara dua pemeriksaan di atas.
+                    // A request that arrives exactly between the two checks above.
                     if entry.dirty.load(Ordering::SeqCst) && !entry.scheduled.swap(true, Ordering::SeqCst) {
                         continue;
                     }
@@ -346,7 +346,7 @@ impl Core {
         Ok(f(ws))
     }
 
-    /// Memastikan `path` berada di dalam folder proyek jendela ini (atau berkas pengaturan aplikasi).
+    /// Ensures `path` is inside this window's project folder (or is an app settings file).
     pub fn resolve(&self, label: &str, path: &str) -> AppResult<PathBuf> {
         let candidate = PathBuf::from(path);
         if candidate == self.settings_path || candidate == self.keybindings_path() {
@@ -361,14 +361,14 @@ impl Core {
         }
     }
 
-    /// Menetapkan folder proyek sebuah jendela: mulai memantau berkas dan membangun indeks.
-    /// Membangun indeks bisa lama; panggil dari thread yang boleh memblokir.
+    /// Sets a window's project folder: starts watching files and building the index.
+    /// Building the index can take a while; call from a thread that may block.
     pub fn set_workspace(self: &Arc<Self>, label: &str, root: PathBuf) {
         self.close_workspace(label);
         let trusted = self.store.is_trusted(&root);
         let index = Arc::new(RwLock::new(FileIndex::build(&root)));
 
-        // Referensi lemah: pemantau disimpan di dalam core, jadi referensi kuat akan membentuk siklus.
+        // Weak reference: the watcher is stored inside the core, so a strong reference would form a cycle.
         let core = Arc::downgrade(self);
         let watch_label = label.to_string();
         let watch_root = root.clone();
@@ -419,8 +419,8 @@ impl Core {
         }
     }
 
-    /// Menghentikan pemantau, terminal, dan language server milik jendela.
-    /// UI memanggilnya saat jendela ditutup.
+    /// Stops the window's watcher, terminals, and language servers.
+    /// The UI calls this when the window is closed.
     pub fn close_workspace(self: &Arc<Self>, label: &str) {
         let Some(ws) = self.workspaces.lock().unwrap().remove(label) else { return };
         for id in &ws.terminals {
@@ -433,7 +433,7 @@ impl Core {
                 lsp.stop(id).await;
             }
         });
-        // Repositori yang tidak lagi dipakai jendela mana pun dilepas.
+        // Repositories no longer used by any window are released.
         let still_used: Vec<String> = self.workspaces.lock().unwrap().values().flat_map(|w| w.repos.clone()).collect();
         let mut repos = self.repos.lock().unwrap();
         for root in ws.repos {
@@ -443,17 +443,17 @@ impl Core {
         }
     }
 
-    /// Label semua jendela yang sedang membuka folder.
+    /// Labels of all windows that currently have a folder open.
     pub fn workspace_labels(&self) -> Vec<String> {
         self.workspaces.lock().unwrap().keys().cloned().collect()
     }
 
-    /// Label jendela yang folder proyeknya memuat `path`.
+    /// Label of the window whose project folder contains `path`.
     fn window_for(&self, path: &Path) -> Option<String> {
         self.workspaces.lock().unwrap().iter().find(|(_, ws)| path.starts_with(&ws.root)).map(|(label, _)| label.clone())
     }
 
-    // ----- Operasi yang bisa dibatalkan -----
+    // ----- Cancelable operations -----
 
     pub fn begin_operation(&self, id: &str) -> CancellationToken {
         let token = CancellationToken::new();
@@ -471,16 +471,16 @@ impl Core {
         }
     }
 
-    // ----- Permintaan ke pengguna -----
+    // ----- Requests to the user -----
 
-    /// Jawaban pengguna atas [`CoreEvent::Prompt`]; `None` berarti dibatalkan.
+    /// The user's answer to a [`CoreEvent::Prompt`]; `None` means canceled.
     pub fn respond_prompt(&self, id: &str, value: Option<String>) {
         if let Some(tx) = self.prompts.lock().unwrap().remove(id) {
             let _ = tx.send(value);
         }
     }
 
-    /// Menyiarkan [`CoreEvent::Prompt`] lalu menunggu jawabannya (paling lama 10 menit).
+    /// Broadcasts a [`CoreEvent::Prompt`] and then waits for its answer (at most 10 minutes).
     pub(crate) async fn ask_user(&self, kind: PromptKind, prompt: String, initial: String, repo: Option<PathBuf>) -> Option<String> {
         let id = uuid::Uuid::new_v4().simple().to_string();
         let (tx, rx) = oneshot::channel();
@@ -493,7 +493,7 @@ impl Core {
         answer
     }
 
-    /// Menjawab permintaan dari git: kredensial akun yang sudah login dipakai otomatis, selain itu tanya pengguna.
+    /// Answers a request from git: the credentials of an already logged-in account are used automatically, otherwise the user is asked.
     pub(crate) async fn answer_prompt(&self, prompt: Prompt) -> Option<String> {
         match prompt {
             Prompt::Askpass { prompt, repo } => {
@@ -506,7 +506,7 @@ impl Core {
         }
     }
 
-    /// Username/password untuk host yang cocok dengan akun GitHub/GitLab yang sudah login.
+    /// Username/password for a host that matches a logged-in GitHub/GitLab account.
     async fn account_credential(&self, prompt: &str) -> Option<String> {
         let wants_username = prompt.starts_with("Username");
         if !wants_username && !prompt.starts_with("Password") {
@@ -520,21 +520,21 @@ impl Core {
         })?;
         let store = self.tokens.clone();
         let id = account.id.clone();
-        // Akses keychain bisa memblokir, jadi dijalankan di thread tersendiri.
+        // Keychain access can block, so it runs on its own thread.
         let tokens = self.runtime.spawn_blocking(move || store.load(&id)).await.ok()?.ok().flatten()?;
         let (username, password) = oncode_forge::git_credentials(account.kind, &tokens.access_token);
         Some(if wants_username { username } else { password })
     }
 }
 
-/// `oncode-helper`: path dari `ONCODE_HELPER` bila diisi, selain itu di samping binary aplikasi
-/// (baik saat pengembangan maupun setelah dibundel).
+/// `oncode-helper`: the path from `ONCODE_HELPER` if set, otherwise next to the app binary
+/// (both during development and after bundling).
 pub(crate) fn helper_path() -> Option<PathBuf> {
     resolve_helper(std::env::var_os(HELPER_ENV).map(PathBuf::from), std::env::current_exe().ok())
 }
 
 fn resolve_helper(explicit: Option<PathBuf>, exe: Option<PathBuf>) -> Option<PathBuf> {
-    // Penimpaan harus path absolut ke berkas yang ada; bila tidak, kembali ke lokasi bawaan.
+    // The override must be an absolute path to an existing file; otherwise fall back to the default location.
     if let Some(path) = explicit.filter(|p| p.is_absolute() && p.is_file()) {
         return Some(path);
     }
@@ -547,7 +547,7 @@ fn host_of(origin: &str) -> String {
     origin.split("://").nth(1).unwrap_or(origin).split('/').next().unwrap_or("").to_string()
 }
 
-/// Mengambil nama host dari prompt git seperti `Password for 'https://user@github.com': `.
+/// Extracts the host name from a git prompt such as `Password for 'https://user@github.com': `.
 pub fn prompt_host(prompt: &str) -> Option<String> {
     let start = prompt.find('\'')? + 1;
     let end = prompt[start..].find('\'')? + start;
@@ -558,7 +558,7 @@ pub fn prompt_host(prompt: &str) -> Option<String> {
     (!host.is_empty()).then(|| host.to_string())
 }
 
-/// Menentukan jenis dialog dari teks prompt git/ssh.
+/// Determines the dialog kind from the text of a git/ssh prompt.
 pub fn classify_prompt(prompt: &str) -> PromptKind {
     let lower = prompt.to_lowercase();
     if lower.contains("(yes/no") {
@@ -579,7 +579,7 @@ mod tests {
     #[test]
     fn extracts_host_from_git_prompts() {
         assert_eq!(prompt_host("Username for 'https://github.com': ").as_deref(), Some("github.com"));
-        assert_eq!(prompt_host("Password for 'https://ana@gitlab.contoh.id:8443': ").as_deref(), Some("gitlab.contoh.id:8443"));
+        assert_eq!(prompt_host("Password for 'https://ana@gitlab.example.com:8443': ").as_deref(), Some("gitlab.example.com:8443"));
         assert_eq!(prompt_host("Password for 'https://x@github.com/a/b.git': ").as_deref(), Some("github.com"));
         assert_eq!(prompt_host("Enter passphrase for key '/home/a/.ssh/id_ed25519': "), None);
     }
@@ -598,7 +598,7 @@ mod tests {
     #[test]
     fn host_of_strips_scheme_and_path() {
         assert_eq!(host_of("https://github.com"), "github.com");
-        assert_eq!(host_of("https://git.contoh.id/sub"), "git.contoh.id");
+        assert_eq!(host_of("https://git.example.com/sub"), "git.example.com");
     }
 
     #[test]
@@ -607,17 +607,17 @@ mod tests {
         let name = if cfg!(windows) { "oncode-helper.exe" } else { "oncode-helper" };
         let beside = dir.path().join(name);
         let exe = dir.path().join("oncode");
-        let elsewhere = dir.path().join("lain").join("helper-uji");
-        std::fs::create_dir(dir.path().join("lain")).unwrap();
+        let elsewhere = dir.path().join("other").join("test-helper");
+        std::fs::create_dir(dir.path().join("other")).unwrap();
 
-        // Belum ada helper di mana pun.
+        // There is no helper anywhere yet.
         assert_eq!(resolve_helper(None, Some(exe.clone())), None);
         assert_eq!(resolve_helper(Some(elsewhere.clone()), Some(exe.clone())), None);
         assert_eq!(resolve_helper(None, None), None);
 
         std::fs::write(&beside, "").unwrap();
         assert_eq!(resolve_helper(None, Some(exe.clone())), Some(beside.clone()));
-        // Penimpaan yang menunjuk berkas yang tidak ada atau path relatif diabaikan.
+        // An override pointing to a nonexistent file or a relative path is ignored.
         assert_eq!(resolve_helper(Some(elsewhere.clone()), Some(exe.clone())), Some(beside.clone()));
         assert_eq!(resolve_helper(Some(PathBuf::from(name)), Some(exe.clone())), Some(beside.clone()));
 
@@ -630,10 +630,10 @@ mod tests {
     async fn spawn_runs_on_the_given_runtime_from_any_thread() {
         let t = TestCore::new();
         let core = t.core.clone();
-        // Seperti thread pemantau berkas: bukan thread milik runtime.
+        // Like the file watcher thread: not a thread owned by the runtime.
         let handle = std::thread::spawn(move || core.spawn(async { 21 * 2 })).join().unwrap();
         assert_eq!(handle.await.unwrap(), 42);
-        // `runtime()` memberi handle yang sama untuk pekerjaan yang memblokir.
+        // `runtime()` gives the same handle for blocking work.
         assert_eq!(t.core.runtime().spawn_blocking(|| 7).await.unwrap(), 7);
     }
 
@@ -641,28 +641,28 @@ mod tests {
     async fn ask_user_emits_a_prompt_and_respond_prompt_resolves_it() {
         let mut t = TestCore::new();
         let core = t.core.clone();
-        let asking = t.core.spawn(async move { core.ask_user(PromptKind::Secret, "Password for 'https://x@contoh.id': ".into(), String::new(), None).await });
+        let asking = t.core.spawn(async move { core.ask_user(PromptKind::Secret, "Password for 'https://x@example.com': ".into(), String::new(), None).await });
         let (window, request) = recv(&mut t.events, |e| match e {
             CoreEvent::Prompt { window, request } => Some((window, request)),
             _ => None,
         })
         .await;
-        assert_eq!(window, None, "tanpa repositori, permintaan tidak ditujukan ke jendela tertentu");
+        assert_eq!(window, None, "without a repository, the request is not targeted at a specific window");
         assert_eq!(request.kind, PromptKind::Secret);
-        assert_eq!(request.prompt, "Password for 'https://x@contoh.id': ");
+        assert_eq!(request.prompt, "Password for 'https://x@example.com': ");
         assert_eq!(request.repo, None);
 
-        // Id yang tidak dikenal diabaikan dan tidak menyelesaikan permintaan yang sedang menunggu.
-        t.core.respond_prompt("tidak-ada", Some("salah".into()));
-        t.core.respond_prompt(&request.id, Some("rahasia".into()));
-        assert_eq!(asking.await.unwrap().as_deref(), Some("rahasia"));
+        // An unknown id is ignored and does not resolve the pending request.
+        t.core.respond_prompt("does-not-exist", Some("wrong".into()));
+        t.core.respond_prompt(&request.id, Some("secret".into()));
+        assert_eq!(asking.await.unwrap().as_deref(), Some("secret"));
         assert!(t.core.prompts.lock().unwrap().is_empty());
     }
 
     #[tokio::test]
     async fn prompts_target_the_window_that_owns_the_repository_and_can_be_cancelled() {
         let mut t = TestCore::new();
-        let project = t.project("proyek");
+        let project = t.project("project");
         t.core.set_workspace("w7", project.clone());
 
         let core = t.core.clone();
@@ -678,7 +678,7 @@ mod tests {
         assert_eq!(request.initial, "Merge branch 'a'");
         assert_eq!(request.repo.as_deref(), Some(project.join("sub").to_string_lossy().as_ref()));
 
-        // Pengguna menutup dialog.
+        // The user closes the dialog.
         t.core.respond_prompt(&request.id, None);
         assert_eq!(asking.await.unwrap(), None);
     }
@@ -700,48 +700,48 @@ mod tests {
         let ask = |text: &str| t.core.answer_prompt(Prompt::Askpass { prompt: text.into(), repo: None });
         assert_eq!(ask("Username for 'https://github.com': ").await.as_deref(), Some("x-access-token"));
         assert_eq!(ask("Password for 'https://x-access-token@GitHub.com': ").await.as_deref(), Some("tok-123"));
-        assert!(t.events.try_recv().is_err(), "tidak ada dialog untuk host yang akunnya sudah login");
+        assert!(t.events.try_recv().is_err(), "no dialog for a host whose account is already logged in");
 
-        // Host lain tetap ditanyakan ke pengguna.
+        // Other hosts are still asked of the user.
         let core = t.core.clone();
-        let asking = t.core.spawn(async move { core.answer_prompt(Prompt::Askpass { prompt: "Username for 'https://git.contoh.id': ".into(), repo: None }).await });
+        let asking = t.core.spawn(async move { core.answer_prompt(Prompt::Askpass { prompt: "Username for 'https://git.example.com': ".into(), repo: None }).await });
         let request = recv(&mut t.events, |e| match e {
             CoreEvent::Prompt { request, .. } => Some(request),
             _ => None,
         })
         .await;
         assert_eq!(request.kind, PromptKind::Text);
-        t.core.respond_prompt(&request.id, Some("budi".into()));
-        assert_eq!(asking.await.unwrap().as_deref(), Some("budi"));
+        t.core.respond_prompt(&request.id, Some("bob".into()));
+        assert_eq!(asking.await.unwrap().as_deref(), Some("bob"));
     }
 
-    /// Jalur lengkap git → `oncode-helper` → core → UI, dengan helper ditemukan lewat `ONCODE_HELPER`.
-    /// Jalankan dengan `cargo build -p oncode-helper && cargo test -p oncode-core -- --ignored`.
+    /// The full path git → `oncode-helper` → core → UI, with the helper found via `ONCODE_HELPER`.
+    /// Run with `cargo build -p oncode-helper && cargo test -p oncode-core -- --ignored`.
     #[tokio::test]
-    #[ignore = "butuh binary oncode-helper: cargo build -p oncode-helper"]
+    #[ignore = "needs the oncode-helper binary: cargo build -p oncode-helper"]
     async fn git_credential_prompt_reaches_the_ui_through_the_helper() {
         use wiremock::{matchers::any, Mock, MockServer, ResponseTemplate};
 
-        let helper = crate::testing::built_helper().expect("oncode-helper belum dibangun: cargo build -p oncode-helper");
+        let helper = crate::testing::built_helper().expect("oncode-helper has not been built: cargo build -p oncode-helper");
         std::env::set_var(HELPER_ENV, &helper);
-        // Server HTTP yang selalu meminta kredensial.
+        // An HTTP server that always asks for credentials.
         let server = MockServer::start().await;
-        Mock::given(any()).respond_with(ResponseTemplate::new(401).insert_header("WWW-Authenticate", "Basic realm=\"uji\"")).mount(&server).await;
+        Mock::given(any()).respond_with(ResponseTemplate::new(401).insert_header("WWW-Authenticate", "Basic realm=\"test\"")).mount(&server).await;
 
         let mut t = TestCore::new();
-        let project = t.trusted_repo("proyek");
-        git(&project, &["remote", "add", "origin", &format!("{}/tim/proyek.git", server.uri())]);
+        let project = t.trusted_repo("project");
+        git(&project, &["remote", "add", "origin", &format!("{}/team/project.git", server.uri())]);
         t.core.set_workspace("w1", project.clone());
         let repo = t.core.open_repo("w1", &project).await.unwrap();
 
         let fetching = t.core.spawn(async move { repo.fetch(Some("origin"), None, None).await });
         let next_prompt = |e| match e {
             CoreEvent::Prompt { window, request } => Some((window, request)),
-            CoreEvent::Notice { message, .. } => panic!("helper tidak aktif: {message}"),
+            CoreEvent::Notice { message, .. } => panic!("helper is not active: {message}"),
             _ => None,
         };
         let (window, request) = recv(&mut t.events, next_prompt).await;
-        assert_eq!(window.as_deref(), Some("w1"), "permintaan ditujukan ke jendela pemilik repositori");
+        assert_eq!(window.as_deref(), Some("w1"), "the request is targeted at the window that owns the repository");
         assert_eq!(request.kind, PromptKind::Text);
         assert!(request.prompt.starts_with("Username for 'http://127.0.0.1"), "prompt: {}", request.prompt);
         t.core.respond_prompt(&request.id, Some("ana".into()));
@@ -749,7 +749,7 @@ mod tests {
         let (_, request) = recv(&mut t.events, next_prompt).await;
         assert_eq!(request.kind, PromptKind::Secret);
         assert!(request.prompt.starts_with("Password for 'http://ana@127.0.0.1"), "prompt: {}", request.prompt);
-        // Pengguna membatalkan: git berhenti dengan galat, bukan menunggu selamanya.
+        // The user cancels: git stops with an error instead of waiting forever.
         t.core.respond_prompt(&request.id, None);
         assert!(fetching.await.unwrap().is_err());
     }
@@ -758,15 +758,15 @@ mod tests {
     async fn untrusted_folder_is_refused_by_open_repo() {
         isolate_git();
         let t = TestCore::new();
-        let project = t.project("proyek");
+        let project = t.project("project");
         git(&project, &["init", "-q", "-b", "main"]);
         t.core.set_workspace("w1", project.clone());
 
         assert_eq!(t.core.open_repo("w1", &project).await.err().map(|e| e.code).as_deref(), Some("untrusted"));
-        assert!(t.core.repo(&project.to_string_lossy()).is_err(), "repositori tidak boleh terdaftar");
+        assert!(t.core.repo(&project.to_string_lossy()).is_err(), "the repository must not be registered");
 
         t.core.store.set_trusted(&project.to_string_lossy(), true);
-        let repo = t.core.open_repo("w1", &project).await.expect("folder sudah dipercaya");
+        let repo = t.core.open_repo("w1", &project).await.expect("the folder is now trusted");
         assert_eq!(t.core.repo(&repo.root_string()).unwrap().root(), repo.root());
         assert_eq!(t.core.with_workspace("w1", |ws| ws.repos.clone()).unwrap(), vec![repo.root_string()]);
     }
@@ -775,12 +775,12 @@ mod tests {
     async fn refresh_broadcasts_a_snapshot_and_coalesces_bursts() {
         isolate_git();
         let mut t = TestCore::new();
-        let project = t.project("proyek");
+        let project = t.project("project");
         git(&project, &["init", "-q", "-b", "main"]);
         t.core.store.set_trusted(&project.to_string_lossy(), true);
-        // Tanpa workspace: tidak ada pemantau berkas yang ikut memicu refresh.
+        // Without a workspace: no file watcher helps trigger a refresh.
         let root = t.core.open_repo("w1", &project).await.unwrap().root_string();
-        std::fs::write(project.join("baru.txt"), "isi\n").unwrap();
+        std::fs::write(project.join("new.txt"), "content\n").unwrap();
 
         for _ in 0..20 {
             t.core.refresh(&root);
@@ -791,8 +791,8 @@ mod tests {
         })
         .await;
         assert_eq!(event_root, root);
-        assert_eq!(snapshot.untracked, vec!["baru.txt".to_string()]);
-        // Dua puluh permintaan beruntun menghasilkan satu siaran, bukan dua puluh.
+        assert_eq!(snapshot.untracked, vec!["new.txt".to_string()]);
+        // Twenty consecutive requests produce one broadcast, not twenty.
         tokio::time::sleep(Duration::from_millis(300)).await;
         let mut extra = 0;
         while let Ok(event) = t.events.try_recv() {
@@ -800,15 +800,15 @@ mod tests {
         }
         assert_eq!(extra, 0);
 
-        // Repositori yang tidak dibuka diabaikan tanpa galat.
-        t.core.refresh("/tidak/ada");
+        // A repository that is not open is ignored without an error.
+        t.core.refresh("/does/not/exist");
     }
 
     #[tokio::test]
     async fn closing_the_last_window_releases_its_repositories() {
         isolate_git();
         let t = TestCore::new();
-        let project = t.project("proyek");
+        let project = t.project("project");
         git(&project, &["init", "-q", "-b", "main"]);
         t.core.store.set_trusted(&project.to_string_lossy(), true);
         t.core.set_workspace("w1", project.clone());
@@ -818,7 +818,7 @@ mod tests {
         assert!(t.core.workspace_trusted("w1"));
 
         t.core.close_workspace("w1");
-        assert!(t.core.repo(&root).is_ok(), "masih dipakai jendela w2");
+        assert!(t.core.repo(&root).is_ok(), "still used by window w2");
         assert_eq!(t.core.workspace_labels(), vec!["w2".to_string()]);
         t.core.close_workspace("w2");
         assert_eq!(t.core.repo(&root).err().map(|e| e.code).as_deref(), Some("notARepo"));
@@ -828,26 +828,26 @@ mod tests {
     #[tokio::test]
     async fn resolve_confines_paths_to_the_project_folder() {
         let t = TestCore::new();
-        let project = t.project("proyek");
+        let project = t.project("project");
         assert_eq!(t.core.resolve("w1", "a.txt").unwrap_err().code, "noWorkspace");
         t.core.set_workspace("w1", project.clone());
 
         assert_eq!(t.core.resolve("w1", "src/a.txt").unwrap(), project.join("src/a.txt"));
         assert_eq!(t.core.resolve("w1", &project.join("b.txt").to_string_lossy()).unwrap(), project.join("b.txt"));
-        assert_eq!(t.core.resolve("w1", "../luar.txt").unwrap_err().code, "invalidPath");
+        assert_eq!(t.core.resolve("w1", "../outside.txt").unwrap_err().code, "invalidPath");
         assert_eq!(t.core.resolve("w1", "/etc/passwd").unwrap_err().code, "invalidPath");
-        // Berkas pengaturan aplikasi boleh dibuka dari jendela mana pun.
+        // The app settings files may be opened from any window.
         let settings = t.core.settings_path().to_string_lossy().into_owned();
         assert_eq!(t.core.resolve("w1", &settings).unwrap(), t.core.settings_path());
         let keys = t.core.keybindings_path();
-        assert_eq!(t.core.resolve("tanpa-folder", &keys.to_string_lossy()).unwrap(), keys);
+        assert_eq!(t.core.resolve("no-folder", &keys.to_string_lossy()).unwrap(), keys);
     }
 
     #[tokio::test]
     async fn operations_can_be_cancelled_by_id() {
         let t = TestCore::new();
         let token = t.core.begin_operation("op-1");
-        t.core.cancel_operation("lain");
+        t.core.cancel_operation("other");
         assert!(!token.is_cancelled());
         t.core.cancel_operation("op-1");
         assert!(token.is_cancelled());
@@ -858,12 +858,12 @@ mod tests {
     #[tokio::test]
     async fn project_settings_apply_only_to_trusted_folders() {
         let t = TestCore::new();
-        let project = t.project("proyek");
+        let project = t.project("project");
         std::fs::create_dir_all(project.join(".oncode")).unwrap();
         std::fs::write(project.join(".oncode/settings.json"), r#"{ "editor": { "tabSize": 2 } }"#).unwrap();
 
         t.core.set_workspace("w1", project.clone());
-        assert_eq!(t.core.effective_settings("w1").editor.tab_size, 4, "mode terbatas mengabaikan pengaturan proyek");
+        assert_eq!(t.core.effective_settings("w1").editor.tab_size, 4, "restricted mode ignores project settings");
         t.core.store.set_trusted(&project.to_string_lossy(), true);
         t.core.set_workspace("w1", project.clone());
         assert_eq!(t.core.effective_settings("w1").editor.tab_size, 2);

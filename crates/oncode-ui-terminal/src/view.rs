@@ -1,9 +1,9 @@
-//! Tampilan satu sesi terminal (PTY + emulator). Sesi bisa tampil di panel (lihat `panel.rs`)
-//! atau sebagai tab di area editor.
+//! The view of a single terminal session (PTY + emulator). A session can be shown in the panel (see
+//! `panel.rs`) or as a tab in the editor area.
 //!
-//! Layar digambar per sel di sebuah `canvas` (lihat `grid.rs` dan `paint.rs`): latar setinggi
-//! baris penuh, huruf ditaruh di kolomnya masing-masing, dan karakter garis/blok/powerline
-//! digambar sebagai bentuk. Ukuran grid dihitung dari lebar dan tinggi area yang tersedia.
+//! The screen is drawn per cell in a `canvas` (see `grid.rs` and `paint.rs`): backgrounds at the
+//! full line height, letters placed in their own columns, and line/block/powerline characters
+//! drawn as shapes. The grid size is computed from the width and height of the available area.
 
 use std::cell::Cell as StdCell;
 use std::collections::HashSet;
@@ -39,27 +39,27 @@ use crate::{font, grid};
 
 const IS_MAC: bool = cfg!(target_os = "macos");
 
-/// Konteks keymap sesi terminal; dipakai juga oleh binding di `init` (lihat `lib.rs`).
+/// The keymap context of a terminal session; also used by the binding in `init` (see `lib.rs`).
 pub(crate) const KEY_CONTEXT: &str = "Terminal";
 
 type Metrics = CellMetrics;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SessionEvent {
-    /// Proses shell berakhir.
+    /// The shell process ended.
     Exited,
-    /// Judul (OSC 0/2) berubah.
+    /// The title (OSC 0/2) changed.
     TitleChanged,
-    /// Terminal ini menerima fokus keyboard.
+    /// This terminal received keyboard focus.
     Focused,
 }
 
-/// Satu terminal: proses shell di PTY dan emulator yang menampilkan keluarannya.
+/// A single terminal: a shell process on a PTY and the emulator that displays its output.
 pub struct TerminalSession {
     env: Env,
     session_id: SessionId,
     pub(crate) emulator: Emulator,
-    /// Id PTY dari `oncode-core`; `None` selama proses dimulai.
+    /// The PTY id from `oncode-core`; `None` while the process is starting.
     id: Option<u32>,
     title: SharedString,
     exited: Option<Option<i32>>,
@@ -67,19 +67,19 @@ pub struct TerminalSession {
     input: Option<mpsc::UnboundedSender<Vec<u8>>>,
     focus_handle: FocusHandle,
     metrics: Option<Metrics>,
-    /// Ukuran area terakhir yang diukur, untuk menghitung ulang grid.
+    /// The last measured size of the area, for recomputing the grid.
     bounds: Rc<StdCell<Option<Bounds<Pixels>>>>,
-    /// Ukuran sel saat grid terakhir disesuaikan; font atau tinggi baris yang berubah juga
-    /// mengubah jumlah baris dan kolom, walau ukuran area tetap.
+    /// The cell size when the grid was last fitted; a changed font or line height also
+    /// changes the number of lines and columns, even if the area size stays the same.
     fitted: Rc<StdCell<Option<Metrics>>>,
-    /// Sisa gulir roda (piksel) yang belum genap satu baris.
+    /// The wheel scroll remainder (pixels) that does not yet add up to a whole line.
     scroll_remainder: f32,
     selecting: bool,
-    /// Ibu jari scrollbar sedang diseret.
+    /// The scrollbar thumb is being dragged.
     scrollbar_drag: bool,
     font: Font,
     font_size: Pixels,
-    /// Tinggi baris sebagai kelipatan ukuran font.
+    /// Line height as a multiple of the font size.
     line_height: f32,
     _reader: Task<()>,
     _subscriptions: Vec<Subscription>,
@@ -93,7 +93,7 @@ impl Focusable for TerminalSession {
     }
 }
 
-/// Keybinding aplikasi yang tetap berlaku saat terminal fokus (lihat `keys::COMMANDS_TO_SKIP_SHELL`).
+/// Application keybindings that stay in effect while the terminal is focused (see `keys::COMMANDS_TO_SKIP_SHELL`).
 fn app_bindings(window: &Window, cx: &App) -> HashSet<String> {
     keys::COMMANDS_TO_SKIP_SHELL
         .iter()
@@ -110,7 +110,7 @@ fn press_of(event: &KeyDownEvent) -> KeyPress {
 impl TerminalSession {
     pub fn new(env: Env, session_id: SessionId, number: usize, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let focus_handle = cx.focus_handle();
-        // Tombol yang bukan milik aplikasi diteruskan ke shell, termasuk Ctrl+W, Ctrl+S, dan sejenisnya.
+        // Keys that do not belong to the application are forwarded to the shell, including Ctrl+W, Ctrl+S, and the like.
         oncode_ui::commands::capture_keys(
             &focus_handle,
             |press, window, cx| keys::classify_key(press, IS_MAC, &app_bindings(window, cx)) != KeyAction::App,
@@ -144,7 +144,7 @@ impl TerminalSession {
         if let Some(workbench) = this.env.workbench.upgrade() {
             this._subscriptions.push(cx.subscribe_in(&workbench, window, |this, workbench, event: &oncode_ui::WorkbenchEvent, _, cx| {
                 if matches!(event, oncode_ui::WorkbenchEvent::SettingsChanged) {
-                    // Aturan yang sama dengan saat terminal dibuat (font yang tidak terpasang dilewati).
+                    // The same rules as when the terminal was created (a font that is not installed is skipped).
                     let (font, font_size, line_height) = terminal_font(workbench.read(cx).settings(), cx);
                     if (&font, font_size, line_height) != (&this.font, this.font_size, this.line_height) {
                         (this.font, this.font_size, this.line_height) = (font, font_size, line_height);
@@ -162,23 +162,23 @@ impl TerminalSession {
         &self.title
     }
 
-    /// Lebar sel dan tinggi baris saat ini; `None` sebelum terminal pertama kali digambar.
+    /// The current cell width and line height; `None` before the terminal is first drawn.
     pub fn cell_size(&self) -> Option<(Pixels, Pixels)> {
         self.metrics.map(|metrics| (metrics.cell_width, metrics.line_height))
     }
 
-    /// Jumlah kolom dan baris grid.
+    /// The number of grid columns and lines.
     pub fn grid_size(&self) -> (usize, usize) {
         let size = self.emulator.size();
         (size.cols, size.rows)
     }
 
-    /// Keluarga font yang dipakai (sudah dipastikan terpasang, atau font monospace tema).
+    /// The font family in use (confirmed to be installed, or the theme's monospace font).
     pub fn font_family(&self) -> &SharedString {
         &self.font.family
     }
 
-    /// Id sesi ini (lihat [`SessionId`]); bukan id PTY.
+    /// This session's id (see [`SessionId`]); not the PTY id.
     pub fn session_id(&self) -> SessionId {
         self.session_id
     }
@@ -195,22 +195,22 @@ impl TerminalSession {
         self.exited.is_some()
     }
 
-    /// Isi buffer (riwayat dan layar) sebagai teks; untuk uji dan "salin semua".
+    /// The buffer contents (history and screen) as text; for tests and "copy all".
     pub fn text(&self) -> String {
         self.emulator.text()
     }
 
-    /// Jumlah baris yang sedang digulir ke atas (0 = di bawah, menampilkan keluaran terbaru).
+    /// The number of lines currently scrolled up (0 = at the bottom, showing the newest output).
     pub fn display_offset(&self) -> usize {
         self.emulator.display_offset()
     }
 
-    /// Jumlah baris riwayat di atas layar.
+    /// The number of history lines above the screen.
     pub fn history_size(&self) -> usize {
         self.emulator.history_size()
     }
 
-    /// Memulai proses shell (juga untuk "Restart" setelah proses berakhir).
+    /// Starts the shell process (also for "Restart" after the process has ended).
     pub fn start(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.exited = None;
         self.error = None;
@@ -225,7 +225,7 @@ impl TerminalSession {
                 let _ = output_tx.send(event);
             });
             let id = term::term_spawn(&core, &label, size.cols as u16, size.rows as u16, callback).await?;
-            // Penulis tunggal per terminal agar urutan masukan terjaga.
+            // A single writer per terminal so the input order is preserved.
             let writer_core = core.clone();
             tokio::spawn(async move {
                 while let Some(bytes) = input_rx.recv().await {
@@ -241,9 +241,9 @@ impl TerminalSession {
                 Ok(id) => {
                     if this.update(cx, |this, cx| {
                         this.id = Some(id);
-                        // Spawn berjalan async: tata letak pertama bisa selesai sebelum `id` ada, sehingga
-                        // `fit` mengubah emulator tanpa memberi tahu PTY. Selaraskan sekarang, kalau tidak
-                        // program di dalamnya (mis. Claude CLI) menggambar untuk 80x24 sampai ada resize.
+                        // Spawn runs async: the first layout can finish before `id` exists, so
+                        // `fit` resizes the emulator without telling the PTY. Sync it now, otherwise
+                        // the program inside (e.g. Claude CLI) draws for 80x24 until there is a resize.
                         let current = this.emulator.size();
                         if current != size {
                             this.resize_pty(id, current, cx);
@@ -263,7 +263,7 @@ impl TerminalSession {
                     return;
                 }
             }
-            // Keluaran dikumpulkan per gelombang agar keluaran deras tidak menggambar ulang per potongan.
+            // Output is collected in waves so heavy output does not redraw per chunk.
             while let Some(first) = output_rx.recv().await {
                 let mut batch = vec![first];
                 while let Ok(more) = output_rx.try_recv() {
@@ -293,7 +293,7 @@ impl TerminalSession {
         }
         for event in self.emulator.take_events() {
             match event {
-                // Jawaban emulator untuk program (mis. laporan posisi kursor).
+                // The emulator's reply to the program (e.g. a cursor position report).
                 TermEmuEvent::PtyWrite(text) => self.write(text.into_bytes()),
                 TermEmuEvent::Title(title) if !title.trim().is_empty() => {
                     self.title = title.into();
@@ -305,7 +305,7 @@ impl TerminalSession {
         cx.notify();
     }
 
-    /// Mengirim byte ke shell.
+    /// Sends bytes to the shell.
     pub fn write(&mut self, bytes: Vec<u8>) {
         if self.exited.is_some() {
             return;
@@ -315,7 +315,7 @@ impl TerminalSession {
         }
     }
 
-    /// Mengirim teks seperti diketik (dipakai command "Run Selected Text" dan uji).
+    /// Sends text as if typed (used by the "Run Selected Text" command and tests).
     pub fn send_text(&mut self, text: &str, cx: &mut Context<Self>) {
         self.emulator.set_display_offset(0);
         self.write(text.as_bytes().to_vec());
@@ -367,11 +367,11 @@ impl TerminalSession {
         .detach();
     }
 
-    // ----- Masukan -----
+    // ----- Input -----
 
     fn on_key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         let press = press_of(event);
-        // Gulir riwayat dengan keyboard (di program layar penuh tombolnya milik program itu).
+        // Scroll the history with the keyboard (in a full-screen program those keys belong to that program).
         if !self.emulator.mode().contains(TermMode::ALT_SCREEN) {
             if let Some(key) = keys::scroll_key(&press) {
                 self.emulator.scroll(match key {
@@ -398,7 +398,7 @@ impl TerminalSession {
                 let mode = self.emulator.mode();
                 let modes = KeyModes { app_cursor: mode.contains(TermMode::APP_CURSOR), line_feed_new_line: mode.contains(TermMode::LINE_FEED_NEW_LINE) };
                 let bytes = keys::key_to_bytes(&press, modes, IS_MAC).or_else(|| {
-                    // Teks biasa (huruf, angka, simbol, Shift+huruf).
+                    // Ordinary text (letters, digits, symbols, Shift+letter).
                     let text = event.keystroke.key_char.clone()?;
                     (!press.control && !press.platform).then(|| text.into_bytes())
                 });
@@ -412,7 +412,7 @@ impl TerminalSession {
         cx.stop_propagation();
     }
 
-    /// Titik grid di bawah posisi jendela, beserta sisi sel (untuk seleksi).
+    /// The grid point under a window position, along with the cell side (for selection).
     fn point_at(&self, position: gpui_kit::Point<Pixels>) -> Option<(GridPoint, Side)> {
         let bounds = self.bounds.get()?;
         let metrics = self.metrics?;
@@ -429,7 +429,7 @@ impl TerminalSession {
     fn on_mouse_down(&mut self, event: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         self.focus_handle.focus(window, cx);
         let Some((point, side)) = self.point_at(event.position) else { return };
-        // Ctrl/Cmd+klik membuka tautan web.
+        // Ctrl/Cmd+click opens a web link.
         let open_link = if IS_MAC { event.modifiers.platform } else { event.modifiers.control };
         if open_link {
             if let Some(link) = self.emulator.link_at(point) {
@@ -468,13 +468,13 @@ impl TerminalSession {
         }
     }
 
-    /// Sel layar (kolom, baris) di bawah posisi jendela, berbasis nol.
+    /// The screen cell (column, line) under a window position, zero-based.
     fn screen_cell(&self, position: gpui_kit::Point<Pixels>) -> Option<(usize, usize)> {
         let (point, _) = self.point_at(position)?;
         Some((point.column.0, (point.line.0 + self.emulator.display_offset() as i32).max(0) as usize))
     }
 
-    /// Menggulir riwayat ke posisi pointer di lintasan scrollbar.
+    /// Scrolls the history to the pointer position on the scrollbar track.
     fn scroll_to_pointer(&mut self, y: Pixels, cx: &mut Context<Self>) {
         let Some(bounds) = self.bounds.get() else { return };
         let fraction = f32::from(y - bounds.origin.y) / f32::from(bounds.size.height).max(1.0);
@@ -488,7 +488,7 @@ impl TerminalSession {
     fn on_scroll(&mut self, event: &ScrollEvent, _: &mut Window, cx: &mut Context<Self>) {
         let Some(metrics) = self.metrics else { return };
         let pixels = event.delta.pixel_delta(metrics.line_height);
-        // Sebagian platform mengubah Shift+roda menjadi gulir horizontal.
+        // Some platforms turn Shift+wheel into a horizontal scroll.
         let delta = if event.modifiers.shift && pixels.y == px(0.) { pixels.x } else { pixels.y };
         let total = self.scroll_remainder + f32::from(delta);
         let lines = (total / f32::from(metrics.line_height)).trunc();
@@ -505,7 +505,7 @@ impl TerminalSession {
         );
         match target {
             WheelTarget::Report => {
-                // Program yang menangkap mouse (vim `mouse=a`, htop, lazygit) menerima rodanya sendiri.
+                // A program that captures the mouse (vim `mouse=a`, htop, lazygit) receives the wheel itself.
                 let Some((column, row)) = self.screen_cell(event.position) else { return };
                 let encoding = if mode.contains(TermMode::SGR_MOUSE) {
                     MouseEncoding::Sgr
@@ -523,7 +523,7 @@ impl TerminalSession {
                 }
             }
             WheelTarget::Arrows => {
-                // Program layar penuh (less, man) tanpa laporan mouse: roda menjadi panah atas/bawah.
+                // A full-screen program (less, man) without mouse reporting: the wheel becomes up/down arrows.
                 let arrow: &[u8] = if lines > 0. { if mode.contains(TermMode::APP_CURSOR) { b"\x1bOA" } else { b"\x1b[A" } } else if mode.contains(TermMode::APP_CURSOR) { b"\x1bOB" } else { b"\x1b[B" };
                 for _ in 0..lines.abs() as usize {
                     self.write(arrow.to_vec());
@@ -534,7 +534,7 @@ impl TerminalSession {
         cx.notify();
     }
 
-    // ----- Tata letak -----
+    // ----- Layout -----
 
     fn measure(&mut self, window: &mut Window) -> Metrics {
         let scale = window.scale_factor();
@@ -549,7 +549,7 @@ impl TerminalSession {
         metrics
     }
 
-    /// Menyesuaikan grid dengan ukuran area; dipanggil setelah tata letak.
+    /// Fits the grid to the area size; called after layout.
     fn fit(&mut self, bounds: Bounds<Pixels>, cx: &mut Context<Self>) {
         let Some(metrics) = self.metrics else { return };
         let cols = ((bounds.size.width / metrics.cell_width) as usize).max(2);
@@ -565,7 +565,7 @@ impl TerminalSession {
         cx.notify();
     }
 
-    /// Memberi tahu PTY (dan program di dalamnya lewat SIGWINCH/ConPTY) ukuran grid yang baru.
+    /// Tells the PTY (and the program inside via SIGWINCH/ConPTY) the new grid size.
     fn resize_pty(&self, id: u32, size: GridSize, cx: &mut Context<Self>) {
         let core = self.env.core.clone();
         let (cols, rows) = (size.cols as u16, size.rows as u16);
@@ -624,8 +624,8 @@ impl Render for TerminalSession {
                     .size_full()
                     .relative()
                     .child(
-                        // Mengukur area teks setelah tata letak (perubahan ukuran menghitung ulang
-                        // grid), lalu menggambar isi layar per sel.
+                        // Measures the text area after layout (a size change recomputes the
+                        // grid), then draws the screen contents per cell.
                         canvas(
                             move |bounds, window, cx| {
                                 let changed = bounds_cell.get().map(|b| b.size) != Some(bounds.size) || fitted.get() != Some(metrics);
@@ -645,7 +645,7 @@ impl Render for TerminalSession {
                     ),
             )
             .when(history > 0, |el| {
-                // Scrollbar riwayat: klik untuk melompat, seret ibu jarinya untuk menggulir.
+                // The history scrollbar: click to jump, drag its thumb to scroll.
                 let (top, height) = mouse::scrollbar_thumb(rows, history, offset);
                 el.child(
                     div()
@@ -705,8 +705,8 @@ impl Render for TerminalSession {
     }
 }
 
-/// Font, ukuran, dan tinggi baris terminal menurut pengaturan. Font yang tidak terpasang dilewati;
-/// bila tidak ada yang terpasang, font monospace tema dipakai.
+/// The terminal's font, size, and line height according to the settings. A font that is not installed is
+/// skipped; if none is installed, the theme's monospace font is used.
 fn terminal_font(settings: &Settings, cx: &App) -> (Font, Pixels, f32) {
     let installed = cx.text_system().all_font_names();
     let family = font::terminal_family(settings, &installed).map(SharedString::from).unwrap_or_else(|| cx.theme().mono_font_family.clone());

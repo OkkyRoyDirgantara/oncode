@@ -1,4 +1,4 @@
-//! Riwayat commit: format `git log`, parser, dan pembaca bertahap untuk graph.
+//! Commit history: `git log` format, parser, and incremental reader for the graph.
 
 use std::process::Stdio;
 
@@ -12,7 +12,7 @@ use crate::repo::Repo;
 use crate::runner::{check_path, check_ref, Cmd};
 
 const FIELD: char = '\x1f';
-/// Hash, induk, penulis, committer, ref, subjek; dipisah 0x1f.
+/// Hash, parents, author, committer, refs, subject; separated by 0x1f.
 pub(crate) const FORMAT: &str = "--format=%H%x1f%P%x1f%an%x1f%ae%x1f%at%x1f%cn%x1f%ce%x1f%ct%x1f%D%x1f%s";
 
 fn parse_refs(decoration: &str) -> Vec<RefLabel> {
@@ -43,7 +43,7 @@ fn parse_refs(decoration: &str) -> Vec<RefLabel> {
     labels
 }
 
-/// Mengurai satu rekaman dengan format [`FORMAT`].
+/// Parses a single record in the [`FORMAT`] format.
 pub fn parse_commit(record: &str) -> Option<Commit> {
     let record = record.trim_start_matches('\n');
     let mut fields = record.splitn(10, FIELD);
@@ -71,8 +71,8 @@ pub(crate) fn parse_commits(raw: &[u8]) -> Vec<Commit> {
     raw.split(|b| *b == 0).filter_map(|r| parse_commit(&String::from_utf8_lossy(r))).collect()
 }
 
-/// Proses `git log` yang dibaca per halaman. Karena pipa menahan proses saat tidak
-/// dibaca, commit yang tidak pernah dilihat tidak menimbulkan biaya.
+/// A `git log` process read page by page. Because the pipe blocks the process when it is not
+/// being read, commits that are never viewed incur no cost.
 pub struct LogStream {
     child: Child,
     reader: BufReader<ChildStdout>,
@@ -81,7 +81,7 @@ pub struct LogStream {
 }
 
 impl LogStream {
-    /// Membaca hingga `count` commit berikutnya beserta posisi graph-nya.
+    /// Reads up to the next `count` commits along with their graph positions.
     pub async fn next_page(&mut self, count: usize) -> Result<LogPage> {
         let mut rows = Vec::with_capacity(count);
         let mut buf = Vec::new();
@@ -141,7 +141,7 @@ impl Repo {
         Ok(args)
     }
 
-    /// Memulai `git log` bertahap untuk tampilan Graph.
+    /// Starts an incremental `git log` for the Graph view.
     pub fn log_stream(&self, query: &LogQuery) -> Result<LogStream> {
         let args = self.log_args(query)?;
         let mut command = Command::new(self.git().info().path);
@@ -158,20 +158,20 @@ impl Repo {
         #[cfg(windows)]
         command.creation_flags(0x0800_0000);
         let mut child = command.spawn().map_err(|e| GitError::io("Failed to run git log", e))?;
-        let stdout = child.stdout.take().expect("stdout dipipa");
+        let stdout = child.stdout.take().expect("stdout is piped");
         Ok(LogStream { child, reader: BufReader::with_capacity(64 * 1024, stdout), graph: GraphBuilder::new(), done: false })
     }
 
-    /// Daftar commit tanpa graph (dipakai untuk riwayat berkas dan pratinjau).
+    /// A list of commits without a graph (used for file history and previews).
     pub async fn log(&self, query: &LogQuery, limit: u32) -> Result<Vec<Commit>> {
         let mut args = self.log_args(query)?;
         args.insert(1, format!("--max-count={limit}"));
         let out = self.run(Cmd::new(args).ok_codes(&[0, 128])).await?;
-        // Kode 128 muncul pada repositori tanpa commit.
+        // Exit code 128 occurs in a repository with no commits.
         Ok(parse_commits(&out.stdout))
     }
 
-    /// Metadata, isi pesan, dan daftar berkas sebuah commit.
+    /// Metadata, message body, and file list of a commit.
     pub async fn commit_detail(&self, oid: &str) -> Result<CommitDetail> {
         let oid = check_ref(oid)?;
         let meta = self
@@ -184,7 +184,7 @@ impl Repo {
         Ok(CommitDetail { commit, body: body.trim_end().to_string(), files })
     }
 
-    /// Daftar berkas yang diubah sebuah commit (merge dibandingkan terhadap induk pertama).
+    /// The list of files changed by a commit (a merge is compared against its first parent).
     async fn changed_files(&self, oid: &str, merge: bool) -> Result<Vec<CommitFile>> {
         let revs: Vec<String> = if merge { vec![format!("{oid}^1"), oid.to_string()] } else { vec![oid.to_string()] };
         let base = ["diff-tree", "--root", "-r", "--no-commit-id", "-z", "-M", "--no-ext-diff"];
@@ -193,7 +193,7 @@ impl Repo {
         Ok(merge_raw_and_numstat(&raw.stdout, &stat.stdout))
     }
 
-    /// Berkas yang berubah antara dua revisi.
+    /// Files that changed between two revisions.
     pub async fn diff_files(&self, from: &str, to: &str) -> Result<Vec<CommitFile>> {
         let (from, to) = (check_ref(from)?.to_string(), check_ref(to)?.to_string());
         let raw = self
@@ -204,7 +204,7 @@ impl Repo {
     }
 }
 
-/// Mengurai `git diff --raw -z`: `:mode mode oid oid STATUS\0path\0[path2\0]`.
+/// Parses `git diff --raw -z`:`:mode mode oid oid STATUS\0path\0[path2\0]`.
 pub(crate) fn parse_raw(raw: &[u8]) -> Vec<CommitFile> {
     let mut files = Vec::new();
     let mut parts = raw.split(|b| *b == 0).map(|p| String::from_utf8_lossy(p).into_owned());
@@ -236,7 +236,7 @@ pub(crate) fn parse_raw(raw: &[u8]) -> Vec<CommitFile> {
     files
 }
 
-/// Mengurai `git diff --numstat -z` menjadi (path, tambah, hapus).
+/// Parses `git diff --numstat -z` into (path, additions, deletions).
 pub(crate) fn parse_numstat(raw: &[u8]) -> Vec<(String, Option<u32>, Option<u32>)> {
     let mut stats = Vec::new();
     let mut parts = raw.split(|b| *b == 0).map(|p| String::from_utf8_lossy(p).into_owned());
@@ -245,7 +245,7 @@ pub(crate) fn parse_numstat(raw: &[u8]) -> Vec<(String, Option<u32>, Option<u32>
         let (Some(add), Some(del), Some(path)) = (fields.next(), fields.next(), fields.next()) else { continue };
         let (add, del) = (add.parse().ok(), del.parse().ok());
         if path.is_empty() {
-            // Rename: dua rekaman berikutnya adalah path lama dan path baru.
+            // Rename: the next two records are the old path and the new path.
             let _old = parts.next();
             if let Some(new) = parts.next() {
                 stats.push((new, add, del));
@@ -274,14 +274,14 @@ mod tests {
 
     #[test]
     fn parses_commit_record() {
-        let record = "abc123\x1fp1 p2\x1fAna\x1fana@x.id\x1f1700000000\x1fBudi\x1fbudi@x.id\x1f1700000100\x1fHEAD -> refs/heads/main, tag: refs/tags/v1.0, refs/remotes/origin/main, refs/remotes/origin/HEAD\x1fSubjek dengan \x1f pemisah";
+        let record = "abc123\x1fp1 p2\x1fAna\x1fana@x.id\x1f1700000000\x1fBudi\x1fbudi@x.id\x1f1700000100\x1fHEAD -> refs/heads/main, tag: refs/tags/v1.0, refs/remotes/origin/main, refs/remotes/origin/HEAD\x1fSubject with \x1f separator";
         let c = parse_commit(record).unwrap();
         assert_eq!(c.oid, "abc123");
         assert_eq!(c.parents, vec!["p1", "p2"]);
         assert_eq!(c.author.name, "Ana");
         assert_eq!(c.author.time, 1_700_000_000.0);
         assert_eq!(c.committer.email, "budi@x.id");
-        assert_eq!(c.subject, "Subjek dengan \x1f pemisah");
+        assert_eq!(c.subject, "Subject with \x1f separator");
         assert_eq!(
             c.refs.iter().map(|r| (r.kind, r.name.as_str())).collect::<Vec<_>>(),
             vec![

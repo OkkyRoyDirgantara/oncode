@@ -1,5 +1,5 @@
-//! Polling login device flow sebagai mesin keadaan murni. Dipisah dari dialog agar bisa diuji
-//! tanpa jendela dan tanpa waktu sungguhan.
+//! Device flow login polling as a pure state machine. Kept separate from the dialog so it can be
+//! tested without a window and without real time.
 
 use std::time::Duration;
 
@@ -7,11 +7,11 @@ use oncode_core::api::forge::LoginPoll;
 use oncode_core::AppError;
 use oncode_forge::{Account, ForgeKind};
 
-/// Server meminta jeda ditambah lima detik setiap kali menjawab `slow_down` (RFC 8628 §3.5).
+/// The server asks for the interval to grow by five seconds each time it answers `slow_down` (RFC 8628 §3.5).
 pub const SLOW_DOWN_SECONDS: u32 = 5;
 const MIN_INTERVAL_SECONDS: u32 = 1;
 
-/// Akhir sebuah percobaan login.
+/// The end of a login attempt.
 #[derive(Debug, Clone, PartialEq)]
 pub enum LoginOutcome {
     Done(Account),
@@ -20,19 +20,19 @@ pub enum LoginOutcome {
     Error(AppError),
 }
 
-/// Yang dilakukan setelah satu jawaban polling.
+/// What to do after one polling answer.
 #[derive(Debug, Clone, PartialEq)]
 pub enum PollNext {
-    /// Tunggu satu jeda lalu polling lagi. `retrying`: polling terakhir gagal karena jaringan.
+    /// Wait one interval, then poll again. `retrying`: the last poll failed because of the network.
     Continue { retrying: bool },
     Finish(LoginOutcome),
 }
 
-/// Keadaan polling satu kode perangkat.
+/// Polling state for one device code.
 ///
-/// Pemakaian: tunggu [`DevicePoller::next_delay`], periksa [`DevicePoller::is_expired`], lakukan
-/// polling, lalu serahkan jawabannya ke [`DevicePoller::on_answer`]. Polling pertama terjadi
-/// setelah satu jeda, bukan seketika (sesuai aturan device flow).
+/// Usage: wait [`DevicePoller::next_delay`], check [`DevicePoller::is_expired`], poll,
+/// then hand the answer to [`DevicePoller::on_answer`]. The first poll happens
+/// after one interval, not immediately (per the device flow rules).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DevicePoller {
     interval_seconds: u32,
@@ -41,34 +41,34 @@ pub struct DevicePoller {
 }
 
 impl DevicePoller {
-    /// `interval`: jeda polling awal dari server (detik). `expires_in`: masa berlaku kode (detik).
+    /// `interval`: the initial polling interval from the server (seconds). `expires_in`: how long the code is valid (seconds).
     pub fn new(interval: u32, expires_in: u32) -> Self {
         Self { interval_seconds: interval.max(MIN_INTERVAL_SECONDS), expires_in: Duration::from_secs(expires_in as u64), attempts: 0 }
     }
 
-    /// Jeda polling saat ini, dalam detik.
+    /// The current polling interval, in seconds.
     pub fn interval_seconds(&self) -> u32 {
         self.interval_seconds
     }
 
-    /// Jumlah polling yang sudah dijawab.
+    /// Number of polls that have been answered.
     pub fn attempts(&self) -> u32 {
         self.attempts
     }
 
-    /// Kode sudah kedaluwarsa setelah `elapsed` sejak login dimulai.
+    /// Whether the code has expired once `elapsed` has passed since the login started.
     pub fn is_expired(&self, elapsed: Duration) -> bool {
         elapsed >= self.expires_in
     }
 
-    /// Lama menunggu sebelum polling berikutnya; `None` bila kode sudah kedaluwarsa.
-    /// Tidak pernah melewati batas kedaluwarsa.
+    /// How long to wait before the next poll; `None` if the code has expired.
+    /// Never goes past the expiry deadline.
     pub fn next_delay(&self, elapsed: Duration) -> Option<Duration> {
         let remaining = self.expires_in.checked_sub(elapsed).filter(|r| !r.is_zero())?;
         Some(remaining.min(Duration::from_secs(self.interval_seconds as u64)))
     }
 
-    /// Mengolah satu jawaban polling.
+    /// Handles one polling answer.
     pub fn on_answer(&mut self, answer: Result<LoginPoll, AppError>) -> PollNext {
         self.attempts += 1;
         match answer {
@@ -80,14 +80,14 @@ impl DevicePoller {
             Ok(LoginPoll::Denied) => PollNext::Finish(LoginOutcome::Denied),
             Ok(LoginPoll::Expired) => PollNext::Finish(LoginOutcome::Expired),
             Ok(LoginPoll::Done { account }) => PollNext::Finish(LoginOutcome::Done(account)),
-            // Galat jaringan tidak menggugurkan login; coba lagi pada jeda berikutnya.
+            // A network error does not abort the login; try again at the next interval.
             Err(error) if error.code == "network" => PollNext::Continue { retrying: true },
             Err(error) => PollNext::Finish(LoginOutcome::Error(error)),
         }
     }
 }
 
-/// Scope token yang dibutuhkan, untuk ditampilkan di dialog login.
+/// The token scopes needed, to show in the login dialog.
 pub fn token_scopes(kind: ForgeKind) -> &'static [&'static str] {
     match kind {
         ForgeKind::GitHub => &["repo", "read:user"],
@@ -95,7 +95,7 @@ pub fn token_scopes(kind: ForgeKind) -> &'static [&'static str] {
     }
 }
 
-/// Kalimat daftar scope, mis. "scopes repo and read:user".
+/// A sentence listing the scopes, e.g. "scopes repo and read:user".
 pub fn scopes_sentence(kind: ForgeKind) -> String {
     let scopes = token_scopes(kind);
     let mut text = String::from(if scopes.len() == 1 { "scope " } else { "scopes " });
@@ -124,9 +124,9 @@ mod tests {
         }
     }
 
-    /// Menjalankan polling dengan jam tiruan sampai selesai atau sampai `until` detik.
-    /// Jawaban diambil dari antrean; setelah habis, selalu `Pending`. Mengembalikan saat tiap
-    /// polling terjadi (detik) dan hasil akhirnya.
+    /// Runs polling with a fake clock until finished or until `until` seconds.
+    /// Answers come from a queue; once it runs out, always `Pending`. Returns when each
+    /// poll happened (seconds) and the final result.
     fn run(poller: &mut DevicePoller, answers: Vec<Result<LoginPoll, AppError>>, until: u64) -> (Vec<u64>, Option<LoginOutcome>) {
         let mut queue: VecDeque<_> = answers.into();
         let mut now = Duration::ZERO;
@@ -162,7 +162,7 @@ mod tests {
     fn slow_down_adds_five_seconds_to_every_following_wait() {
         let mut poller = DevicePoller::new(5, 900);
         let (polls, outcome) = run(&mut poller, vec![Ok(LoginPoll::SlowDown), Ok(LoginPoll::Pending), Ok(LoginPoll::SlowDown)], 40);
-        // 5 s, lalu 10 s dua kali, lalu 15 s.
+        // 5 s, then 10 s twice, then 15 s.
         assert_eq!(polls, [5, 15, 25, 40]);
         assert_eq!(outcome, None);
         assert_eq!(poller.interval_seconds(), 5 + 2 * SLOW_DOWN_SECONDS);
@@ -179,7 +179,7 @@ mod tests {
     #[test]
     fn expires_by_itself_without_a_poll_past_the_deadline() {
         let mut poller = DevicePoller::new(5, 12);
-        // Batas 12 s: polling pada 5 dan 10, lalu menunggu sisa 2 s saja dan berhenti.
+        // Deadline 12 s: polls at 5 and 10, then waits only the remaining 2 s and stops.
         assert_eq!(poller.next_delay(Duration::from_secs(10)), Some(Duration::from_secs(2)));
         assert_eq!(poller.next_delay(Duration::from_secs(12)), None);
         assert!(poller.is_expired(Duration::from_secs(12)) && !poller.is_expired(Duration::from_secs(11)));

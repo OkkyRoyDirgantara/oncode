@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
-description = "Terminal OnCode: pengelola PTY (spawn shell, tulis, ubah ukuran, kendali aliran)"
+description = "OnCode terminal: PTY manager (spawn shell, write, resize, flow control)"
 
 [dependencies]
 serde.workspace = true

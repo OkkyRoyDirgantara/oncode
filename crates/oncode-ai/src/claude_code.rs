@@ -1,25 +1,25 @@
-//! Menulis pesan commit lewat Claude Code CLI (`claude -p`) alih-alih API: memakai login Claude
-//! Code pengguna (termasuk langganan claude.ai), jadi tidak perlu API key.
+//! Writes commit messages through the Claude Code CLI (`claude -p`) instead of the API: it uses the
+//! user's Claude Code login (including a claude.ai subscription), so no API key is needed.
 //!
-//! Murni: argumen dan pengurai keluaran `--output-format stream-json`. Prosesnya dijalankan
-//! pemanggil (oncode-core).
+//! Pure: the arguments and the parser for `--output-format stream-json` output. The process is
+//! run by the caller (oncode-core).
 
 use serde_json::Value;
 
 use crate::{clean_message, user_message, AiError, AiErrorCode, CommitPrompt, SYSTEM_PROMPT};
 
-/// System prompt yang ditulis ke berkas untuk `--system-prompt-file`.
+/// The system prompt written to a file for `--system-prompt-file`.
 pub fn system_prompt() -> &'static str {
     SYSTEM_PROMPT
 }
 
-/// Isi stdin: bahan pesan commit (sama dengan pesan pengguna versi API).
+/// The stdin content: the commit message material (same as the user message in the API version).
 pub fn input(prompt: &CommitPrompt) -> String {
     user_message(prompt)
 }
 
-/// Argumen `claude`: mode print tanpa tool apa pun, tanpa settings/hook/MCP pengguna maupun
-/// proyek, tanpa menyimpan sesi, dan keluaran stream-json agar teks bisa dialirkan.
+/// Arguments for `claude`: print mode with no tools at all, no user or project settings/hooks/MCP,
+/// no saved session, and stream-json output so the text can be streamed.
 pub fn args(system_prompt_file: &str, model: Option<&str>) -> Vec<String> {
     let mut args: Vec<String> = [
         "-p",
@@ -45,7 +45,7 @@ pub fn args(system_prompt_file: &str, model: Option<&str>) -> Vec<String> {
     args
 }
 
-/// Pengurai keluaran `claude -p --output-format stream-json`, baris demi baris.
+/// Parser for `claude -p --output-format stream-json` output, line by line.
 #[derive(Debug, Default)]
 pub struct ClaudeCodeStream {
     text: String,
@@ -53,7 +53,7 @@ pub struct ClaudeCodeStream {
 }
 
 impl ClaudeCodeStream {
-    /// Satu baris NDJSON. Mengembalikan potongan teks baru bila ada; baris lain diabaikan.
+    /// One NDJSON line. Returns the new text chunk if there is one; other lines are ignored.
     pub fn push_line(&mut self, line: &str) -> Option<String> {
         let value: Value = serde_json::from_str(line.trim()).ok()?;
         match value["type"].as_str()? {
@@ -76,7 +76,7 @@ impl ClaudeCodeStream {
         }
     }
 
-    /// Hasil akhir setelah proses selesai. `exit_ok`: kode keluar 0; `stderr` untuk pesan galat.
+    /// The final result after the process finishes. `exit_ok`: exit code 0; `stderr` for the error message.
     pub fn finish(self, exit_ok: bool, stderr: &str) -> Result<String, AiError> {
         if let Some(result) = self.result {
             return result;
@@ -120,7 +120,7 @@ mod tests {
     }
 
     fn result(extra: Value) -> String {
-        let mut value = json!({"type": "result", "subtype": "success", "is_error": false, "result": "fix: perbaiki login", "stop_reason": "end_turn"});
+        let mut value = json!({"type": "result", "subtype": "success", "is_error": false, "result": "fix: repair login", "stop_reason": "end_turn"});
         for (key, field) in extra.as_object().unwrap() {
             value[key] = field.clone();
         }
@@ -134,7 +134,7 @@ mod tests {
             assert!(args.iter().any(|arg| arg == flag), "{flag}");
         }
         let tools = args.iter().position(|arg| arg == "--tools").unwrap();
-        assert_eq!(args[tools + 1], "", "tanpa tool apa pun");
+        assert_eq!(args[tools + 1], "", "no tools at all");
         let format = args.iter().position(|arg| arg == "--output-format").unwrap();
         assert_eq!(args[format + 1], "stream-json");
         assert_eq!(args[args.len() - 2..], ["--model", "sonnet"]);
@@ -147,20 +147,20 @@ mod tests {
         let lines = [
             json!({"type": "system", "subtype": "init", "tools": []}).to_string(),
             json!({"type": "stream_event", "event": {"type": "message_start", "message": {}}}).to_string(),
-            delta("fix: perbaiki "),
+            delta("fix: repair "),
             delta("login"),
-            json!({"type": "assistant", "message": {"content": [{"type": "text", "text": "fix: perbaiki login"}]}}).to_string(),
+            json!({"type": "assistant", "message": {"content": [{"type": "text", "text": "fix: repair login"}]}}).to_string(),
             json!({"type": "rate_limit_event", "rate_limit_info": {"status": "allowed"}}).to_string(),
             result(json!({})),
         ];
         let pieces: Vec<String> = lines.iter().filter_map(|line| stream.push_line(line)).collect();
-        assert_eq!(pieces, ["fix: perbaiki ", "login"]);
-        assert_eq!(stream.finish(true, "").unwrap(), "fix: perbaiki login");
+        assert_eq!(pieces, ["fix: repair ", "login"]);
+        assert_eq!(stream.finish(true, "").unwrap(), "fix: repair login");
     }
 
     #[test]
     fn errors_from_the_cli_are_reported() {
-        // Belum login, kuota habis, dsb.: `result` dengan `is_error`.
+        // Not logged in, quota exhausted, etc.: a `result` with `is_error`.
         let mut stream = ClaudeCodeStream::default();
         stream.push_line(&result(json!({"is_error": true, "subtype": "success", "result": "Invalid API key · Please run /login"})));
         let error = stream.finish(false, "").unwrap_err();
@@ -171,14 +171,14 @@ mod tests {
         stream.push_line(&result(json!({"stop_reason": "refusal", "result": ""})));
         assert_eq!(stream.finish(true, "").unwrap_err().code, AiErrorCode::Refused);
 
-        // Proses gagal tanpa baris `result`: stderr dipakai.
+        // The process failed without a `result` line: stderr is used.
         let stream = ClaudeCodeStream::default();
         let error = stream.finish(false, "error: unknown option '--restricted'\n").unwrap_err();
         assert!(error.message.contains("unknown option"), "{}", error.message);
 
-        // Baris yang bukan JSON diabaikan.
+        // Lines that are not JSON are ignored.
         let mut stream = ClaudeCodeStream::default();
-        assert_eq!(stream.push_line("bukan json"), None);
+        assert_eq!(stream.push_line("not json"), None);
         assert_eq!(stream.finish(true, "").unwrap_err().code, AiErrorCode::InvalidResponse);
     }
 

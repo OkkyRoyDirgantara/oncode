@@ -1,4 +1,4 @@
-//! Logika murni di balik tampilan forge: tab PR, dialog buat PR, dan ringkasan CI.
+//! Pure logic behind the forge views: the PR tab, the create-PR dialog, and the CI summary.
 
 use oncode_core::api::forge::ForgeContext;
 use oncode_forge::{Check, CheckState, ForgeKind, PrFilter, PrState, PullRequest, RepoRef};
@@ -8,14 +8,14 @@ use serde::{Deserialize, Serialize};
 
 use crate::util::{pr_noun, pr_number, shorten};
 
-/// Jenis tab detail PR/MR (sama dengan v0.2).
+/// Kind of the PR/MR detail tab (same as v0.2).
 pub const PR_TAB_KIND: &str = "pullRequest";
 
-/// Filter daftar PR beserta labelnya, sesuai urutan tampil.
+/// PR list filters with their labels, in display order.
 pub const FILTERS: [(PrFilter, &str, &str); 4] =
     [(PrFilter::Open, "open", "Open"), (PrFilter::Mine, "mine", "Created by me"), (PrFilter::ReviewRequested, "reviewRequested", "Review requested"), (PrFilter::All, "all", "All")];
 
-/// Parameter tab detail PR/MR.
+/// Parameters of the PR/MR detail tab.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PrTabParams {
@@ -27,7 +27,7 @@ pub struct PrTabParams {
     pub number: u32,
 }
 
-/// Tab detail untuk sebuah PR/MR; `None` bila belum ada akun untuk host itu.
+/// The detail tab for a PR/MR; `None` if there is no account for that host yet.
 pub fn pr_tab(root: &str, context: &ForgeContext, number: u32, title: &str) -> Option<TabData> {
     let account = context.account.as_ref()?;
     let kind = context.kind.unwrap_or(account.kind);
@@ -40,7 +40,7 @@ pub fn pr_tab(root: &str, context: &ForgeContext, number: u32, title: &str) -> O
     )
 }
 
-/// Keadaan PR untuk ikon dan lencana: draf hanya berlaku selama masih terbuka.
+/// PR state for the icon and badge: draft only applies while it is still open.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PrBadge {
     Open,
@@ -81,7 +81,7 @@ pub fn check_label(state: CheckState) -> &'static str {
     }
 }
 
-/// Ringkasan pemeriksaan CI, mis. "3 passed, 1 failed".
+/// Summary of CI checks, e.g. "3 passed, 1 failed".
 pub fn summarize_checks(checks: &[Check]) -> String {
     let count = |states: &[CheckState]| checks.iter().filter(|c| states.contains(&c.state)).count();
     let failed = count(&[CheckState::Failure]);
@@ -104,7 +104,7 @@ pub fn summarize_checks(checks: &[Check]) -> String {
     parts.join(", ")
 }
 
-/// Kalimat keadaan merge untuk PR yang masih terbuka.
+/// Merge state sentence for a PR that is still open.
 pub fn mergeable_text(mergeable: Option<bool>) -> &'static str {
     match mergeable {
         Some(true) => "No conflicts with the target branch",
@@ -129,8 +129,8 @@ pub fn plural(count: u32, noun: &str) -> String {
     format!("{count} {noun}{}", if count == 1 { "" } else { "s" })
 }
 
-/// Ref pembanding untuk berkas yang berubah: `remote/target` bila ada, kalau tidak branch
-/// lokal `target`.
+/// Comparison ref for changed files: `remote/target` if it exists, otherwise the local
+/// branch `target`.
 pub fn base_ref_for(remote: &str, target: &str, refs: Option<&Refs>) -> Option<String> {
     let refs = refs?;
     let tracking = format!("{remote}/{target}");
@@ -140,13 +140,13 @@ pub fn base_ref_for(remote: &str, target: &str, refs: Option<&Refs>) -> Option<S
     refs.branches.iter().any(|b| b.name == target).then(|| target.to_string())
 }
 
-/// Yang perlu dilakukan sebelum PR bisa dibuat.
+/// What must be done before the PR can be created.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PushNeed {
     None,
-    /// Branch belum ada di remote.
+    /// The branch does not exist on the remote yet.
     Publish,
-    /// Ada commit lokal yang belum di-push.
+    /// There are local commits that have not been pushed.
     Push { ahead: u32 },
 }
 
@@ -164,7 +164,7 @@ pub fn push_need(upstream: Option<&Upstream>) -> PushNeed {
 }
 
 impl PushNeed {
-    /// Pemberitahuan di dialog tentang push yang akan dilakukan lebih dulu.
+    /// Notice in the dialog about the push that will be done first.
     pub fn notice(self, remote: &str) -> Option<String> {
         match self {
             Self::None => None,
@@ -174,7 +174,7 @@ impl PushNeed {
         }
     }
 
-    /// Label tombol kirim.
+    /// Label of the submit button.
     pub fn submit_label(self, noun: &str) -> String {
         match self {
             Self::None => format!("Create {noun}"),
@@ -184,11 +184,11 @@ impl PushNeed {
     }
 }
 
-/// Nama branch di remote: nama upstream tanpa awalan remote, atau nama branch lokal bila
-/// belum dipublikasikan.
+/// Branch name on the remote: the upstream name without the remote prefix, or the local branch
+/// name if it has not been published.
 pub fn source_branch_name(local_branch: &str, upstream: Option<&Upstream>, refs: Option<&Refs>) -> String {
     let Some(upstream) = upstream.filter(|u| u.exists) else { return local_branch.to_string() };
-    // Nama remote terpanjang lebih dulu, agar `origin-fork/x` tidak dipotong sebagai `origin`.
+    // Longest remote name first, so `origin-fork/x` is not cut as `origin`.
     let mut remotes: Vec<&str> = refs.map(|r| r.remotes.iter().map(|remote| remote.name.as_str()).collect()).unwrap_or_default();
     remotes.sort_by_key(|name| std::cmp::Reverse(name.len()));
     for remote in remotes {
@@ -202,8 +202,8 @@ pub fn source_branch_name(local_branch: &str, upstream: Option<&Upstream>, refs:
     }
 }
 
-/// Branch tujuan yang bisa dipilih: branch remote milik `remote`, tanpa awalan remote dan
-/// tanpa `HEAD`, ditambah `extra` (branch bawaan dari forge).
+/// Target branches that can be chosen: the branches of `remote`, without the remote prefix and
+/// without `HEAD`, plus `extra` (the default branch from the forge).
 pub fn target_branch_options(refs: Option<&Refs>, remote: &str, extra: &[&str]) -> Vec<String> {
     let mut names: Vec<String> = Vec::new();
     let mut add = |name: &str| {
@@ -224,8 +224,8 @@ pub fn target_branch_options(refs: Option<&Refs>, remote: &str, extra: &[&str]) 
     names
 }
 
-/// Branch tujuan yang berlaku: pilihan pengguna, atau branch bawaan bila berbeda dari sumber.
-/// Tanpa branch bawaan yang diketahui, tujuan harus dipilih sendiri; tidak ada tebakan diam-diam.
+/// The effective target branch: the user's choice, or the default branch if it differs from the source.
+/// Without a known default branch, the target must be chosen explicitly; no silent guessing.
 pub fn effective_target(chosen: Option<&str>, default_branch: Option<&str>, source: &str) -> String {
     match chosen {
         Some(chosen) => chosen.to_string(),
@@ -233,7 +233,7 @@ pub fn effective_target(chosen: Option<&str>, default_branch: Option<&str>, sour
     }
 }
 
-/// Alasan formulir PR belum bisa dikirim. `default_loaded`: branch bawaan sudah dijawab forge.
+/// Why the PR form cannot be submitted yet. `default_loaded`: the forge has answered with the default branch.
 pub fn create_problem(title: &str, target: &str, source: &str, default_loaded: bool, target_chosen: bool) -> Option<&'static str> {
     if title.trim().is_empty() {
         return Some("Enter a title.");
@@ -305,14 +305,14 @@ mod tests {
     #[test]
     fn source_branch_uses_the_name_on_the_remote() {
         let refs = refs();
-        assert_eq!(source_branch_name("lokal", None, Some(&refs)), "lokal");
-        assert_eq!(source_branch_name("lokal", Some(&upstream("origin/lokal", 0, false)), Some(&refs)), "lokal");
-        assert_eq!(source_branch_name("lokal", Some(&upstream("origin/feature/login", 0, true)), Some(&refs)), "feature/login");
-        // Remote dengan nama terpanjang yang cocok menang.
-        assert_eq!(source_branch_name("lokal", Some(&upstream("origin-fork/topik", 0, true)), Some(&refs)), "topik");
-        // Tanpa daftar ref: potong di garis miring pertama.
-        assert_eq!(source_branch_name("lokal", Some(&upstream("upstream/a/b", 0, true)), None), "a/b");
-        assert_eq!(source_branch_name("lokal", Some(&upstream("tanpa-garis", 0, true)), None), "tanpa-garis");
+        assert_eq!(source_branch_name("local", None, Some(&refs)), "local");
+        assert_eq!(source_branch_name("local", Some(&upstream("origin/local", 0, false)), Some(&refs)), "local");
+        assert_eq!(source_branch_name("local", Some(&upstream("origin/feature/login", 0, true)), Some(&refs)), "feature/login");
+        // The remote with the longest matching name wins.
+        assert_eq!(source_branch_name("local", Some(&upstream("origin-fork/topic", 0, true)), Some(&refs)), "topic");
+        // Without a ref list: cut at the first slash.
+        assert_eq!(source_branch_name("local", Some(&upstream("upstream/a/b", 0, true)), None), "a/b");
+        assert_eq!(source_branch_name("local", Some(&upstream("no-slash", 0, true)), None), "no-slash");
     }
 
     #[test]
@@ -321,26 +321,26 @@ mod tests {
         assert_eq!(target_branch_options(Some(&refs), "origin", &[]), ["develop", "main"]);
         assert_eq!(target_branch_options(Some(&refs), "fork", &["main", "", "release"]), ["main", "release", "topic"]);
         assert_eq!(target_branch_options(None, "origin", &["main"]), ["main"]);
-        assert!(target_branch_options(Some(&refs), "tidak-ada", &[]).is_empty());
+        assert!(target_branch_options(Some(&refs), "does-not-exist", &[]).is_empty());
     }
 
     #[test]
     fn target_defaults_to_the_default_branch_unless_it_is_the_source() {
-        assert_eq!(effective_target(None, Some("main"), "fitur"), "main");
+        assert_eq!(effective_target(None, Some("main"), "feature"), "main");
         assert_eq!(effective_target(None, Some("main"), "main"), "");
-        assert_eq!(effective_target(None, None, "fitur"), "");
-        assert_eq!(effective_target(None, Some(""), "fitur"), "");
-        assert_eq!(effective_target(Some("develop"), Some("main"), "fitur"), "develop");
+        assert_eq!(effective_target(None, None, "feature"), "");
+        assert_eq!(effective_target(None, Some(""), "feature"), "");
+        assert_eq!(effective_target(Some("develop"), Some("main"), "feature"), "develop");
     }
 
     #[test]
     fn create_form_reports_what_is_missing() {
-        assert_eq!(create_problem("  ", "main", "fitur", true, false), Some("Enter a title."));
-        // Selagi branch bawaan dimuat, belum ada keluhan soal tujuan.
-        assert_eq!(create_problem("Judul", "", "fitur", false, false), None);
-        assert_eq!(create_problem("Judul", "", "fitur", true, false), Some("Choose a target branch."));
-        assert_eq!(create_problem("Judul", "fitur", "fitur", true, true), Some("The source and target branch are the same."));
-        assert_eq!(create_problem("Judul", "main", "fitur", true, false), None);
+        assert_eq!(create_problem("  ", "main", "feature", true, false), Some("Enter a title."));
+        // While the default branch is loading, there is no complaint about the target yet.
+        assert_eq!(create_problem("Title", "", "feature", false, false), None);
+        assert_eq!(create_problem("Title", "", "feature", true, false), Some("Choose a target branch."));
+        assert_eq!(create_problem("Title", "feature", "feature", true, true), Some("The source and target branch are the same."));
+        assert_eq!(create_problem("Title", "main", "feature", true, false), None);
     }
 
     #[test]
@@ -390,18 +390,18 @@ mod tests {
 
     #[test]
     fn pr_tab_carries_everything_needed_to_reload_it() {
-        let account = Account { id: "gitlab:git.contoh.id:budi".into(), kind: ForgeKind::GitLab, host: "https://git.contoh.id".into(), username: "budi".into(), display_name: "Budi".into(), avatar_url: None };
-        let repo = RepoRef { host: "git.contoh.id".into(), owner: "tim".into(), name: "proyek".into() };
-        let mut context = ForgeContext { remote: "origin".into(), repo: repo.clone(), kind: None, account: Some(account), web_url: "https://git.contoh.id/tim/proyek".into() };
-        let tab = pr_tab("/repo", &context, 5, "Tambah validasi login yang sangat panjang sekali judulnya").unwrap();
+        let account = Account { id: "gitlab:git.example.com:budi".into(), kind: ForgeKind::GitLab, host: "https://git.example.com".into(), username: "budi".into(), display_name: "Budi".into(), avatar_url: None };
+        let repo = RepoRef { host: "git.example.com".into(), owner: "team".into(), name: "project".into() };
+        let mut context = ForgeContext { remote: "origin".into(), repo: repo.clone(), kind: None, account: Some(account), web_url: "https://git.example.com/team/project".into() };
+        let tab = pr_tab("/repo", &context, 5, "Add validation to the login form with an extremely long title").unwrap();
         assert_eq!(tab.kind, PR_TAB_KIND);
-        assert_eq!(tab.id, "pullRequest:gitlab:git.contoh.id:budi:git.contoh.id/tim/proyek:5");
-        assert_eq!(tab.title, "!5 Tambah validasi login yang sangat panja…");
-        assert_eq!(tab.description.as_deref(), Some("Merge Request !5 · tim/proyek\nTambah validasi login yang sangat panjang sekali judulnya"));
+        assert_eq!(tab.id, "pullRequest:gitlab:git.example.com:budi:git.example.com/team/project:5");
+        assert_eq!(tab.title, "!5 Add validation to the login form with a…");
+        assert_eq!(tab.description.as_deref(), Some("Merge Request !5 · team/project\nAdd validation to the login form with an extremely long title"));
         let params: PrTabParams = serde_json::from_value(tab.params.clone()).unwrap();
-        // Jenis forge diambil dari akun bila host tidak dikenali.
-        assert_eq!(params, PrTabParams { root: "/repo".into(), account_id: "gitlab:git.contoh.id:budi".into(), repo, kind: ForgeKind::GitLab, remote: "origin".into(), number: 5 });
-        assert_eq!(tab.params["accountId"], "gitlab:git.contoh.id:budi");
+        // The forge kind is taken from the account if the host is not recognized.
+        assert_eq!(params, PrTabParams { root: "/repo".into(), account_id: "gitlab:git.example.com:budi".into(), repo, kind: ForgeKind::GitLab, remote: "origin".into(), number: 5 });
+        assert_eq!(tab.params["accountId"], "gitlab:git.example.com:budi");
         context.account = None;
         assert!(pr_tab("/repo", &context, 5, "x").is_none());
     }

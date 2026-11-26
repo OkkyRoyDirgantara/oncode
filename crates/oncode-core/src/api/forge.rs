@@ -1,4 +1,4 @@
-//! Integrasi GitHub dan GitLab: login, daftar repositori, pull/merge request.
+//! GitHub and GitLab integration: login, repository list, pull/merge requests.
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -21,15 +21,15 @@ fn host_for(kind: ForgeKind, host: Option<String>) -> AppResult<ForgeHost> {
     }
 }
 
-/// Kunci `forge.clientIds` untuk sebuah server: origin-nya dalam huruf kecil.
+/// The `forge.clientIds` key for a server: its origin in lowercase.
 fn client_id_key(host: &ForgeHost) -> String {
     host.web_base().to_ascii_lowercase()
 }
 
-/// Client ID aplikasi OAuth untuk sebuah server. Urutannya: Client ID milik server itu
-/// (`forge.clientIds`), Client ID umum dari pengaturan, lalu yang ditanam saat build. Yang
-/// terakhir hanya untuk github.com / gitlab.com, karena aplikasi OAuth hanya dikenal oleh
-/// server tempat ia didaftarkan.
+/// The OAuth app Client ID for a server. The order is: that server's own Client ID
+/// (`forge.clientIds`), the general Client ID from the settings, then the one baked in at build time. The
+/// last one is only for github.com / gitlab.com, because an OAuth app is only known to the
+/// server where it was registered.
 fn client_id_for(core: &Shared, host: &ForgeHost) -> Option<String> {
     let settings = core.user_settings().forge;
     let (configured, built_in) = match host.kind {
@@ -44,8 +44,8 @@ fn client_id_for(core: &Shared, host: &ForgeHost) -> Option<String> {
         .find(|id| !id.is_empty())
 }
 
-/// Menyimpan Client ID aplikasi OAuth untuk satu server ke `forge.clientIds`; string kosong
-/// menghapusnya sehingga server itu kembali memakai Client ID umum.
+/// Stores the OAuth app Client ID for one server in `forge.clientIds`; an empty string
+/// removes it so that server goes back to using the general Client ID.
 pub async fn forge_set_client_id(core: &Shared, kind: ForgeKind, host: Option<String>, client_id: String) -> AppResult<()> {
     let host = host_for(kind, host)?;
     let client_id = client_id.trim().to_string();
@@ -65,7 +65,7 @@ pub async fn forge_set_client_id(core: &Shared, kind: ForgeKind, host: Option<St
     crate::api::app::settings_set(core, settings).await
 }
 
-/// Akses keychain bisa memblokir (mis. menunggu dialog buka kunci), jadi dijalankan di thread tersendiri.
+/// Keychain access can block (e.g. waiting for an unlock dialog), so it runs on its own thread.
 pub(crate) async fn keychain<T: Send + 'static>(core: &Shared, f: impl FnOnce(&dyn TokenStore) -> oncode_forge::Result<T> + Send + 'static) -> AppResult<T> {
     let store = core.tokens.clone();
     core.runtime()
@@ -79,16 +79,16 @@ fn now_seconds() -> f64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or(0.0)
 }
 
-/// Nama host tanpa skema, port, dan path; sebanding dengan `RepoRef.host`.
+/// Host name without scheme, port, and path; comparable to `RepoRef.host`.
 fn hostname(origin: &str) -> String {
     let authority = origin.split("://").nth(1).unwrap_or(origin).split('/').next().unwrap_or("");
     let host = authority.rsplit('@').next().unwrap_or(authority);
-    // IPv6 dalam kurung siku tidak dipotong di titik dua.
+    // IPv6 in square brackets is not cut at the colon.
     let host = if host.starts_with('[') { host } else { host.split(':').next().unwrap_or(host) };
     host.to_lowercase()
 }
 
-/// Provider untuk sebuah akun; token GitLab yang kedaluwarsa diperbarui lebih dulu.
+/// The provider for an account; an expired GitLab token is refreshed first.
 async fn client(core: &Shared, account_id: &str) -> AppResult<(Account, Box<dyn ForgeProvider + Send + Sync>)> {
     let account = core
         .store
@@ -104,7 +104,7 @@ async fn client(core: &Shared, account_id: &str) -> AppResult<(Account, Box<dyn 
     if let (Some(expires_at), Some(refresh)) = (tokens.expires_at, tokens.refresh_token.clone()) {
         if now_seconds() > expires_at - 60.0 {
             if let Some(id) = client_id_for(core, &host) {
-                // Refresh token GitLab sekali pakai: simpan pasangan baru sebelum dipakai.
+                // GitLab refresh tokens are single-use: store the new pair before using it.
                 tokens = refresh_token(&host, &id, &refresh, None).await?;
                 let (account_id, saved) = (account_id.to_string(), tokens.clone());
                 keychain(core, move |store| store.save(&account_id, &saved)).await?;
@@ -118,7 +118,7 @@ async fn finish_login(core: &Shared, host: &ForgeHost, tokens: TokenSet) -> AppR
     let account = provider(host, &tokens.access_token, None).current_user().await?;
     let id = account.id.clone();
     keychain(core, move |store| store.save(&id, &tokens)).await?;
-    // Tanpa keychain, token hanya ada di memori; akunnya pun hanya dicatat untuk sesi ini.
+    // Without a keychain, the token exists only in memory; the account is also only recorded for this session.
     core.store.upsert_account(account.clone(), !core.tokens.is_memory_only());
     core.emit(CoreEvent::AccountsChanged);
     if core.tokens.is_memory_only() {
@@ -134,22 +134,22 @@ pub async fn forge_accounts(core: &Shared) -> AppResult<Vec<Account>> {
     Ok(core.store.accounts())
 }
 
-/// Yang ditampilkan ke pengguna saat login device flow. `device_code` sendiri tetap di backend.
+/// What is shown to the user during a device flow login. The `device_code` itself stays in the backend.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LoginStart {
     pub user_code: String,
     pub verification_uri: String,
     pub verification_uri_complete: Option<String>,
-    /// Jeda polling dalam detik.
+    /// Polling interval in seconds.
     pub interval: u32,
     pub expires_in: u32,
 }
 
-/// Memulai login device flow: UI menampilkan kode dan membuka halaman verifikasi di browser.
+/// Starts a device flow login: the UI shows the code and opens the verification page in the browser.
 ///
-/// Galat `noClientId` berarti belum ada Client ID untuk server itu (lihat [`forge_set_client_id`]);
-/// login tetap bisa dengan token, termasuk lewat halaman [`ForgeHost::token_creation_url`].
+/// The `noClientId` error means there is no Client ID for that server yet (see [`forge_set_client_id`]);
+/// logging in with a token is still possible, including via the [`ForgeHost::token_creation_url`] page.
 pub async fn forge_login_start(core: &Shared, kind: ForgeKind, host: Option<String>) -> AppResult<LoginStart> {
     let host = host_for(kind, host)?;
     let client_id = client_id_for(core, &host).ok_or_else(|| {
@@ -170,14 +170,14 @@ pub async fn forge_login_start(core: &Shared, kind: ForgeKind, host: Option<Stri
 #[serde(tag = "status", rename_all = "camelCase")]
 pub enum LoginPoll {
     Pending,
-    /// Server meminta jeda polling diperpanjang (tambah 5 detik).
+    /// The server asks for the polling interval to be extended (add 5 seconds).
     SlowDown,
     Denied,
     Expired,
     Done { account: Account },
 }
 
-/// Satu kali polling untuk login yang dimulai dengan `forge_login_start`.
+/// A single poll for a login started with `forge_login_start`.
 pub async fn forge_login_poll(core: &Shared, user_code: String) -> AppResult<LoginPoll> {
     let Some(PendingLogin { host, device_code, client_id }) = core.pending_logins.lock().unwrap().get(&user_code).cloned() else {
         return Ok(LoginPoll::Expired);
@@ -185,7 +185,7 @@ pub async fn forge_login_poll(core: &Shared, user_code: String) -> AppResult<Log
     let outcome = match device_poll(&host, &client_id, &device_code, None).await {
         Ok(DevicePoll::Pending) => return Ok(LoginPoll::Pending),
         Ok(DevicePoll::SlowDown) => return Ok(LoginPoll::SlowDown),
-        // Galat jaringan bisa dicoba lagi; login tetap menunggu.
+        // A network error can be retried; the login keeps waiting.
         Err(e) if e.code == ForgeErrorCode::Network => return Err(e.into()),
         Ok(DevicePoll::Denied) => Ok(LoginPoll::Denied),
         Ok(DevicePoll::Expired) => Ok(LoginPoll::Expired),
@@ -196,13 +196,13 @@ pub async fn forge_login_poll(core: &Shared, user_code: String) -> AppResult<Log
     outcome
 }
 
-/// Membatalkan login yang sedang menunggu.
+/// Cancels a login that is waiting.
 pub async fn forge_login_cancel(core: &Shared, user_code: String) -> AppResult<()> {
     core.pending_logins.lock().unwrap().remove(&user_code);
     Ok(())
 }
 
-/// Login dengan Personal Access Token (juga untuk instance self-hosted tanpa device flow).
+/// Logs in with a Personal Access Token (also for self-hosted instances without device flow).
 pub async fn forge_login_token(core: &Shared, kind: ForgeKind, host: Option<String>, token: String) -> AppResult<Account> {
     let host = host_for(kind, host)?;
     let token = token.trim().to_string();
@@ -220,15 +220,15 @@ pub async fn forge_logout(core: &Shared, account_id: String) -> AppResult<()> {
     Ok(())
 }
 
-/// Hubungan sebuah repositori lokal dengan forge, diturunkan dari URL remote-nya.
+/// The relationship of a local repository to a forge, derived from its remote URL.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ForgeContext {
     pub remote: String,
     pub repo: RepoRef,
-    /// Jenis forge bila bisa dikenali dari akun atau nama host.
+    /// The forge kind if it can be recognized from the account or host name.
     pub kind: Option<ForgeKind>,
-    /// Akun yang sudah login untuk host ini.
+    /// The account already logged in for this host.
     pub account: Option<Account>,
     pub web_url: String,
 }
@@ -285,7 +285,7 @@ pub async fn forge_pr_create(core: &Shared, account_id: String, repo: RepoRef, i
     Ok(provider.create_pull_request(&repo, &input).await?)
 }
 
-/// Mengambil ref PR/MR ke branch lokal `pr/<nomor>` lalu pindah ke sana. Mengembalikan nama branch.
+/// Fetches the PR/MR ref into the local branch `pr/<number>` and then switches to it. Returns the branch name.
 pub async fn forge_pr_checkout(
     core: &Shared,
     root: String,
@@ -323,14 +323,14 @@ mod tests {
     fn hostname_drops_scheme_port_and_path() {
         assert_eq!(hostname("https://GitHub.com"), "github.com");
         assert_eq!(hostname("http://127.0.0.1:8080"), "127.0.0.1");
-        assert_eq!(hostname("https://git.contoh.id:8443/sub"), "git.contoh.id");
+        assert_eq!(hostname("https://git.example.com:8443/sub"), "git.example.com");
         assert_eq!(hostname("https://[::1]:8443"), "[::1]:8443");
     }
 
     #[test]
     fn host_for_normalises_user_input() {
         assert_eq!(host_for(ForgeKind::GitHub, None).unwrap().host, "https://github.com");
-        assert_eq!(host_for(ForgeKind::GitLab, Some("git.contoh.id/".into())).unwrap().host, "https://git.contoh.id");
+        assert_eq!(host_for(ForgeKind::GitLab, Some("git.example.com/".into())).unwrap().host, "https://git.example.com");
         assert_eq!(host_for(ForgeKind::GitLab, Some("http://127.0.0.1:8080".into())).unwrap().host, "http://127.0.0.1:8080");
     }
 
@@ -339,72 +339,72 @@ mod tests {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/api/v4/user"))
-            .and(header("authorization", "Bearer token-uji"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({ "id": 7, "username": "budi", "name": "Budi Santoso", "avatar_url": null })))
+            .and(header("authorization", "Bearer test-token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({ "id": 7, "username": "bob", "name": "Bob Smith", "avatar_url": null })))
             .mount(&server)
             .await;
         let mut t = TestCore::new();
 
         assert_eq!(forge_login_token(&t.core, ForgeKind::GitLab, Some(server.uri()), "  ".into()).await.unwrap_err().code, "invalidInput");
-        let account = forge_login_token(&t.core, ForgeKind::GitLab, Some(format!("{}/", server.uri())), " token-uji\n".into()).await.unwrap();
-        assert_eq!((account.kind, account.username.as_str(), account.host.as_str()), (ForgeKind::GitLab, "budi", server.uri().as_str()));
+        let account = forge_login_token(&t.core, ForgeKind::GitLab, Some(format!("{}/", server.uri())), " test-token\n".into()).await.unwrap();
+        assert_eq!((account.kind, account.username.as_str(), account.host.as_str()), (ForgeKind::GitLab, "bob", server.uri().as_str()));
         recv(&mut t.events, |e| matches!(e, CoreEvent::AccountsChanged).then_some(())).await;
         assert_eq!(forge_accounts(&t.core).await.unwrap(), vec![account.clone()]);
-        assert_eq!(t.core.tokens.load(&account.id).unwrap().unwrap().access_token, "token-uji");
-        // Akun tersimpan di state.json (keychain uji berfungsi), token tidak.
+        assert_eq!(t.core.tokens.load(&account.id).unwrap().unwrap().access_token, "test-token");
+        // The account is stored in state.json (the test keychain works), the token is not.
         let state = std::fs::read_to_string(t.dir.path().join("app/data/state.json")).unwrap();
-        assert!(state.contains("\"budi\"") && !state.contains("token-uji"));
+        assert!(state.contains("\"bob\"") && !state.contains("test-token"));
 
         forge_logout(&t.core, account.id.clone()).await.unwrap();
         recv(&mut t.events, |e| matches!(e, CoreEvent::AccountsChanged).then_some(())).await;
         assert!(forge_accounts(&t.core).await.unwrap().is_empty());
         assert!(t.core.tokens.load(&account.id).unwrap().is_none());
-        // Akun yang sudah logout tidak bisa dipakai lagi.
+        // An account that has logged out can no longer be used.
         assert_eq!(forge_repos(&t.core, account.id, String::new(), 1).await.err().map(|e| e.code).as_deref(), Some("unauthorized"));
     }
 
     #[tokio::test]
     async fn pending_logins_are_tracked_by_user_code() {
         let t = TestCore::new();
-        assert_eq!(forge_login_poll(&t.core, "TIDAK-ADA".into()).await.unwrap(), LoginPoll::Expired);
-        let pending = PendingLogin { host: ForgeHost::github(), device_code: "kode-perangkat".into(), client_id: "klien".into() };
+        assert_eq!(forge_login_poll(&t.core, "DOES-NOT-EXIST".into()).await.unwrap(), LoginPoll::Expired);
+        let pending = PendingLogin { host: ForgeHost::github(), device_code: "device-code".into(), client_id: "client".into() };
         t.core.pending_logins.lock().unwrap().insert("ABCD-1234".into(), pending);
         forge_login_cancel(&t.core, "ABCD-1234".into()).await.unwrap();
         assert!(t.core.pending_logins.lock().unwrap().is_empty());
-        // Tanpa Client ID (pengaturan kosong dan tidak ditanam saat build) login browser tidak tersedia.
+        // Without a Client ID (empty settings and none baked in at build time) browser login is unavailable.
         if option_env!("ONCODE_GITHUB_CLIENT_ID").is_none() {
             assert_eq!(forge_login_start(&t.core, ForgeKind::GitHub, None).await.unwrap_err().code, "noClientId");
         }
-        // Client ID bawaan build tidak pernah dipakai untuk server self-hosted.
-        assert_eq!(forge_login_start(&t.core, ForgeKind::GitLab, Some("git.contoh.id".into())).await.unwrap_err().code, "noClientId");
+        // The build's default Client ID is never used for self-hosted servers.
+        assert_eq!(forge_login_start(&t.core, ForgeKind::GitLab, Some("git.example.com".into())).await.unwrap_err().code, "noClientId");
     }
 
     #[tokio::test]
     async fn client_id_prefers_the_server_then_the_general_setting() {
         let t = TestCore::new();
-        let own = ForgeHost::new(ForgeKind::GitLab, "git.contoh.id");
+        let own = ForgeHost::new(ForgeKind::GitLab, "git.example.com");
         assert_eq!(client_id_for(&t.core, &own), None);
 
-        // Client ID umum (perilaku lama) berlaku juga untuk server sendiri.
+        // The general Client ID (old behavior) also applies to your own server.
         let mut settings = t.core.user_settings();
-        settings.forge.gitlab_client_id = Some("umum".into());
+        settings.forge.gitlab_client_id = Some("general".into());
         t.core.set_user_settings(settings).unwrap();
-        assert_eq!(client_id_for(&t.core, &own).as_deref(), Some("umum"));
+        assert_eq!(client_id_for(&t.core, &own).as_deref(), Some("general"));
 
-        // Client ID milik server didahulukan; kuncinya origin yang dinormalkan.
-        forge_set_client_id(&t.core, ForgeKind::GitLab, Some("https://Git.Contoh.id/".into()), " khusus ".into()).await.unwrap();
-        assert_eq!(t.core.user_settings().forge.client_ids.get("https://git.contoh.id").map(String::as_str), Some("khusus"));
-        assert_eq!(client_id_for(&t.core, &own).as_deref(), Some("khusus"));
-        assert_eq!(client_id_for(&t.core, &ForgeHost::gitlab()).as_deref(), Some("umum"));
-        // Tersimpan di berkas pengaturan.
-        assert!(crate::Settings::load(t.core.settings_path()).forge.client_ids.contains_key("https://git.contoh.id"));
+        // The server's own Client ID takes precedence; the key is the normalized origin.
+        forge_set_client_id(&t.core, ForgeKind::GitLab, Some("https://Git.Example.com/".into()), " specific ".into()).await.unwrap();
+        assert_eq!(t.core.user_settings().forge.client_ids.get("https://git.example.com").map(String::as_str), Some("specific"));
+        assert_eq!(client_id_for(&t.core, &own).as_deref(), Some("specific"));
+        assert_eq!(client_id_for(&t.core, &ForgeHost::gitlab()).as_deref(), Some("general"));
+        // Stored in the settings file.
+        assert!(crate::Settings::load(t.core.settings_path()).forge.client_ids.contains_key("https://git.example.com"));
 
-        assert_eq!(forge_set_client_id(&t.core, ForgeKind::GitLab, Some("git.contoh.id".into()), "dua kata".into()).await.unwrap_err().code, "invalidInput");
-        assert_eq!(forge_set_client_id(&t.core, ForgeKind::GitLab, Some("git.contoh.id".into()), "x".repeat(201)).await.unwrap_err().code, "invalidInput");
+        assert_eq!(forge_set_client_id(&t.core, ForgeKind::GitLab, Some("git.example.com".into()), "two words".into()).await.unwrap_err().code, "invalidInput");
+        assert_eq!(forge_set_client_id(&t.core, ForgeKind::GitLab, Some("git.example.com".into()), "x".repeat(201)).await.unwrap_err().code, "invalidInput");
 
-        // String kosong menghapus Client ID milik server.
-        forge_set_client_id(&t.core, ForgeKind::GitLab, Some("git.contoh.id".into()), String::new()).await.unwrap();
-        assert_eq!(client_id_for(&t.core, &own).as_deref(), Some("umum"));
+        // An empty string removes the server's own Client ID.
+        forge_set_client_id(&t.core, ForgeKind::GitLab, Some("git.example.com".into()), String::new()).await.unwrap();
+        assert_eq!(client_id_for(&t.core, &own).as_deref(), Some("general"));
     }
 
     #[tokio::test]
@@ -413,7 +413,7 @@ mod tests {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/oauth/authorize_device"))
-            .and(body_string_contains("client_id=klien-server"))
+            .and(body_string_contains("client_id=server-client"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "device_code": "dev-1", "user_code": "WXYZ-0001", "verification_uri": format!("{}/oauth/device", server.uri()), "expires_in": 300, "interval": 1
             })))
@@ -421,41 +421,41 @@ mod tests {
             .await;
         Mock::given(method("POST"))
             .and(path("/oauth/token"))
-            .and(body_string_contains("client_id=klien-server"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({ "access_token": "token-server", "refresh_token": "segar", "expires_in": 7200, "token_type": "Bearer" })))
+            .and(body_string_contains("client_id=server-client"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({ "access_token": "token-server", "refresh_token": "fresh", "expires_in": 7200, "token_type": "Bearer" })))
             .mount(&server)
             .await;
         Mock::given(method("GET"))
             .and(path("/api/v4/user"))
             .and(header("authorization", "Bearer token-server"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({ "id": 9, "username": "sari", "name": "Sari", "avatar_url": null })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({ "id": 9, "username": "sally", "name": "Sally", "avatar_url": null })))
             .mount(&server)
             .await;
         let t = TestCore::new();
-        forge_set_client_id(&t.core, ForgeKind::GitLab, Some(server.uri()), "klien-server".into()).await.unwrap();
+        forge_set_client_id(&t.core, ForgeKind::GitLab, Some(server.uri()), "server-client".into()).await.unwrap();
 
         let start = forge_login_start(&t.core, ForgeKind::GitLab, Some(server.uri())).await.unwrap();
         assert_eq!(start.user_code, "WXYZ-0001");
-        // Polling memakai Client ID saat login dimulai, walaupun pengaturannya berubah di tengah jalan.
-        forge_set_client_id(&t.core, ForgeKind::GitLab, Some(server.uri()), "lain".into()).await.unwrap();
-        let LoginPoll::Done { account } = forge_login_poll(&t.core, start.user_code).await.unwrap() else { panic!("login belum selesai") };
-        assert_eq!(account.username, "sari");
+        // Polling uses the Client ID from when the login started, even if the setting changes midway.
+        forge_set_client_id(&t.core, ForgeKind::GitLab, Some(server.uri()), "other".into()).await.unwrap();
+        let LoginPoll::Done { account } = forge_login_poll(&t.core, start.user_code).await.unwrap() else { panic!("login not finished yet") };
+        assert_eq!(account.username, "sally");
         assert_eq!(t.core.tokens.load(&account.id).unwrap().unwrap().access_token, "token-server");
     }
 
     #[tokio::test]
     async fn context_is_derived_from_the_origin_remote() {
         let t = TestCore::new();
-        let project = t.trusted_repo("proyek");
+        let project = t.trusted_repo("project");
         let root = git_open(&t.core, "w1", project.to_string_lossy().into_owned()).await.unwrap();
         assert_eq!(forge_context(&t.core, root.clone()).await.unwrap(), None);
 
-        git(&project, &["remote", "add", "cadangan", "https://gitlab.contoh.id/tim/proyek.git"]);
-        let context = forge_context(&t.core, root.clone()).await.unwrap().expect("konteks dari remote");
-        assert_eq!((context.remote.as_str(), context.kind, context.web_url.as_str()), ("cadangan", Some(ForgeKind::GitLab), "https://gitlab.contoh.id/tim/proyek"));
+        git(&project, &["remote", "add", "backup", "https://gitlab.example.com/team/project.git"]);
+        let context = forge_context(&t.core, root.clone()).await.unwrap().expect("context from remote");
+        assert_eq!((context.remote.as_str(), context.kind, context.web_url.as_str()), ("backup", Some(ForgeKind::GitLab), "https://gitlab.example.com/team/project"));
 
-        // `origin` didahulukan; akun yang login untuk host itu ikut dikembalikan.
-        git(&project, &["remote", "add", "origin", "git@github.com:ana/proyek.git"]);
+        // `origin` takes precedence; the account logged in for that host is also returned.
+        git(&project, &["remote", "add", "origin", "git@github.com:ana/project.git"]);
         let account = Account {
             id: "github:github.com:ana".into(),
             kind: ForgeKind::GitHub,
@@ -465,10 +465,10 @@ mod tests {
             avatar_url: None,
         };
         t.core.store.upsert_account(account.clone(), true);
-        let context = forge_context(&t.core, root).await.unwrap().expect("konteks dari origin");
+        let context = forge_context(&t.core, root).await.unwrap().expect("context from origin");
         assert_eq!(context.remote, "origin");
-        assert_eq!(context.repo, RepoRef { host: "github.com".into(), owner: "ana".into(), name: "proyek".into() });
-        assert_eq!((context.kind, context.account, context.web_url.as_str()), (Some(ForgeKind::GitHub), Some(account), "https://github.com/ana/proyek"));
-        assert_eq!(forge_context(&t.core, "/tidak/dibuka".into()).await.unwrap_err().code, "notARepo");
+        assert_eq!(context.repo, RepoRef { host: "github.com".into(), owner: "ana".into(), name: "project".into() });
+        assert_eq!((context.kind, context.account, context.web_url.as_str()), (Some(ForgeKind::GitHub), Some(account), "https://github.com/ana/project"));
+        assert_eq!(forge_context(&t.core, "/not/opened".into()).await.unwrap_err().code, "notARepo");
     }
 }

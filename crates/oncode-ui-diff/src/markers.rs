@@ -1,8 +1,8 @@
-//! Penanda perubahan di gutter editor berkas (dibandingkan dengan isi index) dan blame.
+//! Change markers in the file editor gutter (compared against the index content) and blame.
 //!
-//! Penanda dihitung ulang (dengan jeda) setiap kali berkas disunting atau keadaan repositori
-//! berubah. Blame baris kursor ditampilkan di ujung baris itu (inline blame, seperti GitLens)
-//! lewat hint ujung baris editor, dan juga di status bar.
+//! Markers are recomputed (with a delay) every time the file is edited or the repository state
+//! changes. Blame for the cursor line is shown at the end of that line (inline blame, like GitLens)
+//! through the editor's end-of-line hint, and also in the status bar.
 
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
@@ -19,16 +19,16 @@ use oncode_ui::{overlay, repos, spawn_core, Env, Lucide, ReposEvent, StatusAlign
 use crate::gutter::{blame_at, blame_label, blame_summary, gutter_ranges, inline_blame_text, repo_for_path, ChangeKind};
 use crate::lines::LineDiff;
 
-/// Jeda sebelum penanda dihitung ulang setelah suntingan.
+/// Delay before markers are recomputed after an edit.
 const DEBOUNCE: Duration = Duration::from_millis(250);
-/// Jeda sebelum blame dimuat ulang setelah suntingan (selama itu inline blame disembunyikan).
+/// Delay before blame is reloaded after an edit (inline blame is hidden in the meantime).
 const BLAME_DEBOUNCE: Duration = Duration::from_millis(600);
 
 struct Tracked {
     buffer: WeakEntity<Buffer>,
     root: String,
     relative: String,
-    /// Isi index (sisi pembanding); `None` = berkas baru/untracked (semua baris "ditambah").
+    /// Index content (the comparison side); `None` = new/untracked file (all lines "added").
     base: Option<Option<String>>,
     collections: Vec<(WeakEntity<EditorState>, GutterDecorationCollection)>,
     _debounce: Task<()>,
@@ -40,21 +40,21 @@ pub enum MarkersEvent {
     BlameChanged,
 }
 
-/// Penanda perubahan dan blame untuk semua editor berkas satu jendela.
+/// Change markers and blame for all file editors in a window.
 pub struct ChangeMarkers {
     env: Env,
     buffers: Option<WeakEntity<Buffers>>,
     files: HashMap<String, Tracked>,
-    /// Blame per path untuk berkas yang blame-nya sedang ditampilkan.
+    /// Blame per path for files whose blame is currently shown.
     blame: HashMap<String, Vec<BlameRange>>,
-    /// Berkas yang disunting setelah blame-nya dimuat; nomor barisnya bisa sudah bergeser,
-    /// jadi blame-nya tidak ditampilkan sampai dimuat ulang.
+    /// Files edited after their blame was loaded; their line numbers may have shifted,
+    /// so their blame is not shown until reloaded.
     stale_blame: HashSet<String>,
     blame_tasks: HashMap<String, Task<()>>,
-    /// Email `user.email` per repositori, untuk menulis "You" di inline blame. `None` selama
-    /// masih dimuat (inline blame menunggu supaya tidak berganti dari nama ke "You").
+    /// The `user.email` per repository, used to write "You" in inline blame. `None` while
+    /// still loading (inline blame waits so it doesn't switch from a name to "You").
     identities: HashMap<String, Option<Option<String>>>,
-    /// Nilai terakhir `editor.inlineBlame`.
+    /// Latest value of `editor.inlineBlame`.
     inline_blame: bool,
     _subscriptions: Vec<Subscription>,
 }
@@ -71,15 +71,15 @@ impl ChangeMarkers {
                 }
             }
         })];
-        // `Workbench` sedang dibangun saat ini dipanggil, jadi registry buffer diberikan dari luar
-        // dan pengaturan dibaca dari core.
+        // `Workbench` is being built when this is called, so the buffer registry is passed in
+        // from outside and settings are read from core.
         if let Some(buffers) = &buffers {
             subscriptions.push(cx.subscribe_in(buffers, window, |this: &mut Self, _, event: &BuffersEvent, _, cx| {
                 if let BuffersEvent::EditorCreated { buffer, state } = event {
                     this.attach(buffer.clone(), state.clone(), cx);
                 }
             }));
-            // Inline blame: hint di ujung baris kursor.
+            // Inline blame: a hint at the end of the cursor line.
             let markers = cx.weak_entity();
             let provider: oncode_ui::editor::LineHintProvider = Rc::new(move |path, row, cx| markers.upgrade()?.read(cx).inline_hint(path, row));
             buffers.update(cx, |buffers, cx| buffers.set_line_hint_provider("git.blame", provider, cx));
@@ -122,7 +122,7 @@ impl ChangeMarkers {
                     return;
                 }
                 match event {
-                    // Nomor baris bisa bergeser: sembunyikan dulu, muat ulang setelah jeda.
+                    // Line numbers may shift: hide it first, reload after the delay.
                     BufferEvent::Edited => {
                         if this.stale_blame.insert(path.clone()) {
                             this.refresh_hints(cx);
@@ -156,8 +156,8 @@ impl ChangeMarkers {
         self.schedule(&path, cx);
     }
 
-    /// Menerapkan `editor.inlineBlame`: menyala memuat blame semua berkas yang terbuka,
-    /// mati menyembunyikannya.
+    /// Applies `editor.inlineBlame`: turning on loads blame for all open files,
+    /// turning off hides it.
     fn set_inline_blame(&mut self, on: bool, cx: &mut Context<Self>) {
         if on == self.inline_blame {
             return;
@@ -176,7 +176,7 @@ impl ChangeMarkers {
         }
     }
 
-    /// Memuat ulang isi index berkas ini lalu menghitung ulang penanda.
+    /// Reloads this file's index content, then recomputes the markers.
     fn reload_base(&mut self, path: &str, cx: &mut Context<Self>) {
         let Some(tracked) = self.files.get_mut(path) else { return };
         let (core, root, relative) = (self.env.core.clone(), tracked.root.clone(), tracked.relative.clone());
@@ -202,7 +202,7 @@ impl ChangeMarkers {
         });
     }
 
-    /// Menghitung penanda di latar lalu memasangnya di semua editor berkas ini.
+    /// Computes the markers in the background, then applies them to all editors of this file.
     fn recompute(&mut self, path: &str, cx: &mut Context<Self>) {
         let Some(tracked) = self.files.get_mut(path) else { return };
         let Some(base) = tracked.base.clone() else { return };
@@ -241,7 +241,7 @@ impl ChangeMarkers {
         });
     }
 
-    /// Jumlah penanda yang terpasang pada sebuah berkas (untuk uji).
+    /// The markers applied to a file (for tests).
     pub fn marker_ranges(&self, path: &str, cx: &App) -> Option<Vec<(std::ops::Range<usize>, ChangeKind)>> {
         let tracked = self.files.get(path)?;
         let base = tracked.base.clone()?;
@@ -256,7 +256,7 @@ impl ChangeMarkers {
         self.blame.get(path).map(Vec::as_slice)
     }
 
-    /// Blame sebuah baris (mulai dari 1), kecuali blame berkas itu belum mengikuti suntingan terakhir.
+    /// Blame of a line (starting at 1), unless that file's blame hasn't caught up with the latest edit.
     pub fn line_blame(&self, path: &str, line: u32) -> Option<&BlameRange> {
         if self.stale_blame.contains(path) {
             return None;
@@ -264,7 +264,7 @@ impl ChangeMarkers {
         blame_at(self.blame.get(path)?, line)
     }
 
-    /// Teks inline blame untuk baris `row` (mulai dari 0).
+    /// Inline blame text for line `row` (starting at 0).
     pub fn inline_hint(&self, path: &str, row: u32) -> Option<gpui_kit::SharedString> {
         let range = self.line_blame(path, row + 1)?;
         let me = match self.files.get(path).and_then(|tracked| self.identities.get(&tracked.root)) {
@@ -275,7 +275,7 @@ impl ChangeMarkers {
         Some(inline_blame_text(range, now(), me).into())
     }
 
-    /// Menyalakan atau mematikan blame berkas ini. Hasil `false` bila berkas bukan bagian repositori.
+    /// Turns this file's blame on or off. Returns `false` if the file is not part of a repository.
     pub fn toggle_blame(&mut self, path: &str, cx: &mut Context<Self>) -> bool {
         if !self.files.contains_key(path) {
             return false;
@@ -291,8 +291,8 @@ impl ChangeMarkers {
         true
     }
 
-    /// Memuat blame berkas ini (dengan isi buffer saat ini) setelah `delay`. Permintaan yang
-    /// lebih baru menggantikan yang masih menunggu.
+    /// Loads this file's blame (with the current buffer content) after `delay`. A newer
+    /// request replaces one that is still pending.
     fn load_blame(&mut self, path: &str, delay: Duration, cx: &mut Context<Self>) {
         if !self.files.contains_key(path) {
             return;
@@ -304,7 +304,7 @@ impl ChangeMarkers {
                 if !delay.is_zero() {
                     cx.background_executor().timer(delay).await;
                 }
-                // Isi dibaca setelah jeda supaya ikut suntingan terakhir.
+                // The content is read after the delay so it includes the latest edit.
                 let Ok(Some(request)) = this.update(cx, |this, cx| {
                     let tracked = this.files.get(&key)?;
                     let contents = tracked.buffer.upgrade().and_then(|b| b.read(cx).text(cx)).map(|rope| rope.to_string());
@@ -316,7 +316,7 @@ impl ChangeMarkers {
                 let result = request.await;
                 let _ = this.update(cx, |this, cx| {
                     this.blame_tasks.remove(&key);
-                    // Berkas untracked atau baru: blame kosong, tetap ditandai aktif.
+                    // Untracked or new file: empty blame, still marked as active.
                     this.blame.insert(key.clone(), result.unwrap_or_default());
                     this.stale_blame.remove(&key);
                     this.blame_changed(cx);
@@ -326,7 +326,7 @@ impl ChangeMarkers {
         self.blame_tasks.insert(key, task);
     }
 
-    /// Email pengguna di repositori ini, untuk "You".
+    /// The user's email in this repository, for "You".
     fn load_identity(&mut self, root: String, cx: &mut Context<Self>) {
         self.identities.insert(root.clone(), None);
         let core = self.env.core.clone();
@@ -350,7 +350,7 @@ impl ChangeMarkers {
         self.refresh_hints(cx);
     }
 
-    /// Meminta tampilan editor menggambar ulang inline blame.
+    /// Asks the editor view to redraw inline blame.
     fn refresh_hints(&self, cx: &mut Context<Self>) {
         if let Some(buffers) = self.buffers.as_ref().and_then(WeakEntity::upgrade) {
             buffers.update(cx, |buffers, cx| buffers.refresh_line_hints(cx));
@@ -358,12 +358,12 @@ impl ChangeMarkers {
     }
 }
 
-/// Detik sejak epoch.
+/// Seconds since the epoch.
 fn now() -> f64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0.0, |d| d.as_secs_f64())
 }
 
-/// Item status bar: blame baris kursor pada berkas aktif yang blame-nya dinyalakan.
+/// Status bar item: blame of the cursor line in the active file whose blame is turned on.
 pub struct BlameStatus {
     markers: Entity<ChangeMarkers>,
     workbench: WeakEntity<Workbench>,
@@ -407,7 +407,7 @@ impl Render for BlameStatus {
     }
 }
 
-/// Mendaftarkan penanda perubahan, status blame, dan command `git.toggleBlame` di sebuah jendela.
+/// Registers the change markers, the blame status, and the `git.toggleBlame` command in a window.
 pub(crate) fn setup(workbench: &mut Workbench, window: &mut Window, cx: &mut Context<Workbench>) {
     let env = workbench.env().clone();
     if !env.trusted || env.repo_root.is_none() {
@@ -444,7 +444,7 @@ pub(crate) fn setup(workbench: &mut Workbench, window: &mut Window, cx: &mut Con
             move |_, cx| weak.upgrade().is_some_and(|w| active_file(w.read(cx), cx).is_some())
         }),
     );
-    // Saklar global `editor.inlineBlame`; semua jendela mengikuti lewat `SettingsChanged`.
+    // Global toggle for `editor.inlineBlame`; all windows follow through `SettingsChanged`.
     workbench.register_command(
         oncode_ui::commands::Command::new("git.toggleInlineBlame", "Toggle Inline Blame", move |_, _, cx| {
             let core = oncode_ui::core(cx);
@@ -456,7 +456,7 @@ pub(crate) fn setup(workbench: &mut Workbench, window: &mut Window, cx: &mut Con
     );
 }
 
-/// Penanda perubahan jendela ini.
+/// This window's change markers.
 pub fn change_markers(workbench: &Workbench) -> Option<Entity<ChangeMarkers>> {
     workbench.extension::<Entity<ChangeMarkers>>()
 }

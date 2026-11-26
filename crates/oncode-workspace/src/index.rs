@@ -1,4 +1,4 @@
-//! Indeks path berkas untuk quick open.
+//! File path index for quick open.
 
 use std::path::Path;
 use std::sync::mpsc;
@@ -14,25 +14,25 @@ use crate::gitignore::walk_builder;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct QuickOpenItem {
-    /// Path relatif terhadap akar proyek, dengan garis miring.
+    /// Path relative to the project root, with forward slashes.
     pub path: String,
-    /// Makin besar makin cocok; `0` untuk pola kosong.
+    /// The higher the better the match; `0` for an empty pattern.
     pub score: u32,
-    /// Indeks karakter (code point Unicode) di `path` yang cocok dengan pola, urut naik;
-    /// dipakai untuk penyorotan.
+    /// Character indices (Unicode code points) in `path` that match the pattern, ascending;
+    /// used for highlighting.
     pub indices: Vec<u32>,
 }
 
-/// Daftar path berkas proyek yang terurut, untuk pencocokan fuzzy.
+/// A sorted list of project file paths, for fuzzy matching.
 #[derive(Debug, Clone, Default)]
 pub struct FileIndex {
-    /// Terurut menaik (per byte) dan tanpa duplikat.
+    /// Sorted ascending (per byte) and without duplicates.
     paths: Vec<String>,
 }
 
 impl FileIndex {
-    /// Menelusuri `root` dengan menghormati gitignore; berkas tersembunyi ikut, `.git` tidak.
-    /// Symlink ke berkas ikut dicatat tetapi symlink ke folder tidak ditelusuri. Memblokir.
+    /// Walks `root` honoring gitignore; hidden files are included, `.git` is not.
+    /// Symlinks to files are recorded but symlinks to folders are not followed. Blocking.
     pub fn build(root: &Path) -> FileIndex {
         let root = &crate::fs::absolute(root).unwrap_or_else(|_| root.to_path_buf());
         let (tx, rx) = mpsc::channel::<String>();
@@ -60,7 +60,7 @@ impl FileIndex {
         FileIndex { paths }
     }
 
-    /// Jumlah berkas di dalam indeks.
+    /// Number of files in the index.
     pub fn len(&self) -> usize {
         self.paths.len()
     }
@@ -69,16 +69,16 @@ impl FileIndex {
         self.paths.is_empty()
     }
 
-    /// Semua path di dalam indeks, terurut menaik.
+    /// All paths in the index, sorted ascending.
     pub fn paths(&self) -> &[String] {
         &self.paths
     }
 
-    /// Pencocokan fuzzy terhadap path relatif (smart case, penilaian sadar-path dari
-    /// `nucleo-matcher`). Kata yang dipisah spasi harus cocok semuanya. Pola kosong
-    /// mengembalikan `limit` path pertama menurut abjad.
+    /// Fuzzy matching against relative paths (smart case, path-aware scoring from
+    /// `nucleo-matcher`). Space-separated words must all match. An empty pattern
+    /// returns the first `limit` paths alphabetically.
     ///
-    /// Hasil diurutkan menurut skor menurun, lalu path yang lebih pendek lebih dulu.
+    /// Results are sorted by descending score, then shorter paths first.
     pub fn query(&self, pattern: &str, limit: usize) -> Vec<QuickOpenItem> {
         if limit == 0 {
             return Vec::new();
@@ -112,7 +112,7 @@ impl FileIndex {
         }
         scored.sort_unstable_by(order);
 
-        // Indeks kecocokan hanya dihitung untuk hasil yang benar-benar dikembalikan.
+        // Match indices are only computed for the results that are actually returned.
         let mut raw = Vec::new();
         scored
             .into_iter()
@@ -126,7 +126,7 @@ impl FileIndex {
             .collect()
     }
 
-    /// Menambahkan satu berkas; tidak berpengaruh bila sudah ada.
+    /// Adds one file; has no effect if it is already there.
     pub fn add(&mut self, rel_path: &str) {
         let path = clean(rel_path);
         if path.is_empty() {
@@ -137,7 +137,7 @@ impl FileIndex {
         }
     }
 
-    /// Menghapus satu berkas; bila `rel_path` adalah folder, semua berkas di bawahnya ikut dihapus.
+    /// Removes one file; if `rel_path` is a folder, all files under it are removed too.
     pub fn remove(&mut self, rel_path: &str) {
         let path = clean(rel_path);
         if path.is_empty() {
@@ -153,7 +153,7 @@ impl FileIndex {
     }
 }
 
-/// `nucleo-matcher` mengindeks per gugus grafem untuk teks non-ASCII; ubah ke indeks code point.
+/// `nucleo-matcher` indexes per grapheme cluster for non-ASCII text; convert to code point indices.
 fn char_indices(path: &str, grapheme_indices: &[u32]) -> Vec<u32> {
     if path.is_ascii() {
         return grapheme_indices.to_vec();
@@ -167,7 +167,7 @@ fn char_indices(path: &str, grapheme_indices: &[u32]) -> Vec<u32> {
     grapheme_indices.iter().filter_map(|&i| starts.get(i as usize).copied()).collect()
 }
 
-/// Path relatif dengan garis miring sebagai pemisah.
+/// A relative path with forward slashes as the separator.
 pub(crate) fn to_slash(rel: &Path) -> String {
     let mut out = String::new();
     for component in rel.components() {
@@ -261,18 +261,18 @@ mod tests {
         assert!(items[0].score > 0);
         assert!(!paths(&items).contains(&"Cargo.toml"));
         assert!(!paths(&items).contains(&"docs/manual.md"));
-        // Skor menurun.
+        // Descending score.
         assert!(items.windows(2).all(|w| w[0].score >= w[1].score));
 
         let items = index.query("main", 10);
         assert_eq!(paths(&items)[..2], ["src/main.rs", "tests/main_test.rs"]);
         assert_eq!(items[0].indices, [4, 5, 6, 7]);
 
-        // Kecocokan pada nama berkas mengalahkan kecocokan yang tersebar.
+        // A match on the file name beats a scattered match.
         let items = index.query("lib", 10);
         assert_eq!(items[0].path, "src/lib.rs");
 
-        // Batas jumlah hasil mempertahankan yang terbaik.
+        // The result count limit keeps the best ones.
         let top = index.query("rs", 2);
         assert_eq!(top.len(), 2);
         assert_eq!(paths(&top), paths(&index.query("rs", 10))[..2]);
@@ -284,9 +284,9 @@ mod tests {
     fn query_is_smart_case_and_space_separated() {
         let index = index_of(&["README.md", "src/readme_gen.rs", "docs/Intro.md"]);
         assert_eq!(index.query("readme", 10).len(), 2);
-        // Huruf besar pada pola membuat pencocokan peka huruf.
+        // An uppercase letter in the pattern makes the match case-sensitive.
         assert_eq!(paths(&index.query("README", 10)), ["README.md"]);
-        // Dua kata: keduanya harus cocok.
+        // Two words: both must match.
         assert_eq!(paths(&index.query("src gen", 10)), ["src/readme_gen.rs"]);
         assert_eq!(paths(&index.query("docs/intro", 10)), ["docs/Intro.md"]);
     }
@@ -301,7 +301,7 @@ mod tests {
 
     #[test]
     fn indices_are_char_offsets_for_non_ascii_paths() {
-        let index = index_of(&["dokumen/café/menu.txt"]);
+        let index = index_of(&["recipes/café/menu.txt"]);
         let items = index.query("menu", 10);
         assert_eq!(items.len(), 1);
         let chars: Vec<char> = items[0].path.chars().collect();
@@ -321,7 +321,7 @@ mod tests {
 
         index.remove("src/b.rs");
         assert_eq!(index.paths(), ["src/a.rs", "src/c.rs", "win/style/path.rs"]);
-        index.remove("tidak/ada.rs");
+        index.remove("not/found.rs");
         assert_eq!(index.len(), 3);
     }
 

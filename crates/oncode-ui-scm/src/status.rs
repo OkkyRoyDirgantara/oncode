@@ -1,4 +1,4 @@
-//! Item status bar: branch aktif (membuka pemilih branch) dan sinkronisasi (publish, pull+push, progres).
+//! Status bar items: the current branch (opens the branch picker) and sync (publish, pull+push, progress).
 
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _};
@@ -10,7 +10,7 @@ use crate::actions::{self, Git};
 use crate::logic::{self, SyncState};
 use crate::store::ScmStore;
 
-/// Nama branch (atau commit bila detached) beserta operasi yang sedang berlangsung.
+/// The branch name (or commit if detached) with the operation in progress.
 pub struct BranchStatus {
     store: Entity<ScmStore>,
     _subscription: Subscription,
@@ -41,7 +41,7 @@ impl Render for BranchStatus {
     }
 }
 
-/// Jumlah commit di belakang/di depan upstream; saat operasi berjalan menampilkan progresnya.
+/// The number of commits behind/ahead of upstream; while an operation runs it shows its progress.
 pub struct SyncStatus {
     store: Entity<ScmStore>,
     _subscription: Subscription,

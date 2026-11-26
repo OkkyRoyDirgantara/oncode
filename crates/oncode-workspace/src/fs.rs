@@ -1,4 +1,4 @@
-//! Akses berkas untuk explorer dan editor: daftar folder, buka/simpan teks, dan operasi berkas.
+//! File access for the explorer and editor: folder listing, open/save text, and file operations.
 
 use std::fs;
 use std::io::Write;
@@ -12,19 +12,19 @@ use serde::{Deserialize, Serialize};
 use crate::error::{Result, WsError, WsErrorCode};
 use crate::gitignore::IgnoreRules;
 
-/// Jumlah byte awal yang diperiksa untuk mendeteksi berkas biner.
+/// Number of leading bytes inspected to detect a binary file.
 const BINARY_SNIFF_BYTES: usize = 8000;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DirEntry {
     pub name: String,
-    /// Path absolut.
+    /// Absolute path.
     pub path: String,
-    /// Untuk symlink, mengikuti jenis targetnya.
+    /// For symlinks, follows the kind of the target.
     pub is_dir: bool,
     pub is_symlink: bool,
-    /// Diabaikan oleh aturan gitignore; ditampilkan redup di explorer.
+    /// Ignored by gitignore rules; shown dimmed in the explorer.
     pub ignored: bool,
 }
 
@@ -38,9 +38,9 @@ pub enum Eol {
 #[derive(Debug, Clone, Copy, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FileStat {
-    /// Ukuran dalam byte; mentok di `u32::MAX`.
+    /// Size in bytes; capped at `u32::MAX`.
     pub size: u32,
-    /// Waktu modifikasi, milidetik sejak epoch Unix.
+    /// Modification time, milliseconds since the Unix epoch.
     pub mtime_ms: f64,
     pub read_only: bool,
 }
@@ -48,9 +48,9 @@ pub struct FileStat {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TextFile {
-    /// Isi berkas; akhir baris sudah dinormalkan menjadi `\n`.
+    /// The file contents; line endings are already normalized to `\n`.
     pub text: String,
-    /// Nama encoding menurut `encoding_rs`, mis. `UTF-8`, `windows-1252`, `UTF-16LE`.
+    /// Encoding name per `encoding_rs`, e.g. `UTF-8`, `windows-1252`, `UTF-16LE`.
     pub encoding: String,
     pub bom: bool,
     pub eol: Eol,
@@ -65,11 +65,11 @@ pub enum OpenedFile {
     TooLarge { size: u32 },
 }
 
-/// Isi `dir` (harus berada di dalam `root`): folder lebih dulu, lalu berkas, masing-masing
-/// diurutkan tanpa membedakan huruf besar-kecil. Entri `.git` tidak disertakan.
+/// The contents of `dir` (must be inside `root`): folders first, then files, each
+/// sorted case-insensitively. `.git` entries are not included.
 ///
-/// `ignored` bernilai benar bila entri diabaikan oleh aturan gitignore yang berlaku di bawah
-/// `root` (`.gitignore` bertingkat, `.git/info/exclude`, dan gitignore global).
+/// `ignored` is true if the entry is ignored by the gitignore rules that apply under
+/// `root` (nested `.gitignore`, `.git/info/exclude`, and the global gitignore).
 pub async fn read_dir(root: &Path, dir: &Path) -> Result<Vec<DirEntry>> {
     let root = absolute(root)?;
     let dir = if dir.is_absolute() { normalize(dir) } else { normalize(&root.join(dir)) };
@@ -81,7 +81,7 @@ pub async fn read_dir(root: &Path, dir: &Path) -> Result<Vec<DirEntry>> {
 
 fn read_dir_sync(root: &Path, dir: &Path) -> Result<Vec<DirEntry>> {
     let rules = IgnoreRules::new(root);
-    // Isi folder yang diabaikan ikut diabaikan seluruhnya.
+    // The contents of an ignored folder are ignored entirely.
     let parent_ignored = rules.is_ignored(dir, true);
     let mut entries = Vec::new();
     for entry in fs::read_dir(dir).map_err(|e| WsError::io(dir, e))? {
@@ -94,7 +94,7 @@ fn read_dir_sync(root: &Path, dir: &Path) -> Result<Vec<DirEntry>> {
         let Ok(file_type) = entry.file_type() else { continue };
         let is_symlink = file_type.is_symlink();
         let is_dir = if is_symlink { fs::metadata(&path).map(|m| m.is_dir()).unwrap_or(false) } else { file_type.is_dir() };
-        // Git memperlakukan symlink sebagai berkas, sehingga pola `nama/` tidak mengenainya.
+        // Git treats symlinks as files, so a `name/` pattern does not match them.
         let ignored = parent_ignored || rules.is_entry_ignored(dir, &path, file_type.is_dir());
         entries.push(DirEntry {
             name: file_name.to_string_lossy().into_owned(),
@@ -108,13 +108,13 @@ fn read_dir_sync(root: &Path, dir: &Path) -> Result<Vec<DirEntry>> {
     Ok(entries)
 }
 
-/// Membuka berkas untuk editor.
+/// Opens a file for the editor.
 ///
-/// - `TooLarge` bila ukurannya melebihi `max_bytes` (isi tidak dibaca).
-/// - `Binary` bila ada byte NUL dalam 8000 byte pertama, kecuali berkas diawali BOM UTF-16.
-/// - Encoding: BOM lebih dulu (UTF-8, UTF-16LE, UTF-16BE); tanpa BOM, UTF-8 yang valid
-///   dianggap `UTF-8`; selain itu ditebak oleh `chardetng`.
-/// - `eol` bernilai `Crlf` bila `\r\n` lebih banyak daripada `\n` tunggal.
+/// - `TooLarge` if its size exceeds `max_bytes` (the contents are not read).
+/// - `Binary` if there is a NUL byte in the first 8000 bytes, unless the file starts with a UTF-16 BOM.
+/// - Encoding: BOM first (UTF-8, UTF-16LE, UTF-16BE); without a BOM, valid UTF-8
+///   is treated as `UTF-8`; otherwise it is guessed by `chardetng`.
+/// - `eol` is `Crlf` if `\r\n` outnumbers lone `\n`.
 pub async fn open_file(path: &Path, max_bytes: u64) -> Result<OpenedFile> {
     let path = path.to_path_buf();
     blocking(move || open_file_sync(&path, max_bytes)).await
@@ -156,7 +156,7 @@ struct Decoded {
     eol: Eol,
 }
 
-/// `None` berarti isi dianggap biner.
+/// `None` means the contents are considered binary.
 fn decode(bytes: Vec<u8>) -> Option<Decoded> {
     let bom = Encoding::for_bom(&bytes);
     let is_utf16 = matches!(bom, Some((encoding, _)) if encoding == UTF_16LE || encoding == UTF_16BE);
@@ -180,7 +180,7 @@ fn decode(bytes: Vec<u8>) -> Option<Decoded> {
     Some(Decoded { text, encoding, bom: bom.is_some(), eol })
 }
 
-/// Mengubah `\r\n` dan `\r` tunggal menjadi `\n`, sekaligus menentukan akhir baris yang dominan.
+/// Converts `\r\n` and lone `\r` into `\n`, and determines the dominant line ending.
 fn normalize_eol(text: String) -> (String, Eol) {
     if !text.contains('\r') {
         return (text, Eol::Lf);
@@ -207,13 +207,13 @@ fn normalize_eol(text: String) -> (String, Eol) {
     (out, if crlf > lf { Eol::Crlf } else { Eol::Lf })
 }
 
-/// Menyimpan teks secara atomik (berkas sementara di folder yang sama lalu rename) dengan
-/// mempertahankan izin berkas yang sudah ada.
+/// Saves text atomically (a temporary file in the same folder, then rename) while
+/// preserving the permissions of an existing file.
 ///
-/// `text` memakai `\n`; akhir baris diubah menjadi `eol`, lalu teks di-encode dengan `encoding`
-/// (label WHATWG, mis. `UTF-8`, `windows-1252`, `UTF-16LE`) dan diawali BOM bila `bom`
-/// (hanya berlaku untuk UTF-8 dan UTF-16). Karakter yang tidak ada dalam `encoding`
-/// menghasilkan galat `Io`; berkas di disk tidak disentuh. Berkas hanya-baca ditolak dengan
+/// `text` uses `\n`; line endings are converted to `eol`, then the text is encoded with `encoding`
+/// (a WHATWG label, e.g. `UTF-8`, `windows-1252`, `UTF-16LE`) and prefixed with a BOM if `bom`
+/// (only applies to UTF-8 and UTF-16). Characters that do not exist in `encoding`
+/// produce an `Io` error; the file on disk is not touched. A read-only file is rejected with
 /// `PermissionDenied`.
 pub async fn save_file(path: &Path, text: &str, encoding: &str, bom: bool, eol: Eol) -> Result<FileStat> {
     let bytes = encode(text, encoding, bom, eol)?;
@@ -237,7 +237,7 @@ fn encode(text: &str, label: &str, bom: bool, eol: Eol) -> Result<Vec<u8>> {
 
     let mut out = Vec::with_capacity(normalized.len() + 3);
     if encoding == UTF_16LE || encoding == UTF_16BE {
-        // `encoding_rs` tidak menyediakan encoder UTF-16, jadi dikerjakan langsung.
+        // `encoding_rs` does not provide a UTF-16 encoder, so it is done directly.
         let little = encoding == UTF_16LE;
         if bom {
             out.extend_from_slice(if little { &[0xFF, 0xFE] } else { &[0xFE, 0xFF] });
@@ -267,12 +267,12 @@ static TEMP_COUNTER: AtomicU32 = AtomicU32::new(0);
 const TEMP_PREFIX: &str = ".oncode-";
 const TEMP_SUFFIX: &str = ".tmp";
 
-/// Benar untuk nama berkas sementara yang dibuat [`write_atomic`]; watcher mengabaikannya.
+/// True for the temporary file names created by [`write_atomic`]; the watcher ignores them.
 pub(crate) fn is_temp_name(name: &str) -> bool {
     name.starts_with(TEMP_PREFIX) && name.ends_with(TEMP_SUFFIX)
 }
 
-/// Menghapus berkas sementara bila penulisan gagal di tengah jalan.
+/// Removes the temporary file if the write fails midway.
 struct TempGuard {
     path: PathBuf,
     armed: bool,
@@ -301,7 +301,7 @@ fn create_temp(dir: &Path) -> Result<(TempGuard, fs::File)> {
     Err(WsError::other(format!("Cannot create a temporary file in {}", dir.display())))
 }
 
-/// Mengganti isi `path` secara atomik. Symlink diikuti agar tautannya tetap utuh.
+/// Replaces the contents of `path` atomically. Symlinks are followed so the link stays intact.
 pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
     let target = match fs::symlink_metadata(path) {
         Ok(meta) if meta.file_type().is_symlink() => fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf()),
@@ -336,7 +336,7 @@ pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
     Ok(())
 }
 
-/// Metadata berkas; `None` bila path tidak ada.
+/// File metadata; `None` if the path does not exist.
 pub async fn stat(path: &Path) -> Result<Option<FileStat>> {
     let path = path.to_path_buf();
     blocking(move || match fs::metadata(&path) {
@@ -347,7 +347,7 @@ pub async fn stat(path: &Path) -> Result<Option<FileStat>> {
     .await
 }
 
-/// Membuat berkas kosong beserta folder induknya. `AlreadyExists` bila path sudah ada.
+/// Creates an empty file along with its parent folders. `AlreadyExists` if the path already exists.
 pub async fn create_file(path: &Path) -> Result<()> {
     let path = path.to_path_buf();
     blocking(move || {
@@ -363,7 +363,7 @@ pub async fn create_file(path: &Path) -> Result<()> {
     .await
 }
 
-/// Membuat folder beserta folder induknya. `AlreadyExists` bila path sudah ada.
+/// Creates a folder along with its parent folders. `AlreadyExists` if the path already exists.
 pub async fn create_dir(path: &Path) -> Result<()> {
     let path = path.to_path_buf();
     blocking(move || {
@@ -375,8 +375,8 @@ pub async fn create_dir(path: &Path) -> Result<()> {
     .await
 }
 
-/// Mengganti nama atau memindahkan. Tidak pernah menimpa: `AlreadyExists` bila `to` sudah ada.
-/// Folder induk `to` dibuat bila belum ada.
+/// Renames or moves. Never overwrites: `AlreadyExists` if `to` already exists.
+/// The parent folder of `to` is created if it does not exist.
 pub async fn rename(from: &Path, to: &Path) -> Result<()> {
     let from = from.to_path_buf();
     let to = to.to_path_buf();
@@ -395,16 +395,16 @@ pub async fn rename(from: &Path, to: &Path) -> Result<()> {
     .await
 }
 
-/// Menyalin berkas atau folder (beserta isinya) ke dalam folder `dest_dir`, mis. hasil seret-lepas
-/// dari luar proyek. Sumbernya bebas; yang membatasi ke proyek adalah pemanggil, lewat `dest_dir`.
+/// Copies files or folders (along with their contents) into the folder `dest_dir`, e.g. the result of a drag-and-drop
+/// from outside the project. The sources are unrestricted; confining to the project is up to the caller, via `dest_dir`.
 ///
-/// Tidak pernah menimpa: bila salah satu nama sudah ada di `dest_dir`, atau dua sumber bernama
-/// sama, tidak ada yang disalin dan hasilnya `AlreadyExists`. Folder tidak boleh disalin ke dalam
-/// dirinya sendiri. Di dalam folder sumber, symlink ke berkas disalin sebagai berkas biasa; symlink ke
-/// folder (dan berkas khusus seperti socket) dilewati agar penyalinan tidak berputar atau keluar
-/// dari folder sumber. Bila gagal di tengah jalan, salinan yang sudah dibuat dibuang lagi.
+/// Never overwrites: if any name already exists in `dest_dir`, or two sources have the
+/// same name, nothing is copied and the result is `AlreadyExists`. A folder cannot be copied into
+/// itself. Inside a source folder, symlinks to files are copied as regular files; symlinks to
+/// folders (and special files such as sockets) are skipped so the copy does not loop or escape
+/// the source folder. If it fails midway, the copies already made are removed again.
 ///
-/// Mengembalikan path hasil salinan, menurut urutan `sources`.
+/// Returns the paths of the copies, in the order of `sources`.
 pub async fn copy_into(sources: &[PathBuf], dest_dir: &Path) -> Result<Vec<PathBuf>> {
     let sources = sources.to_vec();
     let dest_dir = dest_dir.to_path_buf();
@@ -416,7 +416,7 @@ pub async fn copy_into(sources: &[PathBuf], dest_dir: &Path) -> Result<Vec<PathB
         }
         let dest_real = fs::canonicalize(&dest_dir).map_err(|e| WsError::io(&dest_dir, e))?;
 
-        // Semua diperiksa dulu, supaya tidak ada salinan setengah jadi hanya karena nama kedua bentrok.
+        // Everything is checked first, so there is no half-finished copy just because the second name collides.
         let mut targets: Vec<PathBuf> = Vec::with_capacity(sources.len());
         for source in &sources {
             let meta = fs::metadata(source).map_err(|e| WsError::io(source, e))?;
@@ -436,7 +436,7 @@ pub async fn copy_into(sources: &[PathBuf], dest_dir: &Path) -> Result<Vec<PathB
 
         for (index, (source, target)) in sources.iter().zip(&targets).enumerate() {
             if let Err(err) = copy_tree(source, target) {
-                // Nama yang keburu dipakai pihak lain bukan milik kita; jangan dihapus.
+                // A name that someone else took in the meantime is not ours; do not delete it.
                 let created = if err.code == WsErrorCode::AlreadyExists { index } else { index + 1 };
                 for target in &targets[..created] {
                     let _ = if target.is_dir() { fs::remove_dir_all(target) } else { fs::remove_file(target) };
@@ -449,7 +449,7 @@ pub async fn copy_into(sources: &[PathBuf], dest_dir: &Path) -> Result<Vec<PathB
     .await
 }
 
-/// Menyalin satu berkas atau folder ke `target` yang belum ada.
+/// Copies a single file or folder to a `target` that does not exist yet.
 fn copy_tree(source: &Path, target: &Path) -> Result<()> {
     let meta = fs::metadata(source).map_err(|e| WsError::io(source, e))?;
     if meta.is_dir() {
@@ -465,11 +465,11 @@ fn copy_tree(source: &Path, target: &Path) -> Result<()> {
         }
         Ok(())
     } else if meta.is_file() {
-        // `create_new`: tidak pernah menimpa, bahkan bila nama itu baru dipakai setelah pemeriksaan.
+        // `create_new`: never overwrites, even if the name was only taken after the check.
         let mut input = fs::File::open(source).map_err(|e| WsError::io(source, e))?;
         let mut output = fs::OpenOptions::new().write(true).create_new(true).open(target).map_err(|e| WsError::io(target, e))?;
         std::io::copy(&mut input, &mut output).map_err(|e| WsError::io(target, e))?;
-        // Hak akses (mis. bit eksekusi) ikut disalin, seperti `fs::copy`.
+        // Permissions (e.g. the executable bit) are copied too, like `fs::copy`.
         let _ = fs::set_permissions(target, meta.permissions());
         Ok(())
     } else {
@@ -477,8 +477,8 @@ fn copy_tree(source: &Path, target: &Path) -> Result<()> {
     }
 }
 
-/// Benar bila kedua path menunjuk entri yang sama dan hanya berbeda huruf besar-kecil
-/// (ganti nama `readme.md` → `README.md` pada sistem berkas yang tidak peka huruf).
+/// True if both paths point to the same entry and differ only in case
+/// (renaming `readme.md` → `README.md` on a case-insensitive file system).
 fn is_same_entry(from: &Path, to: &Path) -> bool {
     if from == to {
         return true;
@@ -491,9 +491,9 @@ fn is_same_entry(from: &Path, to: &Path) -> bool {
         }
 }
 
-/// Memindahkan berkas atau folder ke tempat sampah sistem operasi.
+/// Moves files or folders to the operating system's trash.
 pub async fn trash(paths: &[PathBuf]) -> Result<()> {
-    // Tidak ada yang dibuang: berhasil di semua OS (pustaka `trash` menolak daftar kosong di Windows).
+    // Nothing to delete: succeeds on every OS (the `trash` library rejects an empty list on Windows).
     if paths.is_empty() {
         return Ok(());
     }
@@ -509,17 +509,17 @@ pub async fn trash(paths: &[PathBuf]) -> Result<()> {
     .await
 }
 
-/// Benar bila `path` berada di dalam `root` (atau sama dengan `root`).
+/// True if `path` is inside `root` (or equal to `root`).
 ///
-/// `..` dan `.` diselesaikan secara leksikal, sehingga path tidak harus ada. Path relatif
-/// ditafsirkan terhadap `root`. Symlink tidak diikuti.
+/// `..` and `.` are resolved lexically, so the path does not have to exist. Relative paths
+/// are interpreted against `root`. Symlinks are not followed.
 pub fn is_inside(root: &Path, path: &Path) -> bool {
     let root = normalize(root);
     let path = if path.is_absolute() { normalize(path) } else { normalize(&root.join(path)) };
     path.starts_with(&root)
 }
 
-/// Menyelesaikan `.` dan `..` tanpa menyentuh sistem berkas.
+/// Resolves `.` and `..` without touching the file system.
 pub(crate) fn normalize(path: &Path) -> PathBuf {
     let mut out = PathBuf::new();
     for component in path.components() {
@@ -538,7 +538,7 @@ pub(crate) fn normalize(path: &Path) -> PathBuf {
     out
 }
 
-/// Path absolut yang sudah dinormalkan secara leksikal.
+/// An absolute path that has been lexically normalized.
 pub(crate) fn absolute(path: &Path) -> Result<PathBuf> {
     let absolute = std::path::absolute(path).map_err(|e| WsError::io(path, e))?;
     Ok(normalize(&absolute))
@@ -581,7 +581,7 @@ mod tests {
     fn text_of(opened: OpenedFile) -> TextFile {
         match opened {
             OpenedFile::Text(text) => text,
-            other => panic!("bukan teks: {other:?}"),
+            other => panic!("not text: {other:?}"),
         }
     }
 
@@ -618,12 +618,12 @@ mod tests {
         assert!(entries.iter().all(|e| Path::new(&e.path).is_absolute()));
         assert_eq!(Path::new(&entries[0].path), root.join("alpha"));
 
-        // .gitignore bertingkat.
+        // Nested .gitignore.
         let alpha = read_dir(root, &root.join("alpha")).await.unwrap();
         let flags: Vec<(&str, bool)> = alpha.iter().map(|e| (e.name.as_str(), e.ignored)).collect();
         assert_eq!(flags, [(".gitignore", false), ("local", true), ("x", false), ("y.log", true)]);
 
-        // Isi folder yang diabaikan ikut diabaikan.
+        // The contents of an ignored folder are ignored too.
         let target = read_dir(root, &root.join("target")).await.unwrap();
         assert_eq!(target.len(), 1);
         assert!(target[0].ignored && target[0].is_dir);
@@ -672,13 +672,13 @@ mod tests {
     async fn opens_utf8() {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("a.txt");
-        write(&path, "halo dunia\nbaris kedua é\n");
+        write(&path, "hello world\nsecond line é\n");
         let file = text_of(open_file(&path, MAX).await.unwrap());
-        assert_eq!(file.text, "halo dunia\nbaris kedua é\n");
+        assert_eq!(file.text, "hello world\nsecond line é\n");
         assert_eq!(file.encoding, "UTF-8");
         assert!(!file.bom);
         assert_eq!(file.eol, Eol::Lf);
-        assert_eq!(file.stat.size, 26);
+        assert_eq!(file.stat.size, 27);
         assert!(file.stat.mtime_ms > 1.0e12);
         assert!(!file.stat.read_only);
     }
@@ -696,9 +696,9 @@ mod tests {
     async fn opens_utf8_with_bom() {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("a.txt");
-        write(&path, b"\xEF\xBB\xBFhalo\n");
+        write(&path, b"\xEF\xBB\xBFhello\n");
         let file = text_of(open_file(&path, MAX).await.unwrap());
-        assert_eq!(file.text, "halo\n");
+        assert_eq!(file.text, "hello\n");
         assert_eq!(file.encoding, "UTF-8");
         assert!(file.bom);
     }
@@ -718,17 +718,17 @@ mod tests {
     async fn opens_utf16_with_bom() {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("le.txt");
-        write(&path, utf16("halo é 😀\r\nbaris\r\n", true, true));
+        write(&path, utf16("hello é 😀\r\nline\r\n", true, true));
         let file = text_of(open_file(&path, MAX).await.unwrap());
-        assert_eq!(file.text, "halo é 😀\nbaris\n");
+        assert_eq!(file.text, "hello é 😀\nline\n");
         assert_eq!(file.encoding, "UTF-16LE");
         assert!(file.bom);
         assert_eq!(file.eol, Eol::Crlf);
 
         let path = tmp.path().join("be.txt");
-        write(&path, utf16("halo\n", false, true));
+        write(&path, utf16("hello\n", false, true));
         let file = text_of(open_file(&path, MAX).await.unwrap());
-        assert_eq!(file.text, "halo\n");
+        assert_eq!(file.text, "hello\n");
         assert_eq!(file.encoding, "UTF-16BE");
         assert!(file.bom);
     }
@@ -758,11 +758,11 @@ mod tests {
         assert_eq!(file.eol, Eol::Crlf);
         assert_eq!(file.text, "a\nb\nc\n");
 
-        // Seri: `\n` tunggal menang.
+        // A tie: lone `\n` wins.
         write(&path, "a\r\nb\n");
         assert_eq!(text_of(open_file(&path, MAX).await.unwrap()).eol, Eol::Lf);
 
-        // `\r` tunggal dinormalkan menjadi `\n`.
+        // A lone `\r` is normalized to `\n`.
         write(&path, "a\rb\n");
         let file = text_of(open_file(&path, MAX).await.unwrap());
         assert_eq!((file.text.as_str(), file.eol), ("a\nb\n", Eol::Lf));
@@ -775,11 +775,11 @@ mod tests {
         write(&path, b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR");
         assert_eq!(open_file(&path, MAX).await.unwrap(), OpenedFile::Binary { size: 16 });
 
-        // BOM UTF-8 tidak mengecualikan pemeriksaan NUL.
+        // A UTF-8 BOM does not exempt the NUL check.
         write(&path, b"\xEF\xBB\xBFab\0cd");
         assert_eq!(open_file(&path, MAX).await.unwrap(), OpenedFile::Binary { size: 8 });
 
-        // NUL setelah 8000 byte pertama tidak dihitung.
+        // A NUL after the first 8000 bytes does not count.
         let mut late = vec![b'a'; 9000];
         late.push(0);
         write(&path, &late);
@@ -842,23 +842,23 @@ mod tests {
 
     #[tokio::test]
     async fn save_round_trips_utf8() {
-        let bytes = round_trip("satu\ndua é\n", "UTF-8", false, Eol::Lf).await;
-        assert_eq!(bytes, "satu\ndua é\n".as_bytes());
-        let bytes = round_trip("satu\ndua\n", "UTF-8", false, Eol::Crlf).await;
-        assert_eq!(bytes, b"satu\r\ndua\r\n");
-        let bytes = round_trip("satu\ndua\n", "UTF-8", true, Eol::Crlf).await;
-        assert_eq!(bytes, b"\xEF\xBB\xBFsatu\r\ndua\r\n");
+        let bytes = round_trip("one\ntwo é\n", "UTF-8", false, Eol::Lf).await;
+        assert_eq!(bytes, "one\ntwo é\n".as_bytes());
+        let bytes = round_trip("one\ntwo\n", "UTF-8", false, Eol::Crlf).await;
+        assert_eq!(bytes, b"one\r\ntwo\r\n");
+        let bytes = round_trip("one\ntwo\n", "UTF-8", true, Eol::Crlf).await;
+        assert_eq!(bytes, b"\xEF\xBB\xBFone\r\ntwo\r\n");
     }
 
     #[tokio::test]
     async fn save_round_trips_utf16() {
-        let text = "halo é 😀\nbaris\n";
+        let text = "hello é 😀\nline\n";
         let bytes = round_trip(text, "UTF-16LE", true, Eol::Lf).await;
         assert_eq!(bytes, utf16(text, true, true));
         let bytes = round_trip(text, "UTF-16LE", true, Eol::Crlf).await;
-        assert_eq!(bytes, utf16("halo é 😀\r\nbaris\r\n", true, true));
+        assert_eq!(bytes, utf16("hello é 😀\r\nline\r\n", true, true));
         let bytes = round_trip(text, "UTF-16BE", true, Eol::Crlf).await;
-        assert_eq!(bytes, utf16("halo é 😀\r\nbaris\r\n", false, true));
+        assert_eq!(bytes, utf16("hello é 😀\r\nline\r\n", false, true));
     }
 
     #[tokio::test]
@@ -874,14 +874,14 @@ mod tests {
     async fn save_rejects_unmappable_text_and_unknown_encoding() {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("f.txt");
-        write(&path, "asli");
+        write(&path, "original");
         let err = save_file(&path, "emoji 😀", "windows-1252", false, Eol::Lf).await.unwrap_err();
         assert_eq!(err.code, WsErrorCode::Io);
         assert!(err.message.contains("windows-1252"));
-        let err = save_file(&path, "x", "bukan-encoding", false, Eol::Lf).await.unwrap_err();
+        let err = save_file(&path, "x", "not-an-encoding", false, Eol::Lf).await.unwrap_err();
         assert_eq!(err.code, WsErrorCode::Io);
-        assert_eq!(fs::read(&path).unwrap(), b"asli");
-        assert_eq!(fs::read_dir(tmp.path()).unwrap().count(), 1, "tidak ada berkas sementara tersisa");
+        assert_eq!(fs::read(&path).unwrap(), b"original");
+        assert_eq!(fs::read_dir(tmp.path()).unwrap().count(), 1, "no temporary file left behind");
     }
 
     #[tokio::test]
@@ -904,15 +904,15 @@ mod tests {
         fs::set_permissions(&path, fs::Permissions::from_mode(0o754)).unwrap();
         let inode_before = fs::metadata(&path).unwrap().ino();
 
-        let stat = save_file(&path, "#!/bin/sh\necho hai\n", "UTF-8", false, Eol::Lf).await.unwrap();
+        let stat = save_file(&path, "#!/bin/sh\necho hey\n", "UTF-8", false, Eol::Lf).await.unwrap();
         let meta = fs::metadata(&path).unwrap();
         assert_eq!(meta.permissions().mode() & 0o777, 0o754);
-        assert_ne!(meta.ino(), inode_before, "berkas diganti lewat rename, bukan ditulis di tempat");
-        assert_eq!(fs::read_to_string(&path).unwrap(), "#!/bin/sh\necho hai\n");
+        assert_ne!(meta.ino(), inode_before, "the file is replaced via rename, not written in place");
+        assert_eq!(fs::read_to_string(&path).unwrap(), "#!/bin/sh\necho hey\n");
         assert_eq!(stat.size, 19);
         assert!(!stat.read_only);
         let names: Vec<_> = fs::read_dir(tmp.path()).unwrap().map(|e| e.unwrap().file_name()).collect();
-        assert_eq!(names, ["run.sh"], "tidak ada berkas sementara tersisa");
+        assert_eq!(names, ["run.sh"], "no temporary file left behind");
     }
 
     #[cfg(unix)]
@@ -921,38 +921,38 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("ro.txt");
-        write(&path, "asli");
+        write(&path, "original");
         fs::set_permissions(&path, fs::Permissions::from_mode(0o444)).unwrap();
-        let err = save_file(&path, "baru", "UTF-8", false, Eol::Lf).await.unwrap_err();
+        let err = save_file(&path, "new", "UTF-8", false, Eol::Lf).await.unwrap_err();
         assert_eq!(err.code, WsErrorCode::PermissionDenied);
-        assert_eq!(fs::read(&path).unwrap(), b"asli");
+        assert_eq!(fs::read(&path).unwrap(), b"original");
         assert!(stat(&path).await.unwrap().unwrap().read_only);
 
         let target = tmp.path().join("target.txt");
         let link = tmp.path().join("link.txt");
-        write(&target, "lama");
+        write(&target, "old");
         std::os::unix::fs::symlink(&target, &link).unwrap();
-        save_file(&link, "baru", "UTF-8", false, Eol::Lf).await.unwrap();
+        save_file(&link, "new", "UTF-8", false, Eol::Lf).await.unwrap();
         assert!(fs::symlink_metadata(&link).unwrap().file_type().is_symlink());
-        assert_eq!(fs::read(&target).unwrap(), b"baru");
+        assert_eq!(fs::read(&target).unwrap(), b"new");
     }
 
     #[tokio::test]
     async fn save_creates_new_file_but_not_missing_parents() {
         let tmp = tempfile::tempdir().unwrap();
-        let path = tmp.path().join("baru.txt");
-        save_file(&path, "isi\n", "utf-8", false, Eol::Lf).await.unwrap();
-        assert_eq!(fs::read(&path).unwrap(), b"isi\n");
+        let path = tmp.path().join("new.txt");
+        save_file(&path, "content\n", "utf-8", false, Eol::Lf).await.unwrap();
+        assert_eq!(fs::read(&path).unwrap(), b"content\n");
         #[cfg(unix)]
         {
-            // Berkas baru mendapat izin bawaan (mengikuti umask), bukan izin berkas sementara.
+            // A new file gets the default permissions (following the umask), not the temporary file's permissions.
             use std::os::unix::fs::PermissionsExt;
-            let plain = tmp.path().join("biasa.txt");
+            let plain = tmp.path().join("plain.txt");
             fs::write(&plain, "x").unwrap();
             let mode = |p: &Path| fs::metadata(p).unwrap().permissions().mode() & 0o777;
             assert_eq!(mode(&path), mode(&plain));
         }
-        let err = save_file(&tmp.path().join("tidak/ada/x.txt"), "isi", "UTF-8", false, Eol::Lf).await.unwrap_err();
+        let err = save_file(&tmp.path().join("not/there/x.txt"), "content", "UTF-8", false, Eol::Lf).await.unwrap_err();
         assert_eq!(err.code, WsErrorCode::NotFound);
     }
 
@@ -1001,7 +1001,7 @@ mod tests {
         assert!(!a.exists());
         assert_eq!(fs::read(&c).unwrap(), b"A");
 
-        // Folder beserta isinya.
+        // A folder along with its contents.
         rename(&tmp.path().join("sub"), &tmp.path().join("moved")).await.unwrap();
         assert_eq!(fs::read(tmp.path().join("moved/dir/c.txt")).unwrap(), b"A");
         fs::create_dir(tmp.path().join("other")).unwrap();
@@ -1029,10 +1029,10 @@ mod tests {
         assert_eq!(fs::read(project.join("dest/tree/one.txt")).unwrap(), b"1");
         assert_eq!(fs::read(project.join("dest/tree/deep/two.txt")).unwrap(), b"2");
         assert!(project.join("dest/tree/empty").is_dir());
-        // Sumbernya tidak disentuh.
+        // The source is untouched.
         assert_eq!(fs::read(outside.join("tree/one.txt")).unwrap(), b"1");
 
-        // Tidak ada yang disalin: daftar kosong berhasil begitu saja.
+        // Nothing to copy: an empty list simply succeeds.
         assert!(copy_into(&[], &project.join("dest")).await.unwrap().is_empty());
     }
 
@@ -1040,18 +1040,18 @@ mod tests {
     async fn copy_into_never_overwrites_and_copies_nothing_when_a_name_is_taken() {
         let tmp = tempfile::tempdir().unwrap();
         let (source, dest) = (tmp.path().join("src"), tmp.path().join("dest"));
-        write(&source.join("new.txt"), "baru");
-        write(&source.join("taken.txt"), "dari luar");
-        write(&dest.join("taken.txt"), "asli");
+        write(&source.join("new.txt"), "new");
+        write(&source.join("taken.txt"), "from outside");
+        write(&dest.join("taken.txt"), "original");
 
-        // Berkas pertama bebas, tetapi yang kedua bentrok: berkas pertama pun tidak disalin.
+        // The first file is free, but the second collides: the first file is not copied either.
         let err = copy_into(&[source.join("new.txt"), source.join("taken.txt")], &dest).await.unwrap_err();
         assert_eq!(err.code, WsErrorCode::AlreadyExists);
         assert!(!dest.join("new.txt").exists());
-        assert_eq!(fs::read(dest.join("taken.txt")).unwrap(), b"asli");
+        assert_eq!(fs::read(dest.join("taken.txt")).unwrap(), b"original");
 
-        // Dua sumber bernama sama dari folder berbeda juga bentrok satu sama lain.
-        write(&tmp.path().join("other/new.txt"), "lain");
+        // Two sources with the same name from different folders also collide with each other.
+        write(&tmp.path().join("other/new.txt"), "different");
         let err = copy_into(&[source.join("new.txt"), tmp.path().join("other/new.txt")], &dest).await.unwrap_err();
         assert_eq!(err.code, WsErrorCode::AlreadyExists);
         assert!(!dest.join("new.txt").exists());
@@ -1072,13 +1072,13 @@ mod tests {
         let err = copy_into(&[tmp.path().join("file.txt")], &tmp.path().join("file.txt")).await.unwrap_err();
         assert_eq!(err.code, WsErrorCode::InvalidPath);
 
-        // Ke dalam dirinya sendiri atau turunannya akan berputar tanpa henti.
+        // Into itself or its descendants would loop endlessly.
         let err = copy_into(&[tmp.path().join("tree")], &tmp.path().join("tree")).await.unwrap_err();
         assert_eq!(err.code, WsErrorCode::InvalidPath);
         let err = copy_into(&[tmp.path().join("tree")], &tmp.path().join("tree/inner")).await.unwrap_err();
         assert_eq!(err.code, WsErrorCode::InvalidPath);
         assert!(!tmp.path().join("tree/inner/tree").exists());
-        // Menyalin ke induknya sendiri bukan masalah folder-ke-dirinya, melainkan nama yang sudah ada.
+        // Copying into its own parent is not a folder-into-itself problem, but an already existing name.
         let err = copy_into(&[tmp.path().join("tree")], tmp.path()).await.unwrap_err();
         assert_eq!(err.code, WsErrorCode::AlreadyExists);
     }
@@ -1088,17 +1088,17 @@ mod tests {
     async fn copy_into_follows_file_links_but_skips_folder_links_inside_a_folder() {
         let tmp = tempfile::tempdir().unwrap();
         let tree = tmp.path().join("tree");
-        write(&tree.join("real.txt"), "isi");
+        write(&tree.join("real.txt"), "content");
         std::os::unix::fs::symlink(tree.join("real.txt"), tree.join("file-link")).unwrap();
-        // Tautan ke folder induknya akan membuat penyalinan berputar bila diikuti.
+        // A link to its parent folder would make the copy loop if followed.
         std::os::unix::fs::symlink(&tree, tree.join("loop")).unwrap();
         std::os::unix::fs::symlink(tree.join("nowhere"), tree.join("broken")).unwrap();
         let dest = tmp.path().join("dest");
         fs::create_dir_all(&dest).unwrap();
 
         copy_into(&[tree], &dest).await.unwrap();
-        assert_eq!(fs::read(dest.join("tree/file-link")).unwrap(), b"isi");
-        assert!(!fs::symlink_metadata(dest.join("tree/file-link")).unwrap().file_type().is_symlink(), "disalin sebagai berkas biasa");
+        assert_eq!(fs::read(dest.join("tree/file-link")).unwrap(), b"content");
+        assert!(!fs::symlink_metadata(dest.join("tree/file-link")).unwrap().file_type().is_symlink(), "copied as a regular file");
         assert!(!dest.join("tree/loop").exists() && !dest.join("tree/broken").exists());
     }
 
@@ -1110,7 +1110,7 @@ mod tests {
         trash(&[]).await.unwrap();
     }
 
-    /// Memindahkan berkas sungguhan ke tempat sampah pengguna, jadi tidak dijalankan secara bawaan:
+    /// Moves real files to the user's trash, so it is not run by default:
     /// `cargo test -p oncode-workspace -- --ignored trash_moves`.
     #[tokio::test]
     #[ignore]
@@ -1141,12 +1141,12 @@ mod tests {
         assert!(!is_inside(root, Path::new("/home/u")));
         assert!(!is_inside(root, Path::new("/")));
         assert!(!is_inside(root, Path::new("/../../etc/passwd")));
-        // Path relatif ditafsirkan terhadap root.
+        // Relative paths are interpreted against root.
         assert!(is_inside(root, Path::new("src/lib.rs")));
         assert!(is_inside(root, Path::new("a/../b")));
         assert!(!is_inside(root, Path::new("../proj2/x")));
         assert!(!is_inside(root, Path::new("a/../../x")));
-        // Root yang belum dinormalkan.
+        // A root that has not been normalized.
         assert!(is_inside(Path::new("/home/u/x/../proj/"), Path::new("/home/u/proj/a")));
     }
 

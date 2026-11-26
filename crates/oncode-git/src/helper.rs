@@ -1,8 +1,8 @@
-//! Server untuk `oncode-helper`.
+//! Server for `oncode-helper`.
 //!
-//! Git menjalankan `oncode-helper` saat membutuhkan kredensial (askpass) atau
-//! editor (pesan commit, daftar todo rebase). Helper menghubungi server ini lewat
-//! socket lokal, membawa token sekali pakai milik pemanggilan `git` tersebut.
+//! Git runs `oncode-helper` when it needs credentials (askpass) or an
+//! editor (commit message, rebase todo list). The helper contacts this server over a
+//! local socket, carrying the one-time token belonging to that `git` invocation.
 
 use std::collections::HashMap;
 use std::future::Future;
@@ -13,36 +13,36 @@ use std::sync::{Arc, Mutex};
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
 
-/// Permintaan yang harus dijawab pengguna.
+/// A request the user must answer.
 #[derive(Debug, Clone)]
 pub enum Prompt {
-    /// Username, password, passphrase, atau konfirmasi host SSH.
+    /// Username, password, passphrase, or SSH host confirmation.
     Askpass { prompt: String, repo: Option<PathBuf> },
-    /// Git meminta pesan (commit, merge, squash, reword).
+    /// Git asks for a message (commit, merge, squash, reword).
     EditMessage { initial: String, repo: Option<PathBuf> },
 }
 
 pub type PromptFuture = Pin<Box<dyn Future<Output = Option<String>> + Send>>;
-/// Mengembalikan `None` bila pengguna membatalkan.
+/// Returns `None` if the user cancels.
 pub type PromptFn = Arc<dyn Fn(Prompt) -> PromptFuture + Send + Sync>;
 
-/// Cara menjawab permintaan editor untuk satu pemanggilan git.
+/// How to answer editor requests for a single git invocation.
 #[derive(Debug, Clone, Default)]
 pub enum EditorMode {
-    /// Tanyakan ke pengguna.
+    /// Ask the user.
     #[default]
     Prompt,
-    /// Terima isi bawaan dari git.
+    /// Accept the default content from git.
     AcceptDefault,
-    /// Pakai teks ini.
+    /// Use this text.
     Supply(String),
 }
 
-/// Konteks satu pemanggilan git, dicari berdasarkan token.
+/// Context of a single git invocation, looked up by token.
 #[derive(Debug, Clone, Default)]
 pub struct OpContext {
     pub repo: Option<PathBuf>,
-    /// Isi berkas todo untuk interactive rebase.
+    /// Contents of the todo file for an interactive rebase.
     pub todo: Option<String>,
     pub editor: EditorMode,
 }
@@ -68,7 +68,7 @@ pub struct HelperServer {
 }
 
 impl HelperServer {
-    /// Membuka socket lokal dan mulai menerima koneksi dari helper.
+    /// Opens the local socket and starts accepting connections from the helper.
     pub async fn start(helper_path: PathBuf, prompt: PromptFn) -> std::io::Result<Arc<Self>> {
         let id = format!("oncode-{}-{}", std::process::id(), &uuid::Uuid::new_v4().simple().to_string()[..12]);
         let (endpoint, listener) = transport::bind(&id)?;
@@ -85,7 +85,7 @@ impl HelperServer {
         &self.helper_path
     }
 
-    /// Mendaftarkan konteks dan mengembalikan token sekali pakai.
+    /// Registers a context and returns a one-time token.
     pub fn register(&self, ctx: OpContext) -> String {
         let token = uuid::Uuid::new_v4().simple().to_string();
         self.contexts.lock().unwrap().insert(token.clone(), ctx);
@@ -151,7 +151,7 @@ fn ensure_newline(mut text: String) -> String {
     text
 }
 
-/// Membuang baris komentar (`#`) yang ditambahkan git ke templat pesan.
+/// Removes the comment lines (`#`) that git adds to the message template.
 pub fn strip_comments(text: &str) -> String {
     let kept: Vec<&str> = text.lines().filter(|l| !l.starts_with('#')).collect();
     let joined = kept.join("\n");
@@ -238,7 +238,7 @@ mod tests {
 
     #[test]
     fn strips_git_comment_lines() {
-        let text = "Subjek\n\nIsi pesan\n# Please enter the commit message\n# Lines starting with '#'\n";
-        assert_eq!(strip_comments(text), "Subjek\n\nIsi pesan");
+        let text = "Subject\n\nMessage body\n# Please enter the commit message\n# Lines starting with '#'\n";
+        assert_eq!(strip_comments(text), "Subject\n\nMessage body");
     }
 }

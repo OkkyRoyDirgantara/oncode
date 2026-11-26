@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
-description = "Lapisan workspace OnCode: akses berkas, watcher, pencarian teks, indeks quick open"
+description = "OnCode workspace layer: file access, watcher, text search, quick open index"
 
 [dependencies]
 serde.workspace = true

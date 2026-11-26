@@ -1,5 +1,5 @@
-//! Logika murni fitur Source Control: teks, validasi, dan penurunan tampilan dari snapshot.
-//! Tidak ada yang menyentuh GPUI di sini, sehingga semuanya bisa diuji dengan `#[test]`.
+//! Pure logic of the Source Control feature: text, validation, and view derivation from the snapshot.
+//! Nothing here touches GPUI, so everything can be tested with `#[test]`.
 
 use std::collections::HashSet;
 
@@ -10,7 +10,7 @@ pub fn plural(n: usize, word: &str) -> String {
     format!("{n} {word}{}", if n == 1 { "" } else { "s" })
 }
 
-/// Nama pendek untuk HEAD saat ini.
+/// A short name for the current HEAD.
 pub fn head_label(snapshot: &RepoSnapshot) -> String {
     match &snapshot.head {
         Head::Branch { name } | Head::Unborn { name } => name.clone(),
@@ -18,8 +18,8 @@ pub fn head_label(snapshot: &RepoSnapshot) -> String {
     }
 }
 
-/// Jumlah berkas yang berubah, untuk lencana ikon Source Control. Berkas yang muncul di
-/// beberapa kelompok (mis. staged dan unstaged) dihitung sekali.
+/// The number of changed files, for the Source Control icon badge. A file that appears in
+/// several groups (e.g. staged and unstaged) is counted once.
 pub fn change_count(snapshot: &RepoSnapshot) -> usize {
     let mut paths: HashSet<&str> = HashSet::new();
     paths.extend(snapshot.staged.iter().map(|c| c.path.as_str()));
@@ -29,7 +29,7 @@ pub fn change_count(snapshot: &RepoSnapshot) -> usize {
     paths.len()
 }
 
-/// Memisahkan path menjadi (nama berkas, folder).
+/// Splits a path into (file name, folder).
 pub fn split_path(path: &str) -> (&str, &str) {
     match path.rfind('/') {
         Some(i) => (&path[i + 1..], &path[..i]),
@@ -71,7 +71,7 @@ pub fn conflict_title(kind: ConflictKind) -> &'static str {
     }
 }
 
-/// Satu baris pada kelompok "Changes": perubahan working tree atau berkas untracked.
+/// One row in the "Changes" group: a working tree change or an untracked file.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChangeRow {
     pub path: String,
@@ -80,7 +80,7 @@ pub struct ChangeRow {
     pub untracked: bool,
 }
 
-/// Berkas untracked ditampilkan bersama perubahan lain, diurutkan menurut path.
+/// Untracked files are shown together with other changes, sorted by path.
 pub fn change_rows(snapshot: &RepoSnapshot) -> Vec<ChangeRow> {
     let mut rows: Vec<ChangeRow> =
         snapshot.unstaged.iter().map(|c| ChangeRow { path: c.path.clone(), orig_path: c.orig_path.clone(), kind: c.kind, untracked: false }).collect();
@@ -89,13 +89,13 @@ pub fn change_rows(snapshot: &RepoSnapshot) -> Vec<ChangeRow> {
     rows
 }
 
-/// Membagi daftar path menjadi berkas terlacak dan untracked menurut snapshot.
+/// Splits a list of paths into tracked and untracked files according to the snapshot.
 pub fn split_tracked(snapshot: &RepoSnapshot, paths: &[String]) -> (Vec<String>, Vec<String>) {
     let untracked: HashSet<&str> = snapshot.untracked.iter().map(String::as_str).collect();
     paths.iter().cloned().partition(|p| !untracked.contains(p.as_str()))
 }
 
-/// Judul dan isi konfirmasi discard, yang menyebut apa yang akan hilang. `None` bila tidak ada berkas.
+/// The title and body of the discard confirmation, naming what will be lost. `None` if there are no files.
 pub fn discard_prompt(tracked: &[String], untracked: &[String]) -> Option<(String, String)> {
     let total = tracked.len() + untracked.len();
     if total == 0 {
@@ -115,7 +115,7 @@ pub fn discard_prompt(tracked: &[String], untracked: &[String]) -> Option<(Strin
     Some((title, parts.join("\n")))
 }
 
-/// Teks tombol commit.
+/// The commit button text.
 pub fn commit_label(amend: bool, staged: usize) -> String {
     if amend {
         "Amend Commit".into()
@@ -133,7 +133,7 @@ pub struct OperationText {
     pub can_skip: bool,
 }
 
-/// Teks banner operasi yang sedang berhenti (merge, rebase, cherry-pick, revert).
+/// Banner text for an operation that is stopped (merge, rebase, cherry-pick, revert).
 pub fn operation_text(operation: &Operation) -> OperationText {
     match operation {
         Operation::Merge { incoming } => OperationText { title: "Merge in progress".into(), detail: format!("Merging {incoming}"), can_skip: false },
@@ -147,7 +147,7 @@ pub fn operation_text(operation: &Operation) -> OperationText {
     }
 }
 
-/// Nama operasi untuk kalimat ("merge", "rebase", "cherry-pick", "revert").
+/// The operation name for sentences ("merge", "rebase", "cherry-pick", "revert").
 pub fn operation_name(operation: Option<&Operation>) -> &'static str {
     match operation {
         Some(Operation::Merge { .. }) => "merge",
@@ -158,7 +158,7 @@ pub fn operation_name(operation: Option<&Operation>) -> &'static str {
     }
 }
 
-/// Baris status konflik pada banner operasi.
+/// The conflict status line on the operation banner.
 pub fn conflicts_left(conflicts: usize) -> String {
     if conflicts > 0 {
         format!("{} left to resolve.", plural(conflicts, "conflicted file"))
@@ -167,7 +167,7 @@ pub fn conflicts_left(conflicts: usize) -> String {
     }
 }
 
-/// Teks item branch di status bar: nama, penanda detached, dan operasi yang berlangsung.
+/// Text of the branch item in the status bar: the name, the detached marker, and the operation in progress.
 pub fn branch_status_label(snapshot: &RepoSnapshot) -> String {
     let mut label = head_label(snapshot);
     if matches!(snapshot.head, Head::Detached { .. }) {
@@ -179,12 +179,12 @@ pub fn branch_status_label(snapshot: &RepoSnapshot) -> String {
     label
 }
 
-/// Keadaan tombol sinkronisasi (panel dan status bar).
+/// State of the sync button (panel and status bar).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SyncState {
-    /// Tidak ditampilkan: HEAD detached/unborn, atau belum ada remote.
+    /// Not shown: HEAD is detached/unborn, or there is no remote yet.
     Hidden,
-    /// Branch belum punya upstream; tawarkan publish.
+    /// The branch has no upstream yet; offer publish.
     Publish,
     Sync { upstream: String, ahead: u32, behind: u32 },
 }
@@ -200,7 +200,7 @@ pub fn sync_state(snapshot: &RepoSnapshot, has_remote: bool) -> SyncState {
     }
 }
 
-/// Aturan dasar nama ref Git, agar galat muncul sebelum perintah dijalankan.
+/// Basic Git ref name rules, so the error appears before the command runs.
 pub fn validate_ref_name(value: &str) -> Option<&'static str> {
     let name = value.trim();
     if name.is_empty() {
@@ -218,7 +218,7 @@ pub fn validate_ref_name(value: &str) -> Option<&'static str> {
     None
 }
 
-/// Sasaran yang dipilih di pemilih branch.
+/// The target chosen in the branch picker.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CheckoutTarget {
     Create,
@@ -228,7 +228,7 @@ pub enum CheckoutTarget {
 }
 
 impl CheckoutTarget {
-    /// Bentuk string untuk `PickItem::value`.
+    /// The string form for `PickItem::value`.
     pub fn encode(&self) -> String {
         match self {
             Self::Create => "create:".into(),
@@ -250,7 +250,7 @@ impl CheckoutTarget {
     }
 }
 
-/// Isi pemilih branch: (label, keterangan, sasaran).
+/// Branch picker contents: (label, description, target).
 pub fn branch_pick_items(refs: &Refs) -> Vec<(String, String, CheckoutTarget)> {
     let mut items = vec![("+ Create new branch…".to_string(), String::new(), CheckoutTarget::Create)];
     for branch in &refs.branches {
@@ -270,7 +270,7 @@ pub fn branch_pick_items(refs: &Refs) -> Vec<(String, String, CheckoutTarget)> {
     items
 }
 
-/// Ref yang bisa di-merge atau dijadikan dasar rebase: semua kecuali branch aktif. (label, keterangan)
+/// Refs that can be merged or used as a rebase base: all except the current branch. (label, description)
 pub fn ref_pick_items(refs: &Refs) -> Vec<(String, &'static str)> {
     let mut items: Vec<(String, &'static str)> = refs.branches.iter().filter(|b| !b.is_head).map(|b| (b.name.clone(), "branch")).collect();
     items.extend(refs.remote_branches.iter().map(|b| (b.name.clone(), "remote branch")));
@@ -278,12 +278,12 @@ pub fn ref_pick_items(refs: &Refs) -> Vec<(String, &'static str)> {
     items
 }
 
-/// Nama branch lokal untuk sebuah branch remote (`origin/fitur/x` → `fitur/x`).
+/// The local branch name for a remote branch (`origin/feature/x` → `feature/x`).
 pub fn local_name_of_remote(name: &str) -> &str {
     name.split_once('/').map_or(name, |(_, rest)| rest)
 }
 
-/// Pull `--ff-only` gagal karena riwayat bercabang.
+/// A `--ff-only` pull failed because the history diverged.
 pub fn is_diverged(message: &str, detail: Option<&str>) -> bool {
     let text = format!("{message} {}", detail.unwrap_or("")).to_lowercase();
     text.contains("fast-forward") || text.contains("diverg")
@@ -296,7 +296,7 @@ pub enum NoticeLevel {
     Error,
 }
 
-/// Tindak lanjut yang ditawarkan bersama pesan galat.
+/// The follow-up offered together with an error message.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FollowUp {
     PullThenPush,
@@ -319,7 +319,7 @@ impl FollowUp {
         }
     }
 
-    /// Bagian id elemen tombolnya (`scm-toast-action-<slug>`).
+    /// Part of the button's element id (`scm-toast-action-<slug>`).
     pub fn slug(self) -> &'static str {
         match self {
             Self::PullThenPush => "pull-then-push",
@@ -332,18 +332,18 @@ impl FollowUp {
     }
 }
 
-/// Pesan dan tindak lanjut untuk sebuah galat Git, dipilih menurut `AppError.code`.
+/// The message and follow-ups for a Git error, chosen by `AppError.code`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ErrorNotice {
     pub level: NoticeLevel,
     pub message: String,
     pub follow_ups: Vec<FollowUp>,
-    /// Tampilkan Source Control (konflik perlu diselesaikan di sana).
+    /// Show Source Control (conflicts need to be resolved there).
     pub reveal_scm: bool,
 }
 
-/// Menerjemahkan kode galat Git menjadi pesan dengan aksi berikutnya. `None` = tidak perlu
-/// ditampilkan (operasi dibatalkan pengguna). `can_retry`: operasinya bisa diulang setelah stash.
+/// Translates a Git error code into a message with next actions. `None` = no need to
+/// show it (the operation was canceled by the user). `can_retry`: the operation can be repeated after a stash.
 pub fn error_notice(code: &str, message: &str, label: &str, can_retry: bool) -> Option<ErrorNotice> {
     let notice = |level, message: String, follow_ups: Vec<FollowUp>| Some(ErrorNotice { level, message, follow_ups, reveal_scm: false });
     match code {
@@ -378,7 +378,7 @@ pub fn error_notice(code: &str, message: &str, label: &str, can_retry: bool) -> 
     }
 }
 
-/// "just now", "5m ago", "3h ago", "2d ago", atau tanggal (UTC) untuk yang lebih lama.
+/// "just now", "5m ago", "3h ago", "2d ago", or a date (UTC) for anything older.
 pub fn relative_time(seconds: f64, now: f64) -> String {
     let diff = now - seconds;
     if diff < 60.0 {
@@ -395,7 +395,7 @@ pub fn relative_time(seconds: f64, now: f64) -> String {
     }
 }
 
-/// Tanggal kalender (proleptik Gregorian) dari jumlah hari sejak 1970-01-01.
+/// Calendar date (proleptic Gregorian) from the number of days since 1970-01-01.
 fn civil_from_days(days: i64) -> (i64, u32, u32) {
     let z = days + 719_468;
     let era = z.div_euclid(146_097);
@@ -408,7 +408,7 @@ fn civil_from_days(days: i64) -> (i64, u32, u32) {
     (yoe + era * 400 + i64::from(month <= 2), month, day)
 }
 
-/// Jam:menit:detik (UTC) untuk cap waktu di Git Output.
+/// Hour:minute:second (UTC) for timestamps in Git Output.
 pub fn clock_time(seconds_since_epoch: u64) -> String {
     let day = seconds_since_epoch % 86_400;
     format!("{:02}:{:02}:{:02}", day / 3600, (day % 3600) / 60, day % 60)
@@ -416,7 +416,7 @@ pub fn clock_time(seconds_since_epoch: u64) -> String {
 
 // ----- Clone -----
 
-/// Pesan galat untuk nama folder tujuan, atau `None` bila sah.
+/// Error message for the destination folder name, or `None` if valid.
 pub fn validate_folder_name(name: &str) -> Option<&'static str> {
     if name.trim().is_empty() {
         return Some("Enter a folder name");
@@ -448,7 +448,7 @@ pub fn validate_folder_name(name: &str) -> Option<&'static str> {
     None
 }
 
-/// Panjang skema (`https` pada `https://…`) bila teks diawali `skema://`.
+/// Length of the scheme (`https` in `https://…`) if the text starts with `scheme://`.
 fn scheme_of(value: &str) -> Option<&str> {
     let end = value.find("://")?;
     let scheme = &value[..end];
@@ -457,12 +457,12 @@ fn scheme_of(value: &str) -> Option<&str> {
     (first.is_ascii_alphabetic() && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '.' | '-'))).then_some(scheme)
 }
 
-/// Nama folder bawaan untuk sebuah URL clone, seperti yang dipilih `git clone`: segmen terakhir
-/// tanpa garis miring penutup dan tanpa akhiran `.git`. Mendukung bentuk https/ssh/git/file
-/// maupun bentuk scp (`git@host:owner/repo.git`). Kosong bila tidak bisa ditebak.
+/// Default folder name for a clone URL, as `git clone` picks it: the last segment
+/// without a trailing slash and without the `.git` suffix. Supports the https/ssh/git/file forms
+/// as well as the scp form (`git@host:owner/repo.git`). Empty if it cannot be guessed.
 pub fn repo_name_from_url(url: &str) -> String {
     let mut value = url.trim();
-    // Query dan fragmen bukan bagian dari nama.
+    // The query and fragment are not part of the name.
     if let Some(cut) = value.find(['?', '#']) {
         value = &value[..cut];
     }
@@ -472,7 +472,7 @@ pub fn repo_name_from_url(url: &str) -> String {
     }
     value = value.trim_end_matches(['/', '\\']);
     let name = value.rfind(['/', '\\', ':']).map_or(value, |cut| &value[cut + 1..]);
-    // Sisa yang hanya berupa host (mis. "https://example.com") bukan nama repositori.
+    // A remainder that is only a host (e.g. "https://example.com") is not a repository name.
     if let Some(scheme) = scheme_of(value) {
         if !value[scheme.len() + 3..].contains('/') {
             return String::new();
@@ -485,7 +485,7 @@ pub fn repo_name_from_url(url: &str) -> String {
     }
 }
 
-/// Pesan galat untuk URL clone, atau `None` bila bentuknya masuk akal. Git sendiri yang memeriksa sisanya.
+/// Error message for a clone URL, or `None` if its shape is plausible. Git itself checks the rest.
 pub fn validate_clone_url(url: &str) -> Option<&'static str> {
     let value = url.trim();
     if value.is_empty() {
@@ -497,7 +497,7 @@ pub fn validate_clone_url(url: &str) -> Option<&'static str> {
     if value.starts_with('-') {
         return Some("The URL cannot start with a dash");
     }
-    // Bentuk `transport::alamat` (mis. `ext::`) menjalankan program pembantu; tidak pernah diterima dari sini.
+    // The `transport::address` form (e.g. `ext::`) runs a helper program; never accepted from here.
     if let Some(end) = value.find("::") {
         let transport = &value[..end];
         if !transport.is_empty() && transport.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '.' | '-')) {
@@ -511,7 +511,7 @@ pub fn validate_clone_url(url: &str) -> Option<&'static str> {
             Some("Use an https://, ssh:// or git:// URL")
         };
     }
-    // Bentuk scp: [user@]host:path
+    // The scp form: [user@]host:path
     if let Some((host, path)) = value.split_once(':') {
         let plain = |s: &str| !s.is_empty() && !s.contains(['/', '\\', ':']);
         let with_user = host.split_once('@').is_some_and(|(user, host)| plain(user) && !user.contains('@') && plain(host));
@@ -520,7 +520,7 @@ pub fn validate_clone_url(url: &str) -> Option<&'static str> {
             return None;
         }
     }
-    // Path lokal absolut.
+    // Absolute local path.
     let bytes = value.as_bytes();
     let drive = bytes.len() >= 3 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' && matches!(bytes[2], b'/' | b'\\');
     if value.starts_with('/') || value.starts_with("~/") || drive {
@@ -529,7 +529,7 @@ pub fn validate_clone_url(url: &str) -> Option<&'static str> {
     Some("Enter a full URL, for example https://github.com/owner/repo.git")
 }
 
-/// Menggabungkan folder induk dan nama untuk ditampilkan.
+/// Joins the parent folder and a name for display.
 pub fn join_path(parent: &str, name: &str) -> String {
     if parent.is_empty() {
         return name.to_string();
@@ -538,7 +538,7 @@ pub fn join_path(parent: &str, name: &str) -> String {
     format!("{}{separator}{name}", parent.trim_end_matches(['/', '\\']))
 }
 
-/// Path absolut sebuah berkas repositori, dengan pemisah milik OS.
+/// The absolute path of a repository file, with the OS's separator.
 pub fn repo_file(root: &str, path: &str) -> String {
     let separator = if root.contains('\\') && !root.contains('/') { "\\" } else { "/" };
     format!("{}{separator}{}", root.trim_end_matches(['/', '\\']), path.replace('/', separator))
@@ -611,10 +611,10 @@ mod tests {
     fn change_rows_merge_untracked_and_sort_by_path() {
         let mut s = snapshot();
         s.unstaged = vec![change("src/z.rs", ChangeKind::Modified), change("README.md", ChangeKind::Deleted)];
-        s.untracked = vec!["catatan.txt".into(), "Src/a.rs".into()];
+        s.untracked = vec!["notes.txt".into(), "Src/a.rs".into()];
         let rows = change_rows(&s);
         assert_eq!(rows.iter().map(|r| (r.path.as_str(), r.untracked)).collect::<Vec<_>>(), [
-            ("catatan.txt", true),
+            ("notes.txt", true),
             ("README.md", false),
             ("Src/a.rs", true),
             ("src/z.rs", false),
@@ -627,9 +627,9 @@ mod tests {
         assert_eq!(split_path("src/app/main.rs"), ("main.rs", "src/app"));
         assert_eq!(split_path("main.rs"), ("main.rs", ""));
         let mut s = snapshot();
-        s.untracked = vec!["baru.txt".into()];
-        let (tracked, untracked) = split_tracked(&s, &["a.txt".into(), "baru.txt".into()]);
-        assert_eq!((tracked, untracked), (vec!["a.txt".to_string()], vec!["baru.txt".to_string()]));
+        s.untracked = vec!["new.txt".into()];
+        let (tracked, untracked) = split_tracked(&s, &["a.txt".into(), "new.txt".into()]);
+        assert_eq!((tracked, untracked), (vec!["a.txt".to_string()], vec!["new.txt".to_string()]));
     }
 
     #[test]
@@ -638,8 +638,8 @@ mod tests {
         let (title, message) = discard_prompt(&["a.txt".into()], &[]).unwrap();
         assert_eq!(title, "Discard changes in a.txt?");
         assert_eq!(message, "Changes to 1 tracked file will be lost permanently.");
-        let (title, message) = discard_prompt(&[], &["sementara.txt".into()]).unwrap();
-        assert_eq!(title, "Discard changes in sementara.txt?");
+        let (title, message) = discard_prompt(&[], &["temporary.txt".into()]).unwrap();
+        assert_eq!(title, "Discard changes in temporary.txt?");
         assert_eq!(message, "1 untracked file will be moved to the trash.");
         let (title, message) = discard_prompt(&["a".into(), "b".into()], &["c".into()]).unwrap();
         assert_eq!(title, "Discard changes in 3 files?");
@@ -656,11 +656,11 @@ mod tests {
 
     #[test]
     fn operation_texts() {
-        let merge = operation_text(&Operation::Merge { incoming: "fitur".into() });
-        assert_eq!((merge.title.as_str(), merge.detail.as_str(), merge.can_skip), ("Merge in progress", "Merging fitur", false));
-        let rebase = operation_text(&Operation::Rebase { interactive: true, step: 2, total: 5, onto: "abc1234".into(), head_name: "fitur".into(), stopped_at: None });
+        let merge = operation_text(&Operation::Merge { incoming: "feature".into() });
+        assert_eq!((merge.title.as_str(), merge.detail.as_str(), merge.can_skip), ("Merge in progress", "Merging feature", false));
+        let rebase = operation_text(&Operation::Rebase { interactive: true, step: 2, total: 5, onto: "abc1234".into(), head_name: "feature".into(), stopped_at: None });
         assert_eq!(rebase.title, "Interactive rebase in progress");
-        assert_eq!(rebase.detail, "Step 2 of 5 · fitur onto abc1234");
+        assert_eq!(rebase.detail, "Step 2 of 5 · feature onto abc1234");
         assert!(rebase.can_skip);
         let plain = operation_text(&Operation::Rebase { interactive: false, step: 1, total: 1, onto: "main".into(), head_name: String::new(), stopped_at: None });
         assert_eq!((plain.title.as_str(), plain.detail.as_str()), ("Rebase in progress", "Step 1 of 1 onto main"));
@@ -679,7 +679,7 @@ mod tests {
         assert_eq!(sync_state(&s, true), SyncState::Publish);
         s.upstream = Some(Upstream { name: "origin/main".into(), ahead: 1, behind: 2, exists: true });
         assert_eq!(sync_state(&s, true), SyncState::Sync { upstream: "origin/main".into(), ahead: 1, behind: 2 });
-        // Upstream dikonfigurasi tetapi ref-nya hilang: terbitkan lagi.
+        // Upstream is configured but its ref is gone: publish again.
         s.upstream = Some(Upstream { name: "origin/main".into(), ahead: 0, behind: 0, exists: false });
         assert_eq!(sync_state(&s, true), SyncState::Publish);
         s.head = Head::Detached { oid: "abc".into() };
@@ -688,12 +688,12 @@ mod tests {
 
     #[test]
     fn ref_names_are_validated_before_git_runs() {
-        for ok in ["fitur/login", "perbaikan/typo", "v1.0.0", "a", "rilis-2", "user@host"] {
+        for ok in ["feature/login", "bugfix/typo", "v1.0.0", "a", "release-2", "user@host"] {
             assert_eq!(validate_ref_name(ok), None, "{ok:?}");
         }
         assert_eq!(validate_ref_name("  "), Some("Enter a name"));
         assert_eq!(validate_ref_name("-x"), Some("Names cannot start with a dash"));
-        for bad in ["nama tidak sah", "a..b", "a~1", "a^", "a:b", "a?", "a*", "a[1]", "a\\b", "a@{1}", "a//b", "/a", "a/", "a.", "a.lock", "a\tb", "a\u{7f}b"] {
+        for bad in ["invalid name", "a..b", "a~1", "a^", "a:b", "a?", "a*", "a[1]", "a\\b", "a@{1}", "a//b", "/a", "a/", "a.", "a.lock", "a\tb", "a\u{7f}b"] {
             assert_eq!(validate_ref_name(bad), Some("This is not a valid Git ref name"), "{bad:?}");
         }
     }
@@ -701,7 +701,7 @@ mod tests {
     #[test]
     fn branch_picker_lists_create_branches_remotes_and_tags() {
         let refs = Refs {
-            branches: vec![branch("main", true, Some("origin/main")), branch("fitur/login", false, Some("origin/fitur/login")), branch("lokal", false, None)],
+            branches: vec![branch("main", true, Some("origin/main")), branch("feature/login", false, Some("origin/feature/login")), branch("local", false, None)],
             remote_branches: vec![RemoteBranch { name: "origin/main".into(), remote: "origin".into(), oid: "b".repeat(40) }],
             tags: vec![Tag { name: "v1".into(), oid: "c".repeat(40), annotated: false, message: String::new() }],
             remotes: Vec::new(),
@@ -710,18 +710,18 @@ mod tests {
         assert_eq!(items.iter().map(|(label, description, _)| (label.as_str(), description.as_str())).collect::<Vec<_>>(), [
             ("+ Create new branch…", ""),
             ("main", "current"),
-            ("fitur/login", "→ origin/fitur/login"),
-            ("lokal", ""),
+            ("feature/login", "→ origin/feature/login"),
+            ("local", ""),
             ("origin/main", "remote"),
             ("v1", "tag"),
         ]);
         for (_, _, target) in &items {
             assert_eq!(CheckoutTarget::decode(&target.encode()).as_ref(), Some(target));
         }
-        assert_eq!(CheckoutTarget::decode("branch:fitur:aneh"), Some(CheckoutTarget::Branch("fitur:aneh".into())));
-        assert_eq!(CheckoutTarget::decode("lain"), None);
-        assert_eq!(ref_pick_items(&refs), [("fitur/login".to_string(), "branch"), ("lokal".to_string(), "branch"), ("origin/main".to_string(), "remote branch"), ("v1".to_string(), "tag")]);
-        assert_eq!(local_name_of_remote("origin/fitur/login"), "fitur/login");
+        assert_eq!(CheckoutTarget::decode("branch:feature:odd"), Some(CheckoutTarget::Branch("feature:odd".into())));
+        assert_eq!(CheckoutTarget::decode("other"), None);
+        assert_eq!(ref_pick_items(&refs), [("feature/login".to_string(), "branch"), ("local".to_string(), "branch"), ("origin/main".to_string(), "remote branch"), ("v1".to_string(), "tag")]);
+        assert_eq!(local_name_of_remote("origin/feature/login"), "feature/login");
         assert_eq!(local_name_of_remote("origin"), "origin");
     }
 
@@ -781,7 +781,7 @@ mod tests {
             ("https://gitlab.com/group/sub/group/project.git", "project"),
             ("https://user@host.example:8443/scm/my.repo.git", "my.repo"),
             ("https://github.com/owner/repo.git?ref=main#readme", "repo"),
-            // Bentuk scp.
+            // The scp form.
             ("git@github.com:owner/repo.git", "repo"),
             ("git@github.com:owner/repo", "repo"),
             ("git@github.com:repo.git", "repo"),
@@ -791,7 +791,7 @@ mod tests {
             ("git://host.example/pub/thing.git", "thing"),
             ("file:///home/me/src/local.git", "local"),
             ("/home/me/src/local-repo/", "local-repo"),
-            // Seperti git: menunjuk ke direktori `.git` berarti repositori induknya.
+            // Like git: pointing at a `.git` directory means its parent repository.
             ("/home/me/src/local-repo/.git", "local-repo"),
             ("C:\\repos\\win-repo", "win-repo"),
         ] {
@@ -804,7 +804,7 @@ mod tests {
 
     #[test]
     fn folder_names_are_validated() {
-        for name in ["repo", "my.repo", "repo-2", "Proyek Baru", ".dotfiles", "a"] {
+        for name in ["repo", "my.repo", "repo-2", "New Project", ".dotfiles", "a"] {
             assert_eq!(validate_folder_name(name), None, "{name:?}");
         }
         let long = "x".repeat(256);
@@ -852,7 +852,7 @@ mod tests {
             ("--upload-pack=touch /tmp/pwned", "spaces"),
             ("--upload-pack=x", "dash"),
             ("-u", "dash"),
-            // Transport pembantu menjalankan program; tidak boleh lolos.
+            // A helper transport runs a program; it must not get through.
             ("ext::sh -c touch% /tmp/pwned", "spaces"),
             ("ext::sh", "not supported"),
             ("fd::17", "not supported"),

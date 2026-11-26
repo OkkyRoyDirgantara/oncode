@@ -3,12 +3,12 @@ name = "oncode-helper"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Program pembantu yang dipanggil git: askpass dan editor"
+description = "Helper program called by git: askpass and editor"
 
 [dependencies]
 serde_json.workspace = true
 
-# Mengubah PATH pengguna di registri untuk perintah `oncode` (lihat src/shell_command.rs).
+# Modifies the user's PATH in the registry for the `oncode` command (see src/shell_command.rs).
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Registry", "Win32_UI_WindowsAndMessaging"] }
 

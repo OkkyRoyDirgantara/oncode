@@ -1,19 +1,19 @@
-//! Bahasa sebuah berkas: nama tampilan, id highlighter, dan id bahasa LSP.
+//! The language of a file: display name, highlighter id, and LSP language id.
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LanguageInfo {
-    /// Nama untuk status bar.
+    /// Name for the status bar.
     pub name: &'static str,
-    /// Nama bahasa untuk highlighter (`EditorState::language`); `text` bila tidak ada grammar.
+    /// Language name for the highlighter (`EditorState::language`); `text` when there is no grammar.
     pub highlighter: &'static str,
-    /// `languageId` menurut LSP; juga kunci `lsp.servers` di pengaturan.
+    /// The LSP `languageId`; also the `lsp.servers` key in settings.
     pub lsp: &'static str,
-    /// Highlight-nya berasal dari ekstensi "Extra languages"; tanpa ekstensi itu ditampilkan polos.
+    /// Its highlighting comes from the "Extra languages" extension; without that extension it is shown plain.
     pub extra: bool,
 }
 
 impl LanguageInfo {
-    /// Nama bahasa untuk highlighter, dengan memperhitungkan ekstensi "Extra languages".
+    /// Language name for the highlighter, taking the "Extra languages" extension into account.
     pub fn highlighter_with(&self, extra_languages: bool) -> &'static str {
         if self.extra && !extra_languages {
             "text"
@@ -29,12 +29,12 @@ const fn lang(name: &'static str, highlighter: &'static str, lsp: &'static str) 
     LanguageInfo { name, highlighter, lsp, extra: false }
 }
 
-/// Bahasa yang highlight-nya disediakan ekstensi "Extra languages".
+/// Languages whose highlighting is provided by the "Extra languages" extension.
 const fn extra(name: &'static str, highlighter: &'static str, lsp: &'static str) -> LanguageInfo {
     LanguageInfo { name, highlighter, lsp, extra: true }
 }
 
-/// Bahasa menurut nama berkas atau ekstensinya.
+/// The language by file name or extension.
 pub fn language_for_path(path: &str) -> LanguageInfo {
     let file = path.rsplit(['/', '\\']).next().unwrap_or(path);
     let lower = file.to_lowercase();
@@ -55,7 +55,7 @@ pub fn language_for_path(path: &str) -> LanguageInfo {
         "js" | "mjs" | "cjs" => lang("JavaScript", "javascript", "javascript"),
         "jsx" => lang("JavaScript JSX", "javascript", "javascriptreact"),
         "json" | "jsonc" | "json5" | "jsonl" | "ndjson" => lang("JSON", "json", "json"),
-        // Berkas terjemahan Flutter.
+        // Flutter translation files.
         "arb" => lang("JSON", "json", "json"),
         "py" | "pyi" => lang("Python", "python", "python"),
         "go" => lang("Go", "go", "go"),
@@ -71,7 +71,7 @@ pub fn language_for_path(path: &str) -> LanguageInfo {
         "yml" | "yaml" => lang("YAML", "yaml", "yaml"),
         "sh" | "bash" | "zsh" => lang("Shell Script", "bash", "shellscript"),
         "sql" | "psql" | "mysql" => lang("SQL", "sql", "sql"),
-        // NoSQL: Cassandra (CQL) dan playground MongoDB.
+        // NoSQL: Cassandra (CQL) and the MongoDB playground.
         "cql" => lang("CQL", "sql", "sql"),
         "mongodb" => lang("MongoDB", "javascript", "javascript"),
         "diff" | "patch" => lang("Diff", "diff", "diff"),
@@ -128,9 +128,9 @@ mod tests {
             let info = language_for_path(file);
             assert_eq!((info.highlighter, info.lsp, info.extra), (highlighter, lsp, true), "{file}");
             assert_eq!(info.highlighter_with(true), highlighter, "{file}");
-            assert_eq!(info.highlighter_with(false), "text", "{file} tanpa ekstensi");
+            assert_eq!(info.highlighter_with(false), "text", "{file} without the extension");
         }
-        // Bahasa bawaan tidak terpengaruh ekstensi.
+        // Built-in languages are not affected by the extension.
         assert_eq!(language_for_path("main.rs").highlighter_with(false), "rust");
     }
 

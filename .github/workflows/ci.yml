@@ -1,4 +1,4 @@
-# Uji di tiga OS: backend (termasuk uji integrasi git), logika UI, dan uji tampilan tanpa layar.
+# Tests on three OSes: backend (including git integration tests), UI logic, and headless view tests.
 name: CI
 
 on:
@@ -20,7 +20,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Paket sistem (Linux)
+      - name: System packages (Linux)
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
@@ -31,36 +31,36 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
 
-      # Uji tampilan memerlukan `oncode-helper` di samping binary uji (dialog kredensial, rebase).
-      - name: Binary pendamping (oncode-helper)
+      # View tests need `oncode-helper` next to the test binary (credential dialog, rebase).
+      - name: Companion binary (oncode-helper)
         run: cargo build -p oncode-helper
 
-      # Uji tampilan berjalan tanpa layar (platform uji GPUI), jadi tidak perlu Xvfb.
-      # `--no-fail-fast`: semua kegagalan terlihat dalam satu run, tidak berhenti di berkas uji pertama.
-      - name: Uji
+      # View tests run headless (the GPUI test platform), so no Xvfb is needed.
+      # `--no-fail-fast`: all failures show up in one run instead of stopping at the first failing test file.
+      - name: Test
         run: cargo test --workspace --no-fail-fast
 
-      - name: Build aplikasi
+      - name: Build app
         run: cargo build -p oncode
 
-  # Uji integrasi git terhadap versi minimum yang didukung.
+  # Git integration tests against the minimum supported version.
   git-minimum:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - name: Bangun Git 2.40
+      - name: Build Git 2.40
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential libssl-dev libcurl4-gnutls-dev libexpat1-dev gettext zlib1g-dev
-          # Diunduh ke berkas dengan retry: satu koneksi terputus tidak menggagalkan job.
+          # Downloaded to a file with retries: a single dropped connection does not fail the job.
           curl -fsSL --retry 5 --retry-all-errors --retry-delay 5 -o git-2.40.0.tar.xz https://mirrors.edge.kernel.org/pub/software/scm/git/git-2.40.0.tar.xz
           tar -xJf git-2.40.0.tar.xz
-          # GCC 15 (Ubuntu 26.04) memakai C23, yang menjadikan `unreachable` macro bawaan dan
-          # bentrok dengan fungsi bernama sama di Git 2.40. Kompilasi dengan C17.
+          # GCC 15 (Ubuntu 26.04) uses C23, which makes `unreachable` a built-in macro that
+          # clashes with a function of the same name in Git 2.40. Compile with C17.
           make -C git-2.40.0 -j"$(nproc)" prefix="$HOME/git-2.40" NO_TCLTK=1 CFLAGS="-g -O2 -std=gnu17" install
           echo "$HOME/git-2.40/bin" >> "$GITHUB_PATH"
       - run: git --version
-      # Semua berkas uji dijalankan walau ada yang gagal, supaya semua ketidakcocokan versi terlihat sekaligus.
+      # All test files run even if some fail, so every version mismatch is visible at once.
       - run: cargo test -p oncode-git -p oncode-helper --no-fail-fast

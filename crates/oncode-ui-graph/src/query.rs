@@ -1,8 +1,8 @@
-//! Logika murni tampilan Graph: kueri log dari pilihan toolbar dan aturan pemilihan commit.
+//! Pure logic of the Graph view: the log query from toolbar choices and the commit selection rules.
 
 use oncode_git::{GraphRow, LogQuery, Refs};
 
-/// Nilai pilihan cakupan: `"all"`, `"current"`, atau `"ref:<nama>"`.
+/// Scope choice values: `"all"`, `"current"`, or `"ref:<name>"`.
 pub fn build_query(scope: &str, grep: &str, author: &str, path: &str) -> LogQuery {
     let mut query = LogQuery::default();
     if scope == "all" {
@@ -22,18 +22,18 @@ pub fn build_query(scope: &str, grep: &str, author: &str, path: &str) -> LogQuer
     query
 }
 
-/// Daftar disaring (pesan, penulis, atau path), sehingga hubungan leluhur tidak bisa disimpulkan dari baris.
+/// The list is filtered (message, author, or path), so ancestry cannot be inferred from the rows.
 pub fn is_filtered(query: &LogQuery) -> bool {
     query.grep.is_some() || query.author.is_some() || query.path.is_some()
 }
 
-/// Cakupan `ref:<nama>` masih menunjuk ref yang ada.
+/// A `ref:<name>` scope still points to an existing ref.
 pub fn scope_exists(scope: &str, refs: Option<&Refs>) -> bool {
     let (Some(name), Some(refs)) = (scope.strip_prefix("ref:"), refs) else { return true };
     refs.branches.iter().any(|b| b.name == name) || refs.remote_branches.iter().any(|b| b.name == name) || refs.tags.iter().any(|t| t.name == name)
 }
 
-/// Label cakupan untuk tombol di toolbar.
+/// The scope label for the toolbar button.
 pub fn scope_label(scope: &str) -> String {
     match scope {
         "all" => "All branches".into(),
@@ -42,8 +42,8 @@ pub fn scope_label(scope: &str) -> String {
     }
 }
 
-/// Pilihan berikutnya setelah sebuah commit diklik. Klik biasa memilih satu commit;
-/// Ctrl/Cmd-klik menambah atau melepas commit kedua (paling banyak dua, untuk perbandingan).
+/// The next selection after a commit is clicked. A plain click selects one commit;
+/// Ctrl/Cmd-click adds or removes a second commit (at most two, for comparison).
 pub fn next_selection(previous: &[String], oid: &str, additive: bool) -> Vec<String> {
     if !additive {
         return vec![oid.to_string()];
@@ -57,8 +57,8 @@ pub fn next_selection(previous: &[String], oid: &str, additive: bool) -> Vec<Str
     }
 }
 
-/// Mengurutkan commit terpilih menjadi [lama, .., baru] menurut posisinya di daftar
-/// (baris lebih bawah = lebih lama). Bila salah satunya belum dimuat, urutan pemilihan dipakai.
+/// Orders the selected commits as [old, .., new] by their position in the list
+/// (a lower row = older). If any of them is not loaded yet, the selection order is used.
 pub fn order_oldest_first(rows: &[GraphRow], oids: &[String]) -> Vec<String> {
     let mut indexed: Vec<(usize, &String)> = Vec::with_capacity(oids.len());
     for oid in oids {
@@ -106,7 +106,7 @@ mod tests {
             assert!(scope_exists(scope, Some(&refs)), "{scope}");
         }
         assert!(!scope_exists("ref:gone", Some(&refs)));
-        assert!(scope_exists("ref:gone", None), "sebelum ref dimuat, cakupan dianggap ada");
+        assert!(scope_exists("ref:gone", None), "before refs are loaded, the scope is assumed to exist");
         assert_eq!(scope_label("all"), "All branches");
         assert_eq!(scope_label("current"), "Current branch");
         assert_eq!(scope_label("ref:origin/main"), "origin/main");
@@ -115,27 +115,27 @@ mod tests {
     #[test]
     fn selection_rules() {
         let (a, b, c) = (oid(1), oid(2), oid(3));
-        // Klik biasa memilih tepat satu commit.
+        // A plain click selects exactly one commit.
         assert_eq!(next_selection(&[], &a, false), [a.clone()]);
         assert_eq!(next_selection(&[a.clone(), b.clone()], &c, false), [c.clone()]);
         assert_eq!(next_selection(&[a.clone()], &a, false), [a.clone()]);
-        // Ctrl/Cmd-klik menambah commit kedua.
+        // Ctrl/Cmd-click adds a second commit.
         assert_eq!(next_selection(&[], &a, true), [a.clone()]);
         assert_eq!(next_selection(&[a.clone()], &b, true), [a.clone(), b.clone()]);
-        // Ctrl/Cmd-klik pada yang sudah terpilih melepasnya.
+        // Ctrl/Cmd-click on an already selected one deselects it.
         assert_eq!(next_selection(&[a.clone(), b.clone()], &b, true), [a.clone()]);
         assert_eq!(next_selection(&[a.clone(), b.clone()], &a, true), [b.clone()]);
         assert!(next_selection(&[a.clone()], &a, true).is_empty());
-        // Tidak pernah lebih dari dua: yang ketiga menggantikan yang kedua.
+        // Never more than two: the third replaces the second.
         assert_eq!(next_selection(&[a.clone(), b], &c, true), [a, c]);
     }
 
     #[test]
     fn order_oldest_first_follows_list_position() {
-        let rows = linear_rows(0, 10); // baris 0 = terbaru
+        let rows = linear_rows(0, 10); // row 0 = newest
         assert_eq!(order_oldest_first(&rows, &[oid(2), oid(7)]), [oid(7), oid(2)]);
         assert_eq!(order_oldest_first(&rows, &[oid(7), oid(2)]), [oid(7), oid(2)]);
-        // Commit yang belum dimuat: urutan pemilihan dipertahankan.
+        // A commit that is not loaded yet: the selection order is kept.
         assert_eq!(order_oldest_first(&rows, &[oid(2), oid(99)]), [oid(2), oid(99)]);
     }
 }

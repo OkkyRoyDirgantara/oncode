@@ -1,8 +1,8 @@
-//! Tab diff: dua versi sebuah berkas (berdampingan atau menyatu) di atas komponen `Diff`,
-//! dengan stage/unstage/discard per perubahan dan per baris terpilih.
+//! Diff tab: two versions of a file (side by side or unified) on top of the `Diff` component,
+//! with stage/unstage/discard per change and per selected line.
 //!
-//! Patch yang ditampilkan dibuat sendiri dari kedua isi (lihat `lines.rs`), sehingga perubahan
-//! di layar persis sama dengan yang diterjemahkan menjadi `SpliceOp`.
+//! The displayed patch is built here from the two contents (see `lines.rs`), so the changes
+//! on screen are exactly the ones that get translated into `SpliceOp`.
 
 use std::sync::Arc;
 
@@ -26,13 +26,13 @@ use serde_json::{json, Value};
 use crate::lines::{Direction, LineDiff, LineSelection, Side};
 use crate::util::{base_name, repo_file};
 
-/// Nama berkas di dalam patch buatan; path aslinya ditampilkan di toolbar.
+/// File name inside the generated patch; the real path is shown in the toolbar.
 pub const PATCH_PATH: &str = "file";
-/// Di atas jumlah baris ini patch tidak lagi memuat seluruh berkas.
+/// Above this number of lines the patch no longer contains the whole file.
 const FULL_CONTEXT_MAX_LINES: u32 = 40_000;
 const LIMITED_CONTEXT: u32 = 200;
 
-/// Parameter sebuah tab diff.
+/// Parameters of a diff tab.
 #[derive(Debug, Clone, PartialEq)]
 pub struct DiffParams {
     pub root: String,
@@ -93,7 +93,7 @@ impl DiffParams {
     }
 }
 
-/// Aksi yang tersedia untuk sebuah sumber diff: (label, target).
+/// Actions available for a diff source: (label, target).
 fn actions_for(source: &DiffSource) -> &'static [(&'static str, SpliceTarget)] {
     match source {
         DiffSource::Worktree => &[("Stage", SpliceTarget::Stage), ("Discard", SpliceTarget::Discard)],
@@ -126,17 +126,17 @@ fn target_icon(target: SpliceTarget) -> Lucide {
     }
 }
 
-/// Tata letak yang terakhir dipilih; berlaku untuk tab diff yang dibuka berikutnya.
+/// The layout chosen last; applies to diff tabs opened afterwards.
 struct PreferredMode(DiffMode);
 
 impl Global for PreferredMode {}
 
-/// Hasil pengolahan `DiffContents` di thread latar.
+/// Result of processing `DiffContents` on a background thread.
 struct Prepared {
     contents: DiffContents,
     model: Arc<LineDiff>,
     files: Vec<DiffFile>,
-    /// Alasan isi tidak bisa dibandingkan sebagai teks.
+    /// Reason the contents cannot be compared as text.
     problem: Option<String>,
 }
 
@@ -180,9 +180,9 @@ pub struct DiffView {
     state: Entity<DiffState>,
     loaded: Option<Loaded>,
     error: Option<String>,
-    /// Sebuah aksi (stage/unstage/discard) sedang berjalan.
+    /// An action (stage/unstage/discard) is in progress.
     busy: bool,
-    /// Baris sisi B yang ditampilkan lagi setelah diff dimuat ulang akibat sebuah aksi.
+    /// Side B line to show again after the diff is reloaded because of an action.
     restore_line: Option<u32>,
     focus_handle: FocusHandle,
     _load: Task<()>,
@@ -198,7 +198,7 @@ impl DiffView {
                 cx.notify();
             }
         })];
-        // Isi commit, rentang revisi, dan stash tidak berubah; yang lain mengikuti keadaan repositori.
+        // Commit, revision range, and stash contents don't change; the others follow the repository state.
         if matches!(params.source, DiffSource::Worktree | DiffSource::Staged) {
             subscriptions.push(cx.subscribe_in(&repos(cx), window, |this, _, event: &ReposEvent, window, cx| {
                 if matches!(event, ReposEvent::Changed(root) if *root == this.params.root) {
@@ -245,12 +245,12 @@ impl DiffView {
         &self.state
     }
 
-    /// Diff sudah dimuat (berhasil atau tidak).
+    /// The diff has been loaded (successfully or not).
     pub fn is_loaded(&self) -> bool {
         self.loaded.is_some() || self.error.is_some()
     }
 
-    /// Jumlah perubahan yang ditampilkan.
+    /// Number of changes displayed.
     pub fn change_count(&self) -> usize {
         self.loaded.as_ref().map_or(0, |loaded| loaded.model.chunks.len())
     }
@@ -270,7 +270,7 @@ impl DiffView {
         self._load = cx.spawn_in(window, async move |this, cx| {
             let prepared = match task.await {
                 Ok(contents) => {
-                    // Isi yang sama tidak dipasang ulang, agar gulir dan pilihan tidak hilang.
+                    // Identical contents are not reinstalled, so scroll position and selection are kept.
                     let unchanged = this
                         .read_with(cx, |this, _| {
                             this.loaded.as_ref().is_some_and(|loaded| loaded.contents.a.fingerprint == contents.a.fingerprint && loaded.contents.b.fingerprint == contents.b.fingerprint)
@@ -314,7 +314,7 @@ impl DiffView {
         cx.notify();
     }
 
-    // ----- Aksi -----
+    // ----- Actions -----
 
     fn direction(target: SpliceTarget) -> Direction {
         match target {
@@ -323,7 +323,7 @@ impl DiffView {
         }
     }
 
-    /// Stage/unstage/discard satu perubahan (indeks sesuai urutan di layar).
+    /// Stage/unstage/discard a single change (index follows the on-screen order).
     pub fn apply_change(&mut self, index: usize, target: SpliceTarget, window: &mut Window, cx: &mut Context<Self>) {
         let Some(loaded) = &self.loaded else { return };
         let Some(chunk) = loaded.model.chunks.get(index) else { return };
@@ -332,7 +332,7 @@ impl DiffView {
         self.apply(target, ops, anchor, window, cx);
     }
 
-    /// Baris yang sedang dipilih, dalam bentuk yang dipahami `LineDiff`.
+    /// The currently selected lines, in the form `LineDiff` understands.
     fn selection(&self, cx: &App) -> Option<LineSelection> {
         let model = &self.loaded.as_ref()?.model;
         let range = self.state.read(cx).selected_lines()?;
@@ -348,7 +348,7 @@ impl DiffView {
         })
     }
 
-    /// Stage/unstage/discard hanya baris yang dipilih.
+    /// Stage/unstage/discard only the selected lines.
     pub fn apply_selection(&mut self, target: SpliceTarget, window: &mut Window, cx: &mut Context<Self>) {
         let Some(loaded) = &self.loaded else { return };
         let Some(selection) = self.selection(cx) else {
@@ -369,7 +369,7 @@ impl DiffView {
             overlay::toast_info("The selection does not contain any changes.", window, cx);
             return;
         }
-        // Diff menampilkan isi yang tersimpan; perubahan yang belum disimpan harus disimpan dulu.
+        // The diff shows saved content; unsaved changes must be saved first.
         if self.params.source == DiffSource::Worktree {
             let dirty = self.env.workbench.upgrade().and_then(|workbench| buffers(workbench.read(cx))).and_then(|buffers| buffers.read(cx).get(&self.absolute_path())).filter(|buffer| buffer.read(cx).is_dirty());
             if let Some(buffer) = dirty {
@@ -426,7 +426,7 @@ impl DiffView {
         .detach();
     }
 
-    /// Stage/unstage/discard seluruh berkas.
+    /// Stage/unstage/discard the whole file.
     fn apply_file(&mut self, target: SpliceTarget, window: &mut Window, cx: &mut Context<Self>) {
         let (core, root, path) = (self.env.core.clone(), self.params.root.clone(), self.params.path.clone());
         let mut paths = vec![path.clone()];
@@ -478,7 +478,7 @@ impl DiffView {
         self.state.update(cx, |state, cx| if forward { state.next_change(cx) } else { state.previous_change(cx) });
     }
 
-    /// Membuka berkas kerja di baris pertama yang berubah.
+    /// Opens the working file at the first changed line.
     fn open_working_file(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(workbench) = self.env.workbench.upgrade() else { return };
         let line = self.loaded.as_ref().and_then(|loaded| loaded.model.first_changed_line());
@@ -486,11 +486,11 @@ impl DiffView {
         if let Some(line) = line {
             options = options.at(line, 0, None);
         }
-        // Ditunda: penangan klik bisa berjalan selagi `Workbench` diperbarui.
+        // Deferred: the click handler may run while `Workbench` is being updated.
         window.defer(cx, move |window, cx| workbench.update(cx, |workbench, cx| open_file(workbench, options, window, cx)));
     }
 
-    /// Klik pada sebuah baris memilih baris itu; Shift+klik memperluas pilihan di sisi yang sama.
+    /// Clicking a line selects that line; Shift+click extends the selection on the same side.
     fn select_line(&mut self, position: &DiffLinePosition, extend: bool, cx: &mut Context<Self>) {
         self.state.update(cx, |state, cx| {
             let start = state.selected_lines().filter(|range| extend && range.side() == position.side() && range.end_side() == position.side()).map(|range| range.start().min(range.end()));
@@ -503,7 +503,7 @@ impl DiffView {
         cx.notify();
     }
 
-    // ----- Tampilan -----
+    // ----- View -----
 
     fn render_toolbar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
@@ -620,7 +620,7 @@ impl DiffView {
         let split = self.mode(cx) == DiffMode::Split;
         let busy = self.busy;
 
-        // Bilah aksi di bawah baris terakhir tiap perubahan.
+        // Action bar below the last line of each change.
         let annotations: Vec<DiffAnnotation> = if actions.is_empty() {
             Vec::new()
         } else {

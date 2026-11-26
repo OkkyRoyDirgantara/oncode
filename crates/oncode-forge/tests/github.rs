@@ -1,4 +1,4 @@
-//! Penyedia GitHub terhadap server HTTP tiruan.
+//! The GitHub provider against a mock HTTP server.
 
 mod common;
 
@@ -11,7 +11,7 @@ use serde_json::{json, Value};
 use wiremock::matchers::{body_json, method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-const TOKEN: &str = "gho_token_rahasia_123";
+const TOKEN: &str = "gho_token_secret_123";
 
 fn client(server: &MockServer) -> Box<dyn ForgeProvider + Send + Sync> {
     provider(&ForgeHost::github(), TOKEN, Some(&server.uri()))
@@ -44,7 +44,7 @@ fn pull_json(number: u32, title: &str) -> Value {
         "draft": false,
         "merged_at": null,
         "user": { "login": "octocat", "avatar_url": "https://avatars.githubusercontent.com/u/1?v=4" },
-        "head": { "ref": "fitur", "sha": "6dcb09b5b57875f334f61aebed695e2e4193db5e", "repo": { "full_name": "octo/hello" } },
+        "head": { "ref": "feature", "sha": "6dcb09b5b57875f334f61aebed695e2e4193db5e", "repo": { "full_name": "octo/hello" } },
         "base": { "ref": "main", "sha": "aaaa09b5b57875f334f61aebed695e2e4193db5e", "repo": { "full_name": "octo/hello" } },
         "updated_at": "2011-01-26T19:01:12Z",
         "html_url": format!("https://github.com/octo/hello/pull/{number}"),
@@ -76,7 +76,7 @@ async fn current_user_and_request_headers() {
 
     let requests = received(&server).await;
     let request = &requests[0];
-    assert_eq!(header(request, "authorization"), Some("Bearer gho_token_rahasia_123"));
+    assert_eq!(header(request, "authorization"), Some("Bearer gho_token_secret_123"));
     assert_eq!(header(request, "user-agent"), Some("OnCode"));
     assert_eq!(header(request, "accept"), Some("application/vnd.github+json"));
     assert_eq!(header(request, "x-github-api-version"), Some("2022-11-28"));
@@ -101,23 +101,23 @@ async fn enterprise_host_shapes_the_account() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/user"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "login": "budi" })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "login": "alice" })))
         .mount(&server)
         .await;
 
-    let host = ForgeHost::new(ForgeKind::GitHub, "https://GHE.Perusahaan.id/");
+    let host = ForgeHost::new(ForgeKind::GitHub, "https://GHE.Example.com/");
     let account = provider(&host, TOKEN, Some(&server.uri())).current_user().await.expect("current_user");
-    assert_eq!(account.id, "github:ghe.perusahaan.id:budi");
-    assert_eq!(account.host, "https://GHE.Perusahaan.id");
+    assert_eq!(account.id, "github:ghe.example.com:alice");
+    assert_eq!(account.host, "https://GHE.Example.com");
 }
 
 #[tokio::test]
 async fn list_repos_pages_through_link_header() {
     let server = MockServer::start().await;
-    let mut private_fork = repo_json("octo/rahasia");
+    let mut private_fork = repo_json("octo/secret");
     private_fork["private"] = json!(true);
     private_fork["fork"] = json!(true);
-    private_fork["description"] = json!("Repositori privat");
+    private_fork["description"] = json!("Private repository");
     Mock::given(method("GET"))
         .and(path("/user/repos"))
         .and(query_param("sort", "updated"))
@@ -143,14 +143,14 @@ async fn list_repos_pages_through_link_header() {
         .respond_with(
             ResponseTemplate::new(200)
                 .insert_header("link", "<https://api.github.com/user/repos?per_page=30&page=3>; rel=\"prev\"")
-                .set_body_json(json!([repo_json("octo/terakhir")])),
+                .set_body_json(json!([repo_json("octo/last")])),
         )
         .expect(1)
         .mount(&server)
         .await;
 
     let client = client(&server);
-    // Halaman 0 diperlakukan sebagai halaman 1.
+    // Page 0 is treated as page 1.
     let first = client.list_repos("", 0).await.expect("list_repos");
     assert_eq!(first.next_page, Some(2));
     assert_eq!(first.items.len(), 2);
@@ -167,11 +167,11 @@ async fn list_repos_pages_through_link_header() {
     let secret = &first.items[1];
     assert!(secret.private);
     assert!(secret.fork);
-    assert_eq!(secret.description, "Repositori privat");
+    assert_eq!(secret.description, "Private repository");
 
     let last = client.list_repos("  ", 4).await.expect("list_repos");
     assert_eq!(last.next_page, None);
-    assert_eq!(last.items[0].full_name, "octo/terakhir");
+    assert_eq!(last.items[0].full_name, "octo/last");
 }
 
 #[tokio::test]
@@ -195,7 +195,7 @@ async fn list_repos_with_query_scans_and_filters() {
         .and(query_param("per_page", "100"))
         .and(query_param("page", "2"))
         .respond_with(
-            ResponseTemplate::new(200).set_body_json(json!([repo_json("tim/oncode-docs"), repo_json("tim/lain")])),
+            ResponseTemplate::new(200).set_body_json(json!([repo_json("team/oncode-docs"), repo_json("team/other")])),
         )
         .expect(1)
         .mount(&server)
@@ -203,14 +203,14 @@ async fn list_repos_with_query_scans_and_filters() {
 
     let found = client(&server).list_repos(" oncode ", 1).await.expect("list_repos");
     let names: Vec<&str> = found.items.iter().map(|r| r.full_name.as_str()).collect();
-    assert_eq!(names, ["octo/OnCode", "tim/oncode-docs"]);
+    assert_eq!(names, ["octo/OnCode", "team/oncode-docs"]);
     assert_eq!(found.next_page, None);
 }
 
 #[tokio::test]
 async fn list_repos_with_query_stops_after_scan_budget() {
     let server = MockServer::start().await;
-    // Setiap halaman menunjuk ke halaman berikutnya dan tidak pernah cocok.
+    // Every page points to the next page and never matches.
     for page in 1..=6u32 {
         Mock::given(method("GET"))
             .and(path("/user/repos"))
@@ -228,9 +228,9 @@ async fn list_repos_with_query_stops_after_scan_budget() {
             .await;
     }
 
-    let found = client(&server).list_repos("tidak-ada", 1).await.expect("list_repos");
+    let found = client(&server).list_repos("does-not-exist", 1).await.expect("list_repos");
     assert!(found.items.is_empty());
-    // Lima halaman dipindai; pemanggil melanjutkan dari halaman 6.
+    // Five pages are scanned; the caller continues from page 6.
     assert_eq!(found.next_page, Some(6));
     assert_eq!(received(&server).await.len(), 5);
 }
@@ -238,10 +238,10 @@ async fn list_repos_with_query_stops_after_scan_budget() {
 #[tokio::test]
 async fn list_pull_requests_open_and_all() {
     let server = MockServer::start().await;
-    let mut from_fork = pull_json(8, "Dari fork");
-    from_fork["head"]["repo"] = json!({ "full_name": "kontributor/hello" });
+    let mut from_fork = pull_json(8, "From fork");
+    from_fork["head"]["repo"] = json!({ "full_name": "contributor/hello" });
     from_fork["draft"] = json!(true);
-    let mut deleted_fork = pull_json(6, "Fork terhapus");
+    let mut deleted_fork = pull_json(6, "Deleted fork");
     deleted_fork["head"]["repo"] = Value::Null;
     deleted_fork["user"] = Value::Null;
     Mock::given(method("GET"))
@@ -254,14 +254,14 @@ async fn list_pull_requests_open_and_all() {
         .respond_with(
             ResponseTemplate::new(200)
                 .insert_header("link", "<https://api.github.com/repositories/1/pulls?state=open&page=2>; rel=\"next\"")
-                .set_body_json(json!([pull_json(9, "Tambah fitur"), from_fork, deleted_fork])),
+                .set_body_json(json!([pull_json(9, "Add feature"), from_fork, deleted_fork])),
         )
         .expect(1)
         .mount(&server)
         .await;
-    let mut closed = pull_json(3, "Ditutup");
+    let mut closed = pull_json(3, "Closed");
     closed["state"] = json!("closed");
-    let mut merged = pull_json(2, "Sudah masuk");
+    let mut merged = pull_json(2, "Already merged");
     merged["state"] = json!("closed");
     merged["merged_at"] = json!("2011-01-26T19:01:12Z");
     Mock::given(method("GET"))
@@ -282,12 +282,12 @@ async fn list_pull_requests_open_and_all() {
     assert_eq!(open.items.len(), 3);
     let first = &open.items[0];
     assert_eq!(first.number, 9);
-    assert_eq!(first.title, "Tambah fitur");
+    assert_eq!(first.title, "Add feature");
     assert_eq!(first.state, PrState::Open);
     assert!(!first.draft);
     assert_eq!(first.author, "octocat");
     assert_eq!(first.author_avatar.as_deref(), Some("https://avatars.githubusercontent.com/u/1?v=4"));
-    assert_eq!(first.source_branch, "fitur");
+    assert_eq!(first.source_branch, "feature");
     assert_eq!(first.target_branch, "main");
     assert_eq!(first.head_sha, "6dcb09b5b57875f334f61aebed695e2e4193db5e");
     assert_eq!(first.updated_at, 1_296_068_472.0);
@@ -320,7 +320,7 @@ async fn list_pull_requests_mine_and_review_requested_use_search() {
                 .set_body_json(json!({
                     "total_count": 31,
                     "incomplete_results": false,
-                    "items": [{ "number": 7, "title": "Punya saya" }, { "number": 5, "title": "Juga punya saya" }],
+                    "items": [{ "number": 7, "title": "Mine" }, { "number": 5, "title": "Also mine" }],
                 })),
         )
         .expect(1)
@@ -339,13 +339,13 @@ async fn list_pull_requests_mine_and_review_requested_use_search() {
         .await;
     Mock::given(method("GET"))
         .and(path("/repos/octo/hello/pulls/7"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(pull_json(7, "Punya saya")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(pull_json(7, "Mine")))
         .expect(1)
         .mount(&server)
         .await;
     Mock::given(method("GET"))
         .and(path("/repos/octo/hello/pulls/5"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(pull_json(5, "Juga punya saya")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(pull_json(5, "Also mine")))
         .expect(2)
         .mount(&server)
         .await;
@@ -353,32 +353,32 @@ async fn list_pull_requests_mine_and_review_requested_use_search() {
     let client = client(&server);
     let mine = client.list_pull_requests(&hello(), PrFilter::Mine, 1).await.expect("mine");
     assert_eq!(mine.next_page, Some(2));
-    // Urutan hasil pencarian dipertahankan, dan branch terisi dari detail PR.
+    // The order of the search results is preserved, and the branch is filled from the PR detail.
     assert_eq!(mine.items.iter().map(|p| p.number).collect::<Vec<_>>(), [7, 5]);
-    assert_eq!(mine.items[0].source_branch, "fitur");
+    assert_eq!(mine.items[0].source_branch, "feature");
     assert_eq!(mine.items[0].head_sha, "6dcb09b5b57875f334f61aebed695e2e4193db5e");
 
     let review = client.list_pull_requests(&hello(), PrFilter::ReviewRequested, 3).await.expect("review");
     assert_eq!(review.next_page, None);
     assert_eq!(review.items.iter().map(|p| p.number).collect::<Vec<_>>(), [5]);
 
-    // Query pencarian dikirim ter-encode sebagai satu parameter `q`.
+    // The search query is sent encoded as a single `q` parameter.
     let requests = received(&server).await;
-    let search = requests.iter().find(|r| r.url.path() == "/search/issues").expect("permintaan pencarian");
+    let search = requests.iter().find(|r| r.url.path() == "/search/issues").expect("search request");
     assert_eq!(query_value(search, "q").as_deref(), Some("repo:octo/hello is:pr is:open author:@me"));
 }
 
 #[tokio::test]
 async fn get_pull_request_merged_with_reviewers() {
     let server = MockServer::start().await;
-    let mut pull = pull_json(12, "Perbaiki login");
+    let mut pull = pull_json(12, "Fix login");
     pull["state"] = json!("closed");
     pull["merged"] = json!(true);
     pull["merged_at"] = json!("2011-01-26T19:01:12Z");
-    pull["body"] = json!("## Ringkasan\n\nMemperbaiki *login*.");
-    pull["requested_reviewers"] = json!([{ "login": "siti" }]);
-    pull["requested_teams"] = json!([{ "name": "Tim Inti", "slug": "tim-inti" }]);
-    pull["labels"] = json!([{ "name": "bug" }, { "name": "prioritas" }]);
+    pull["body"] = json!("## Summary\n\nFixes *login*.");
+    pull["requested_reviewers"] = json!([{ "login": "carol" }]);
+    pull["requested_teams"] = json!([{ "name": "Core Team", "slug": "core-team" }]);
+    pull["labels"] = json!([{ "name": "bug" }, { "name": "priority" }]);
     pull["mergeable"] = Value::Null;
     pull["commits"] = json!(3);
     pull["changed_files"] = json!(5);
@@ -394,10 +394,10 @@ async fn get_pull_request_merged_with_reviewers() {
         .and(path("/repos/octo/hello/pulls/12/reviews"))
         .and(query_param("per_page", "100"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!([
-            { "user": { "login": "agus" }, "state": "APPROVED" },
-            // Balasan penulis sendiri dan review ganda tidak menambah reviewer.
+            { "user": { "login": "dave" }, "state": "APPROVED" },
+            // The author's own replies and duplicate reviews do not add reviewers.
             { "user": { "login": "octocat" }, "state": "COMMENTED" },
-            { "user": { "login": "agus" }, "state": "COMMENTED" },
+            { "user": { "login": "dave" }, "state": "COMMENTED" },
             { "user": null, "state": "COMMENTED" },
         ])))
         .expect(1)
@@ -408,9 +408,9 @@ async fn get_pull_request_merged_with_reviewers() {
     assert_eq!(detail.pull_request.number, 12);
     assert_eq!(detail.pull_request.state, PrState::Merged);
     assert!(!detail.pull_request.draft);
-    assert_eq!(detail.body, "## Ringkasan\n\nMemperbaiki *login*.");
-    assert_eq!(detail.reviewers, ["siti", "Tim Inti", "agus"]);
-    assert_eq!(detail.labels, ["bug", "prioritas"]);
+    assert_eq!(detail.body, "## Summary\n\nFixes *login*.");
+    assert_eq!(detail.reviewers, ["carol", "Core Team", "dave"]);
+    assert_eq!(detail.labels, ["bug", "priority"]);
     assert_eq!(detail.mergeable, None);
     assert_eq!(detail.commits, 3);
     assert_eq!(detail.changed_files, 5);
@@ -421,7 +421,7 @@ async fn get_pull_request_merged_with_reviewers() {
 #[tokio::test]
 async fn get_pull_request_draft() {
     let server = MockServer::start().await;
-    let mut pull = pull_json(13, "Masih dikerjakan");
+    let mut pull = pull_json(13, "Work in progress");
     pull["draft"] = json!(true);
     pull["body"] = Value::Null;
     pull["mergeable"] = json!(false);
@@ -471,18 +471,18 @@ async fn list_checks_merges_check_runs_and_statuses() {
                 .set_body_json(json!({
                     "total_count": 9,
                     "check_runs": [
-                        run("antre", "queued", Value::Null),
-                        run("jalan", "in_progress", Value::Null),
-                        run("lulus", "completed", json!("success")),
-                        run("gagal", "completed", json!("failure")),
-                        run("habis-waktu", "completed", json!("timed_out")),
+                        run("queued", "queued", Value::Null),
+                        run("running", "in_progress", Value::Null),
+                        run("passed", "completed", json!("success")),
+                        run("failed", "completed", json!("failure")),
+                        run("timed-out", "completed", json!("timed_out")),
                     ],
                 })),
         )
         .expect(1)
         .mount(&server)
         .await;
-    let mut without_html_url = run("netral", "completed", json!("neutral"));
+    let mut without_html_url = run("neutral", "completed", json!("neutral"));
     without_html_url["html_url"] = Value::Null;
     Mock::given(method("GET"))
         .and(path("/repos/octo/hello/commits/abc123/check-runs"))
@@ -491,8 +491,8 @@ async fn list_checks_merges_check_runs_and_statuses() {
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "total_count": 9,
             "check_runs": [
-                run("batal", "completed", json!("cancelled")),
-                run("lewati", "completed", json!("skipped")),
+                run("canceled", "completed", json!("cancelled")),
+                run("skipped", "completed", json!("skipped")),
                 without_html_url,
             ],
         })))
@@ -508,7 +508,7 @@ async fn list_checks_merges_check_runs_and_statuses() {
                 { "context": "ci/jenkins", "state": "success", "target_url": "https://jenkins.example.com/1" },
                 { "context": "ci/lint", "state": "failure", "target_url": null },
                 { "context": "ci/deploy", "state": "error", "target_url": "" },
-                { "context": "ci/tunggu", "state": "pending", "target_url": null },
+                { "context": "ci/waiting", "state": "pending", "target_url": null },
             ],
         })))
         .expect(1)
@@ -520,21 +520,21 @@ async fn list_checks_merges_check_runs_and_statuses() {
     assert_eq!(
         states,
         [
-            ("antre", CheckState::Pending),
-            ("jalan", CheckState::Running),
-            ("lulus", CheckState::Success),
-            ("gagal", CheckState::Failure),
-            ("habis-waktu", CheckState::Failure),
-            ("batal", CheckState::Cancelled),
-            ("lewati", CheckState::Skipped),
-            ("netral", CheckState::Neutral),
+            ("queued", CheckState::Pending),
+            ("running", CheckState::Running),
+            ("passed", CheckState::Success),
+            ("failed", CheckState::Failure),
+            ("timed-out", CheckState::Failure),
+            ("canceled", CheckState::Cancelled),
+            ("skipped", CheckState::Skipped),
+            ("neutral", CheckState::Neutral),
             ("ci/jenkins", CheckState::Success),
             ("ci/lint", CheckState::Failure),
             ("ci/deploy", CheckState::Failure),
-            ("ci/tunggu", CheckState::Pending),
+            ("ci/waiting", CheckState::Pending),
         ]
     );
-    assert_eq!(checks[0].url.as_deref(), Some("https://github.com/octo/hello/runs/antre"));
+    assert_eq!(checks[0].url.as_deref(), Some("https://github.com/octo/hello/runs/queued"));
     assert_eq!(checks[7].url.as_deref(), Some("https://ci.example.com/detail"));
     assert_eq!(checks[8].url.as_deref(), Some("https://jenkins.example.com/1"));
     assert_eq!(checks[9].url, None);
@@ -557,22 +557,22 @@ async fn list_checks_empty_when_commit_has_no_ci() {
 
     let client = client(&server);
     assert!(client.list_checks(&hello(), "abc123").await.expect("checks").is_empty());
-    let err = client.list_checks(&hello(), "  ").await.expect_err("sha kosong");
+    let err = client.list_checks(&hello(), "  ").await.expect_err("empty sha");
     assert_error(&err, ForgeErrorCode::InvalidInput, TOKEN);
 }
 
 #[tokio::test]
 async fn create_pull_request_sends_expected_body() {
     let server = MockServer::start().await;
-    let mut created = pull_json(21, "Tambah fitur ekspor");
+    let mut created = pull_json(21, "Add export feature");
     created["draft"] = json!(true);
     Mock::given(method("POST"))
         .and(path("/repos/octo/hello/pulls"))
         .and(body_json(json!({
-            "title": "Tambah fitur ekspor",
-            "head": "fitur",
+            "title": "Add export feature",
+            "head": "feature",
             "base": "main",
-            "body": "Deskripsi **Markdown**.",
+            "body": "Description **Markdown**.",
             "draft": true,
         })))
         .respond_with(ResponseTemplate::new(201).set_body_json(created))
@@ -581,9 +581,9 @@ async fn create_pull_request_sends_expected_body() {
         .await;
 
     let input = NewPullRequest {
-        title: " Tambah fitur ekspor ".into(),
-        body: "Deskripsi **Markdown**.".into(),
-        source_branch: "fitur".into(),
+        title: " Add export feature ".into(),
+        body: "Description **Markdown**.".into(),
+        source_branch: "feature".into(),
         target_branch: "main".into(),
         draft: true,
     };
@@ -594,7 +594,7 @@ async fn create_pull_request_sends_expected_body() {
 
     let requests = received(&server).await;
     assert_eq!(header(&requests[0], "content-type"), Some("application/json"));
-    assert_eq!(header(&requests[0], "authorization"), Some("Bearer gho_token_rahasia_123"));
+    assert_eq!(header(&requests[0], "authorization"), Some("Bearer gho_token_secret_123"));
 }
 
 #[tokio::test]
@@ -604,7 +604,7 @@ async fn create_pull_request_rejects_invalid_input_and_maps_422() {
         .and(path("/repos/octo/hello/pulls"))
         .respond_with(ResponseTemplate::new(422).set_body_json(json!({
             "message": "Validation Failed",
-            "errors": [{ "resource": "PullRequest", "code": "custom", "message": "A pull request already exists for octo:fitur." }],
+            "errors": [{ "resource": "PullRequest", "code": "custom", "message": "A pull request already exists for octo:feature." }],
         })))
         .expect(1)
         .mount(&server)
@@ -614,19 +614,19 @@ async fn create_pull_request_rejects_invalid_input_and_maps_422() {
     let mut input = NewPullRequest {
         title: String::new(),
         body: String::new(),
-        source_branch: "fitur".into(),
+        source_branch: "feature".into(),
         target_branch: "main".into(),
         draft: false,
     };
-    // Judul kosong ditolak sebelum ada permintaan yang dikirim.
-    let err = client.create_pull_request(&hello(), &input).await.expect_err("judul kosong");
+    // An empty title is rejected before any request is sent.
+    let err = client.create_pull_request(&hello(), &input).await.expect_err("empty title");
     assert_error(&err, ForgeErrorCode::InvalidInput, TOKEN);
     assert!(received(&server).await.is_empty());
 
-    input.title = "Judul".into();
+    input.title = "Title".into();
     let err = client.create_pull_request(&hello(), &input).await.expect_err("422");
     assert_error(&err, ForgeErrorCode::InvalidInput, TOKEN);
-    assert!(err.message.contains("A pull request already exists for octo:fitur."), "{}", err.message);
+    assert!(err.message.contains("A pull request already exists for octo:feature."), "{}", err.message);
 }
 
 #[tokio::test]
@@ -686,7 +686,7 @@ async fn http_status_maps_to_error_code() {
         },
         Case { status: 422, headers: &[], body: json!({ "message": "Validation Failed" }), expected: ForgeErrorCode::InvalidInput },
         Case { status: 500, headers: &[], body: json!({ "message": "Server Error" }), expected: ForgeErrorCode::Network },
-        Case { status: 503, headers: &[], body: json!("tidak tersedia"), expected: ForgeErrorCode::Network },
+        Case { status: 503, headers: &[], body: json!("unavailable"), expected: ForgeErrorCode::Network },
     ];
 
     for case in cases {
@@ -697,7 +697,7 @@ async fn http_status_maps_to_error_code() {
         }
         Mock::given(method("GET")).and(path("/user")).respond_with(response).mount(&server).await;
 
-        let err = client(&server).current_user().await.expect_err("harus gagal");
+        let err = client(&server).current_user().await.expect_err("must fail");
         assert_eq!(err.code, case.expected, "status {} header {:?}: {}", case.status, case.headers, err.message);
         assert_error(&err, case.expected, TOKEN);
     }
@@ -720,7 +720,7 @@ async fn rate_limit_message_mentions_wait_time() {
 #[tokio::test]
 async fn error_message_never_echoes_the_token() {
     let server = MockServer::start().await;
-    // Server yang (secara keliru) menggemakan kredensial di pesan galatnya.
+    // A server that (mistakenly) echoes the credential in its error message.
     Mock::given(method("GET"))
         .and(path("/user"))
         .respond_with(
@@ -738,26 +738,26 @@ async fn malformed_json_is_invalid_response() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/user"))
-        .respond_with(ResponseTemplate::new(200).set_body_string("<html>bukan json</html>"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("<html>not json</html>"))
         .mount(&server)
         .await;
     Mock::given(method("GET"))
         .and(path("/repos/octo/hello"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "nama": "bentuk lain" })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "name": "other shape" })))
         .mount(&server)
         .await;
 
     let client = client(&server);
-    let err = client.current_user().await.expect_err("bukan json");
+    let err = client.current_user().await.expect_err("not json");
     assert_error(&err, ForgeErrorCode::InvalidResponse, TOKEN);
-    let err = client.default_branch(&hello()).await.expect_err("bentuk salah");
+    let err = client.default_branch(&hello()).await.expect_err("wrong shape");
     assert_error(&err, ForgeErrorCode::InvalidResponse, TOKEN);
 }
 
 #[tokio::test]
 async fn unreachable_server_is_network_error() {
     let uri = common::closed_port_uri();
-    let err = provider(&ForgeHost::github(), TOKEN, Some(&uri)).current_user().await.expect_err("tidak terhubung");
+    let err = provider(&ForgeHost::github(), TOKEN, Some(&uri)).current_user().await.expect_err("not connected");
     assert_error(&err, ForgeErrorCode::Network, TOKEN);
 }
 
@@ -767,9 +767,9 @@ async fn empty_repo_ref_is_rejected_before_any_request() {
     let client = client(&server);
     let broken = repo("github.com", "", "hello");
 
-    let err = client.default_branch(&broken).await.expect_err("pemilik kosong");
+    let err = client.default_branch(&broken).await.expect_err("empty owner");
     assert_error(&err, ForgeErrorCode::InvalidInput, TOKEN);
-    let err = client.list_pull_requests(&broken, PrFilter::Mine, 1).await.expect_err("pemilik kosong");
+    let err = client.list_pull_requests(&broken, PrFilter::Mine, 1).await.expect_err("empty owner");
     assert_error(&err, ForgeErrorCode::InvalidInput, TOKEN);
     assert!(received(&server).await.is_empty());
 }

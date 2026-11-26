@@ -1,6 +1,6 @@
-//! Endpoint kustom berformat OpenAI-compatible (Chat Completions): OpenAI, OpenRouter, Groq,
-//! DeepSeek, Ollama/LM Studio lokal, LiteLLM, dan gateway sejenis. `POST {base}/chat/completions`
-//! dengan `stream: true`; `base` biasanya diakhiri `/v1`.
+//! Custom OpenAI-compatible endpoints (Chat Completions): OpenAI, OpenRouter, Groq,
+//! DeepSeek, local Ollama/LM Studio, LiteLLM, and similar gateways. `POST {base}/chat/completions`
+//! with `stream: true`; `base` usually ends in `/v1`.
 
 use std::fmt;
 use std::time::Duration;
@@ -9,13 +9,13 @@ use serde_json::{json, Value};
 
 use crate::{clean_message, user_message, AiError, AiErrorCode, CommitPrompt, SseParser, SYSTEM_PROMPT};
 
-/// Akses ke endpoint OpenAI-compatible.
+/// Access to an OpenAI-compatible endpoint.
 #[derive(Clone)]
 pub struct OpenAiConfig {
-    /// Mis. `https://api.openai.com/v1` atau `http://localhost:11434/v1`.
+    /// E.g. `https://api.openai.com/v1` or `http://localhost:11434/v1`.
     pub base_url: String,
     pub model: String,
-    /// Dikirim sebagai `Authorization: Bearer`; kosong untuk server lokal tanpa key.
+    /// Sent as `Authorization: Bearer`; empty for local servers without a key.
     pub api_key: Option<String>,
 }
 
@@ -25,8 +25,8 @@ impl fmt::Debug for OpenAiConfig {
     }
 }
 
-/// Badan permintaan Chat Completions. Tanpa parameter sampling atau batas token: nama dan
-/// dukungannya berbeda-beda antar penyedia.
+/// Body of the Chat Completions request. No sampling parameters or token limit: their names and
+/// support differ between providers.
 pub fn request_body(config: &OpenAiConfig, prompt: &CommitPrompt) -> Value {
     json!({
         "model": config.model,
@@ -38,7 +38,7 @@ pub fn request_body(config: &OpenAiConfig, prompt: &CommitPrompt) -> Value {
     })
 }
 
-/// Galat dari status HTTP endpoint (pesan netral: penyedianya bisa siapa saja).
+/// Error from the endpoint's HTTP status (neutral message: the provider could be anyone).
 fn status_error(status: u16, detail: Option<&str>, retry_after: Option<u64>) -> AiError {
     let detail = detail.map(str::trim).filter(|d| !d.is_empty());
     match status {
@@ -76,7 +76,7 @@ fn transport_error(err: reqwest::Error) -> AiError {
     AiError::new(AiErrorCode::Network, message)
 }
 
-/// Membuang blok `<think>…</think>` yang ditulis sebagian model penalaran (mis. lewat Ollama).
+/// Removes the `<think>…</think>` blocks that some reasoning models write (e.g. through Ollama).
 fn strip_thinking(text: &str) -> String {
     let mut out = String::new();
     let mut rest = text;
@@ -97,7 +97,7 @@ struct StreamState {
     finished: bool,
 }
 
-/// Satu event SSE Chat Completions; mengembalikan potongan teks baru bila ada.
+/// A single Chat Completions SSE event; returns the new text chunk if there is one.
 fn apply_data(state: &mut StreamState, data: &str) -> Result<Option<String>, AiError> {
     let data = data.trim();
     if data.is_empty() {
@@ -135,12 +135,12 @@ fn finish(state: StreamState) -> Result<String, AiError> {
     Ok(message)
 }
 
-/// Menulis pesan commit lewat endpoint OpenAI-compatible; `on_text` menerima tiap potongan.
+/// Writes a commit message through an OpenAI-compatible endpoint; `on_text` receives each chunk.
 pub async fn stream_commit_message(config: &OpenAiConfig, prompt: &CommitPrompt, mut on_text: impl FnMut(&str)) -> Result<String, AiError> {
     let client = reqwest::Client::builder()
         .user_agent("OnCode")
         .connect_timeout(Duration::from_secs(10))
-        // Model lokal bisa lama sebelum token pertama (memuat model ke memori).
+        // A local model can take a long time before the first token (loading the model into memory).
         .read_timeout(Duration::from_secs(300))
         .build()
         .map_err(transport_error)?;
@@ -188,7 +188,7 @@ mod tests {
         for absent in ["temperature", "max_tokens", "max_completion_tokens", "fallbacks", "output_config"] {
             assert!(body.get(absent).is_none(), "{absent}");
         }
-        assert!(!format!("{:?}", OpenAiConfig { api_key: Some("sk-rahasia".into()), ..config }).contains("rahasia"));
+        assert!(!format!("{:?}", OpenAiConfig { api_key: Some("sk-secret".into()), ..config }).contains("secret"));
     }
 
     #[test]
@@ -196,20 +196,20 @@ mod tests {
         let mut state = StreamState::default();
         let chunks = [
             r#"{"choices":[{"index":0,"delta":{"role":"assistant","content":""}}]}"#,
-            r#"{"choices":[{"index":0,"delta":{"content":"fix: perbaiki "}}]}"#,
-            r#"{"choices":[{"index":0,"delta":{"reasoning_content":"berpikir"}}]}"#,
+            r#"{"choices":[{"index":0,"delta":{"content":"fix: repair "}}]}"#,
+            r#"{"choices":[{"index":0,"delta":{"reasoning_content":"thinking"}}]}"#,
             r#"{"choices":[{"index":0,"delta":{"content":"login"},"finish_reason":"stop"}]}"#,
             "[DONE]",
         ];
         let pieces: Vec<String> = chunks.iter().filter_map(|data| apply_data(&mut state, data).unwrap()).collect();
-        assert_eq!(pieces, ["fix: perbaiki ", "login"]);
-        assert_eq!(finish(state).unwrap(), "fix: perbaiki login");
+        assert_eq!(pieces, ["fix: repair ", "login"]);
+        assert_eq!(finish(state).unwrap(), "fix: repair login");
     }
 
     #[test]
     fn thinking_blocks_and_errors() {
         assert_eq!(strip_thinking("<think>hmm\n</think>\nfix: a"), "\nfix: a");
-        assert_eq!(strip_thinking("fix: a<think>sisa"), "fix: a");
+        assert_eq!(strip_thinking("fix: a<think>rest"), "fix: a");
         let mut state = StreamState::default();
         let error = apply_data(&mut state, r#"{"error":{"message":"model not found"}}"#).unwrap_err();
         assert!(error.message.contains("model not found"));

@@ -1,16 +1,16 @@
-//! Program pembantu yang dijalankan git atas nama OnCode.
+//! Helper program that git runs on behalf of OnCode.
 //!
-//! - `oncode-helper <prompt>`           : askpass (GIT_ASKPASS / SSH_ASKPASS); jawaban dicetak ke stdout.
-//! - `oncode-helper editor <berkas>`    : GIT_EDITOR; aplikasi mengisi berkas pesan.
-//! - `oncode-helper sequence <berkas>`  : GIT_SEQUENCE_EDITOR; aplikasi mengisi daftar todo rebase.
+//! - `oncode-helper <prompt>`           : askpass (GIT_ASKPASS / SSH_ASKPASS); the answer is printed to stdout.
+//! - `oncode-helper editor <file>`      : GIT_EDITOR; the app fills in the message file.
+//! - `oncode-helper sequence <file>`    : GIT_SEQUENCE_EDITOR; the app fills in the rebase todo list.
 //!
-//! Permintaan diteruskan ke aplikasi lewat socket lokal (`ONCODE_IPC_ENDPOINT`)
-//! dengan token sekali pakai (`ONCODE_IPC_TOKEN`). Kode keluar 0 berarti dijawab,
-//! selain itu git menganggap pengguna membatalkan.
+//! Requests are forwarded to the app over a local socket (`ONCODE_IPC_ENDPOINT`)
+//! with a one-time token (`ONCODE_IPC_TOKEN`). Exit code 0 means it was answered,
+//! otherwise git treats it as the user canceling.
 //!
-//! Di luar git, helper juga memasang dan melepas perintah `oncode` di terminal
-//! (`install-shell-command` / `uninstall-shell-command <folder aplikasi>`, lihat [`shell_command`]);
-//! dipanggil installer Windows dan command palette.
+//! Outside git, the helper also installs and removes the `oncode` command in the terminal
+//! (`install-shell-command` / `uninstall-shell-command <app folder>`, see [`shell_command`]);
+//! called by the Windows installer and the command palette.
 
 mod shell_command;
 
@@ -33,7 +33,7 @@ fn connect(endpoint: &str) -> std::io::Result<impl Read + Write> {
 
 #[cfg(windows)]
 fn connect(endpoint: &str) -> std::io::Result<impl Read + Write> {
-    // Named pipe dibuka seperti berkas; bila semua instance sibuk, coba lagi sebentar.
+    // A named pipe is opened like a file; if all instances are busy, retry briefly.
     const ERROR_PIPE_BUSY: i32 = 231;
     let mut attempts = 0;
     loop {

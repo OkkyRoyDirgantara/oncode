@@ -1,9 +1,9 @@
-//! Login OAuth 2.0 *device authorization grant* (RFC 8628) untuk GitHub dan GitLab.
+//! OAuth 2.0 *device authorization grant* login (RFC 8628) for GitHub and GitLab.
 //!
-//! Alurnya: [`device_start`] meminta kode, UI menampilkan `user_code` dan membuka
-//! `verification_uri`, lalu pemanggil memanggil [`device_poll`] tiap `interval` detik
-//! sampai hasilnya bukan [`DevicePoll::Pending`] / [`DevicePoll::SlowDown`]. Tidak ada
-//! client secret yang terlibat.
+//! The flow: [`device_start`] requests a code, the UI shows the `user_code` and opens
+//! the `verification_uri`, then the caller calls [`device_poll`] every `interval` seconds
+//! until the result is no longer [`DevicePoll::Pending`] / [`DevicePoll::SlowDown`]. No
+//! client secret is involved.
 
 use std::fmt;
 
@@ -18,24 +18,24 @@ use crate::model::{ForgeHost, ForgeKind, Timestamp};
 const DEVICE_GRANT_TYPE: &str = "urn:ietf:params:oauth:grant-type:device_code";
 const REDACTED: &str = "***";
 
-/// Jawaban langkah pertama device flow.
+/// Response of the first step of the device flow.
 ///
-/// `device_code` adalah rahasia sementara: siapa pun yang memegangnya bisa mengambil
-/// token setelah pengguna menyetujui login. Simpan di sisi backend; UI hanya memerlukan
-/// `user_code` dan `verification_uri`. `Debug` menyamarkannya.
+/// `device_code` is a temporary secret: whoever holds it can fetch the token once the
+/// user approves the login. Keep it on the backend side; the UI only needs
+/// `user_code` and `verification_uri`. `Debug` redacts it.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DeviceCode {
     pub device_code: String,
-    /// Kode pendek yang diketik pengguna di browser.
+    /// Short code the user types in the browser.
     pub user_code: String,
-    /// Halaman tempat pengguna memasukkan kode.
+    /// Page where the user enters the code.
     pub verification_uri: String,
-    /// Tautan yang sudah memuat kodenya (GitLab); GitHub tidak mengirimnya.
+    /// Link that already contains the code (GitLab); GitHub does not send it.
     pub verification_uri_complete: Option<String>,
-    /// Jeda minimal antar-poll, dalam detik.
+    /// Minimum delay between polls, in seconds.
     pub interval: u32,
-    /// Masa berlaku kode, dalam detik.
+    /// Lifetime of the code, in seconds.
     pub expires_in: u32,
 }
 
@@ -52,27 +52,27 @@ impl fmt::Debug for DeviceCode {
     }
 }
 
-/// Token milik satu akun. Hanya untuk keychain dan memori proses, tidak pernah dikirim
-/// ke UI; `Debug` menyamarkan isinya.
+/// Token belonging to one account. Only for the keychain and process memory, never sent
+/// to the UI; `Debug` redacts its contents.
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TokenSet {
     pub access_token: String,
     #[serde(default)]
     pub refresh_token: Option<String>,
-    /// Kapan `access_token` kedaluwarsa (detik sejak epoch); `None` bila tidak kedaluwarsa.
+    /// When `access_token` expires (seconds since epoch); `None` if it does not expire.
     #[serde(default)]
     pub expires_at: Option<Timestamp>,
 }
 
 impl TokenSet {
-    /// Token yang tidak kedaluwarsa dan tanpa refresh token, misalnya Personal Access Token.
+    /// A token that does not expire and has no refresh token, such as a Personal Access Token.
     pub fn new(access_token: impl Into<String>) -> Self {
         Self { access_token: access_token.into(), refresh_token: None, expires_at: None }
     }
 
-    /// `true` bila token sudah atau akan kedaluwarsa dalam `margin_seconds` detik.
-    /// Token tanpa masa berlaku selalu `false`.
+    /// `true` if the token has expired or will expire within `margin_seconds` seconds.
+    /// A token without an expiry is always `false`.
     pub fn expires_within(&self, margin_seconds: f64) -> bool {
         self.expires_at.is_some_and(|at| at - now_epoch() <= margin_seconds)
     }
@@ -88,27 +88,27 @@ impl fmt::Debug for TokenSet {
     }
 }
 
-/// Hasil satu kali poll ke endpoint token.
+/// Result of a single poll of the token endpoint.
 #[derive(Debug, Clone, PartialEq)]
 pub enum DevicePoll {
-    /// Pengguna belum menyelesaikan login; poll lagi setelah `interval` detik.
+    /// The user has not finished logging in; poll again after `interval` seconds.
     Pending,
-    /// Poll terlalu cepat; tambahkan 5 detik ke jeda lalu poll lagi (RFC 8628 §3.5).
+    /// Polled too fast; add 5 seconds to the delay and poll again (RFC 8628 §3.5).
     SlowDown,
-    /// Login berhasil.
+    /// Login succeeded.
     Token(TokenSet),
-    /// Pengguna menolak permintaan login.
+    /// The user denied the login request.
     Denied,
-    /// Kode sudah kedaluwarsa; mulai lagi dari [`device_start`].
+    /// The code has expired; start over from [`device_start`].
     Expired,
 }
 
-/// Memulai device flow. GitHub: `POST {host}/login/device/code` dengan scope
-/// `repo read:user`; GitLab: `POST {host}/oauth/authorize_device` dengan scope
-/// `api read_user`. `web_base_override` mengganti origin web untuk tes.
+/// Starts the device flow. GitHub: `POST {host}/login/device/code` with scope
+/// `repo read:user`; GitLab: `POST {host}/oauth/authorize_device` with scope
+/// `api read_user`. `web_base_override` replaces the web origin for tests.
 ///
-/// Mengembalikan `Unsupported` bila instance tidak menyediakan device flow (GitLab
-/// sebelum 17.2, atau fitur dimatikan); jalan lainnya adalah Personal Access Token.
+/// Returns `Unsupported` if the instance does not offer the device flow (GitLab
+/// before 17.2, or the feature is disabled); the alternative is a Personal Access Token.
 pub async fn device_start(host: &ForgeHost, client_id: &str, web_base_override: Option<&str>) -> Result<DeviceCode> {
     let client_id = require_client_id(client_id)?;
     let server = host.hostname();
@@ -145,12 +145,12 @@ pub async fn device_start(host: &ForgeHost, client_id: &str, web_base_override: 
     }
 }
 
-/// Satu kali poll ke endpoint token (GitHub: `{host}/login/oauth/access_token`, GitLab:
-/// `{host}/oauth/token`) dengan grant type `urn:ietf:params:oauth:grant-type:device_code`.
+/// A single poll of the token endpoint (GitHub: `{host}/login/oauth/access_token`, GitLab:
+/// `{host}/oauth/token`) with grant type `urn:ietf:params:oauth:grant-type:device_code`.
 ///
-/// Pemanggil yang mengatur jeda: tunggu `interval` detik antar-panggilan, dan tambah
-/// 5 detik tiap menerima [`DevicePoll::SlowDown`]. Galat `Network` boleh dicoba lagi;
-/// galat lain berarti alur harus diulang dari awal.
+/// The caller controls the delay: wait `interval` seconds between calls, and add
+/// 5 seconds each time [`DevicePoll::SlowDown`] is received. A `Network` error may be
+/// retried; any other error means the flow must be restarted from the beginning.
 pub async fn device_poll(
     host: &ForgeHost,
     client_id: &str,
@@ -174,8 +174,8 @@ pub async fn device_poll(
             "slow_down" => Ok(DevicePoll::SlowDown),
             "access_denied" => Ok(DevicePoll::Denied),
             "expired_token" => Ok(DevicePoll::Expired),
-            // Kode perangkat tidak dikenal lagi. GitLab menjawab begini setelah kode
-            // dipakai atau dihapus, jadi penyebab pastinya tidak bisa dibedakan.
+            // The device code is no longer recognized. GitLab answers this way after the code
+            // is used or deleted, so the exact cause cannot be told apart.
             "invalid_grant" | "incorrect_device_code" => Err(ForgeError::invalid(format!(
                 "The login code for {server} is no longer valid (denied, already used, or expired). \
                  Start the login again."
@@ -187,13 +187,13 @@ pub async fn device_poll(
     }
 }
 
-/// Menukar refresh token dengan token baru. Token akses GitLab punya masa berlaku;
-/// token aplikasi OAuth GitHub tidak kedaluwarsa, sehingga untuk GitHub hasilnya
+/// Exchanges a refresh token for a new token. GitLab access tokens have an expiry;
+/// GitHub OAuth app tokens do not expire, so for GitHub the result is
 /// `Unsupported`.
 ///
-/// Refresh token GitLab hanya bisa dipakai sekali: simpan [`TokenSet`] yang baru segera
-/// setelah panggilan ini berhasil. `Unauthorized` berarti refresh token sudah tidak
-/// berlaku dan pengguna harus login ulang.
+/// A GitLab refresh token can only be used once: store the new [`TokenSet`] right
+/// after this call succeeds. `Unauthorized` means the refresh token is no longer
+/// valid and the user must log in again.
 pub async fn refresh_token(
     host: &ForgeHost,
     client_id: &str,
@@ -247,7 +247,7 @@ async fn post_form(
     form: &[(&str, &str)],
 ) -> Result<Reply> {
     let base = web_base_override.unwrap_or_else(|| host.web_base()).trim_end_matches('/');
-    // Tanpa `Accept: application/json`, GitHub menjawab dalam bentuk form-urlencoded.
+    // Without `Accept: application/json`, GitHub answers in form-urlencoded format.
     let request = http::client()?.post(format!("{base}{path}")).header(ACCEPT, "application/json").form(form);
     http::send(request, &host.hostname()).await
 }
@@ -270,13 +270,13 @@ struct TokenBody {
     access_token: String,
     #[serde(default)]
     refresh_token: Option<String>,
-    /// Sisa masa berlaku dalam detik.
+    /// Remaining lifetime in seconds.
     #[serde(default)]
     expires_in: Option<f64>,
 }
 
-/// Membaca token dari jawaban sukses. Rincian galat parse sengaja dibuang supaya isi
-/// jawaban (yang bisa memuat token) tidak pernah masuk ke pesan galat.
+/// Reads the token from a successful response. Parse error details are deliberately dropped so that the
+/// response body (which may contain a token) never ends up in an error message.
 fn token_set(reply: &Reply) -> Option<TokenSet> {
     if !reply.status.is_success() {
         return None;
@@ -288,13 +288,13 @@ fn token_set(reply: &Reply) -> Option<TokenSet> {
     Some(TokenSet {
         access_token: body.access_token,
         refresh_token: non_empty(body.refresh_token),
-        // Dihitung dari jam lokal, karena nanti dibandingkan dengan jam lokal juga.
+        // Computed from the local clock, because it is later compared against the local clock too.
         expires_at: body.expires_in.filter(|seconds| *seconds > 0.0).map(|seconds| now_epoch() + seconds),
     })
 }
 
-/// Galat OAuth (`{"error": "...", "error_description": "..."}`). GitHub mengirimnya
-/// dengan HTTP 200, GitLab dengan 400/401.
+/// OAuth error (`{"error": "...", "error_description": "..."}`). GitHub sends it
+/// with HTTP 200, GitLab with 400/401.
 struct OAuthError {
     code: String,
     description: Option<String>,
@@ -344,24 +344,24 @@ mod tests {
     #[test]
     fn token_set_debug_is_redacted() {
         let tokens = TokenSet {
-            access_token: "gho_akses_rahasia".into(),
-            refresh_token: Some("refresh_rahasia".into()),
+            access_token: "gho_access_secret".into(),
+            refresh_token: Some("refresh_secret".into()),
             expires_at: Some(1_700_000_000.0),
         };
         let debug = format!("{tokens:?}");
-        assert!(!debug.contains("gho_akses_rahasia"), "{debug}");
-        assert!(!debug.contains("refresh_rahasia"), "{debug}");
+        assert!(!debug.contains("gho_access_secret"), "{debug}");
+        assert!(!debug.contains("refresh_secret"), "{debug}");
         assert!(debug.contains("***"));
         assert!(debug.contains("1700000000"));
 
         let pretty = format!("{:#?}", DevicePoll::Token(tokens));
-        assert!(!pretty.contains("rahasia"), "{pretty}");
+        assert!(!pretty.contains("secret"), "{pretty}");
     }
 
     #[test]
     fn device_code_debug_is_redacted() {
         let code = DeviceCode {
-            device_code: "kode_perangkat_rahasia".into(),
+            device_code: "device_code_secret".into(),
             user_code: "WDJB-MJHT".into(),
             verification_uri: "https://github.com/login/device".into(),
             verification_uri_complete: None,
@@ -369,7 +369,7 @@ mod tests {
             expires_in: 900,
         };
         let debug = format!("{code:?}");
-        assert!(!debug.contains("kode_perangkat_rahasia"), "{debug}");
+        assert!(!debug.contains("device_code_secret"), "{debug}");
         assert!(debug.contains("WDJB-MJHT"));
     }
 
@@ -379,7 +379,7 @@ mod tests {
         let json = serde_json::to_string(&tokens).expect("json");
         assert_eq!(json, r#"{"accessToken":"a","refreshToken":"r","expiresAt":12.5}"#);
         assert_eq!(serde_json::from_str::<TokenSet>(&json).expect("json"), tokens);
-        // Field opsional boleh tidak ada.
+        // Optional fields may be absent.
         let minimal: TokenSet = serde_json::from_str(r#"{"accessToken":"a"}"#).expect("json");
         assert_eq!(minimal, TokenSet::new("a"));
     }
@@ -396,7 +396,7 @@ mod tests {
 
     #[tokio::test]
     async fn github_refresh_is_unsupported() {
-        let err = refresh_token(&ForgeHost::github(), "client", "refresh", None).await.expect_err("harus gagal");
+        let err = refresh_token(&ForgeHost::github(), "client", "refresh", None).await.expect_err("must fail");
         assert_eq!(err.code, ForgeErrorCode::Unsupported);
     }
 }

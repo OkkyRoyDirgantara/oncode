@@ -1,4 +1,4 @@
-//! Blame: parser `git blame --incremental`.
+//! Blame: parser for `git blame --incremental`.
 
 use std::collections::HashMap;
 
@@ -15,7 +15,7 @@ struct CommitInfo {
     summary: String,
 }
 
-/// Mengurai keluaran `--incremental` menjadi rentang baris, terurut dari baris pertama.
+/// Parses `--incremental` output into line ranges, sorted from the first line.
 pub fn parse_blame(text: &str) -> Vec<BlameRange> {
     let mut commits: HashMap<String, CommitInfo> = HashMap::new();
     let mut ranges = Vec::new();
@@ -51,7 +51,7 @@ pub fn parse_blame(text: &str) -> Vec<BlameRange> {
             }
             continue;
         }
-        // Baris kepala: <oid> <baris asal> <baris hasil> <jumlah baris>
+        // Header line: <oid> <original line> <result line> <line count>
         let mut parts = line.split(' ');
         if let (Some(oid), Some(_orig), Some(start), Some(count)) = (parts.next(), parts.next(), parts.next(), parts.next()) {
             if oid.len() >= 40 && oid.chars().all(|c| c.is_ascii_hexdigit()) {
@@ -66,7 +66,7 @@ pub fn parse_blame(text: &str) -> Vec<BlameRange> {
 }
 
 impl Repo {
-    /// Blame sebuah berkas. `contents` adalah isi buffer yang belum disimpan, bila ada.
+    /// Blames a file. `contents` is the unsaved buffer content, if any.
     pub async fn blame(&self, path: &str, contents: Option<Vec<u8>>) -> Result<Vec<BlameRange>> {
         let path = check_path(path)?;
         let mut cmd = Cmd::new(["blame", "--incremental"]);
@@ -87,7 +87,7 @@ mod tests {
         let a = "a".repeat(40);
         let zero = "0".repeat(40);
         let text = format!(
-            "{a} 1 1 2\nauthor Ana\nauthor-mail <ana@x.id>\nauthor-time 1700000000\nauthor-tz +0700\ncommitter Ana\nsummary Commit pertama\nfilename f.txt\n\
+            "{a} 1 1 2\nauthor Ana\nauthor-mail <ana@x.id>\nauthor-time 1700000000\nauthor-tz +0700\ncommitter Ana\nsummary First commit\nfilename f.txt\n\
              {zero} 3 3 1\nauthor Not Committed Yet\nauthor-mail <not.committed.yet>\nauthor-time 1700000500\nsummary Version of f.txt from f.txt\nfilename f.txt\n\
              {a} 4 5 3\nfilename f.txt\n"
         );
@@ -96,9 +96,9 @@ mod tests {
         assert_eq!((ranges[0].start_line, ranges[0].line_count), (1, 2));
         assert_eq!(ranges[0].author, "Ana");
         assert_eq!(ranges[0].author_email, "ana@x.id");
-        assert_eq!(ranges[0].summary, "Commit pertama");
+        assert_eq!(ranges[0].summary, "First commit");
         assert!(ranges[1].uncommitted);
-        // Entri kedua untuk commit yang sama memakai metadata yang sudah diketahui.
+        // The second entry for the same commit reuses the metadata already known.
         assert_eq!((ranges[2].start_line, ranges[2].line_count), (5, 3));
         assert_eq!(ranges[2].author, "Ana");
         assert_eq!(ranges[2].time, 1_700_000_000.0);

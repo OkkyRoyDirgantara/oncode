@@ -1,5 +1,5 @@
-//! Quick pick: kotak pencarian dengan daftar pilihan, dipakai command palette, quick open,
-//! pemilih branch, dan sejenisnya.
+//! Quick pick: a search box with a list of choices, used by the command palette, quick open,
+//! the branch picker, and the like.
 
 use std::rc::Rc;
 
@@ -15,13 +15,13 @@ use gpui_kit::{
 #[derive(Clone, Debug, PartialEq)]
 pub struct PickItem {
     pub label: SharedString,
-    /// Teks redup di samping label (mis. folder berkas).
+    /// Dimmed text next to the label (e.g. the file's folder).
     pub description: Option<SharedString>,
-    /// Teks di sisi kanan (mis. pintasan keyboard).
+    /// Text on the right side (e.g. a keyboard shortcut).
     pub hint: Option<SharedString>,
-    /// Nilai yang dikembalikan saat dipilih.
+    /// The value returned when picked.
     pub value: String,
-    /// Gambar berwarna di depan label (path aset, mis. logo bahasa berkas).
+    /// A colored image in front of the label (an asset path, e.g. the file's language logo).
     pub image: Option<SharedString>,
 }
 
@@ -46,7 +46,7 @@ impl PickItem {
     }
 }
 
-/// Sumber pilihan: daftar tetap yang disaring di tempat, atau pencarian asinkron.
+/// The source of choices: a fixed list filtered in place, or an asynchronous search.
 #[derive(Clone)]
 pub enum PickSource {
     Static(Rc<Vec<PickItem>>),
@@ -57,7 +57,7 @@ pub struct QuickPickOptions {
     pub placeholder: SharedString,
     pub empty_text: SharedString,
     pub source: PickSource,
-    /// Izinkan memilih teks yang diketik apa adanya (mis. nama branch baru); labelnya dari fungsi ini.
+    /// Allow picking the typed text as is (e.g. a new branch name); its label comes from this function.
     pub allow_custom: Option<Rc<dyn Fn(&str) -> Option<PickItem>>>,
 }
 
@@ -81,8 +81,8 @@ impl QuickPickOptions {
     }
 }
 
-/// Skor kecocokan subsekuens tanpa membedakan huruf besar; `None` bila tidak cocok.
-/// Kecocokan di awal kata dan yang berurutan dinilai lebih tinggi.
+/// A case-insensitive subsequence match score; `None` if there is no match.
+/// Matches at the start of a word and consecutive matches score higher.
 pub fn fuzzy_score(query: &str, text: &str) -> Option<i32> {
     if query.is_empty() {
         return Some(0);
@@ -111,7 +111,7 @@ pub fn fuzzy_score(query: &str, text: &str) -> Option<i32> {
     Some(score * 16 - text_chars.len().min(255) as i32 / 8)
 }
 
-/// Menyaring dan mengurutkan pilihan untuk sebuah kueri.
+/// Filters and sorts the choices for a query.
 pub fn filter_items(items: &[PickItem], query: &str, limit: usize) -> Vec<PickItem> {
     let query = query.trim();
     if query.is_empty() {
@@ -138,7 +138,7 @@ pub struct QuickPick {
     items: Vec<PickItem>,
     selected: usize,
     loading: bool,
-    /// Enter ditekan selagi pencarian berjalan: dipilih begitu hasil kueri terakhir tiba.
+    /// Enter was pressed while a search is running: pick as soon as the result of the latest query arrives.
     confirm_pending: bool,
     scroll: ScrollHandle,
     on_pick: Rc<dyn Fn(Option<PickItem>, &mut Window, &mut App)>,
@@ -240,13 +240,13 @@ impl QuickPick {
         self.done = true;
         window.close_dialog(cx);
         let on_pick = self.on_pick.clone();
-        // Dijalankan setelah dialog tertutup, agar penangan boleh membuka dialog lain.
+        // Runs after the dialog has closed, so the handler may open another dialog.
         window.defer(cx, move |window, cx| on_pick(item, window, cx));
     }
 
     fn confirm(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        // Hasil yang tampil masih untuk kueri sebelumnya: pilih setelah hasil kueri ini tiba,
-        // agar Enter yang ditekan cepat setelah mengetik tidak hilang.
+        // The results shown are still for the previous query: pick after the results of this query arrive,
+        // so an Enter pressed right after typing is not lost.
         if self.loading {
             self.confirm_pending = true;
             return;
@@ -287,7 +287,7 @@ impl Render for QuickPick {
                     .overflow_y_scroll()
                     .track_scroll(&self.scroll)
                     .when(self.items.is_empty(), |el| {
-                        // Id berbeda untuk "sedang mencari" dan "tidak ada hasil", agar uji bisa membedakannya.
+                        // Different ids for "searching" and "no results", so tests can tell them apart.
                         let id = if self.loading { "quick-pick-searching" } else { "quick-pick-empty" };
                         el.child(
                             div()
@@ -328,13 +328,13 @@ impl Render for QuickPick {
     }
 }
 
-/// Membuka quick pick. `on_pick` menerima pilihan, atau `None` bila dibatalkan dengan Escape.
+/// Opens a quick pick. `on_pick` receives the choice, or `None` if canceled with Escape.
 pub fn quick_pick(options: QuickPickOptions, on_pick: impl Fn(Option<PickItem>, &mut Window, &mut App) + 'static, window: &mut Window, cx: &mut App) {
     let on_pick: Rc<dyn Fn(Option<PickItem>, &mut Window, &mut App)> = Rc::new(on_pick);
     let picker = cx.new(|cx| QuickPick::new(options, on_pick, window, cx));
     let focus = picker.read(cx).input.clone();
-    // Enter tidak menutup dialog lewat aksi Confirm bawaannya: quick pick menutupnya sendiri saat
-    // memilih. Tanpa ini Enter selagi pencarian berjalan menutup dialog tanpa memilih apa pun.
+    // Enter does not close the dialog through its built-in Confirm action: the quick pick closes it itself
+    // when picking. Without this, Enter while a search is running closes the dialog without picking anything.
     window.open_dialog(cx, move |dialog, _, _| dialog.close_button(false).on_ok(|_, _, _| false).margin_top(px(80.)).w(px(620.)).child(picker.clone()));
     window.defer(cx, move |window, cx| focus.update(cx, |state, cx| state.focus(window, cx)));
 }

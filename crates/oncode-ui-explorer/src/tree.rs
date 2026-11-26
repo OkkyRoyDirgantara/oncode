@@ -1,5 +1,5 @@
-//! Logika murni explorer: path, state pohon, perataan menjadi baris, validasi nama, dekorasi Git,
-//! dan penulisan ulang tab. Tidak menyentuh GPUI maupun backend agar mudah diuji.
+//! Pure explorer logic: paths, tree state, flattening into rows, name validation, Git decorations,
+//! and tab rewriting. It touches neither GPUI nor the backend so it is easy to test.
 
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
@@ -8,7 +8,7 @@ use oncode_git::{ChangeKind, RepoSnapshot};
 use oncode_ui::{file_tab, FileMark, TabData};
 use oncode_workspace::DirEntry;
 
-/// Tinggi satu baris pohon dan lekukan per tingkat, dalam piksel.
+/// The height of one tree row and the indent per level, in pixels.
 pub const ROW_HEIGHT: f32 = 22.;
 pub const INDENT: f32 = 12.;
 
@@ -29,7 +29,7 @@ fn is_separator(c: char) -> bool {
 fn strip_trailing(path: &str) -> &str {
     let trimmed = path.trim_end_matches(is_separator);
     if trimmed.is_empty() {
-        // Akar sistem berkas ("/") tetap dipertahankan.
+        // The file system root ("/") is kept.
         let first = path.chars().next().map_or(0, char::len_utf8);
         &path[..first]
     } else {
@@ -37,7 +37,7 @@ fn strip_trailing(path: &str) -> &str {
     }
 }
 
-/// Menggabungkan `dir` dengan path relatif bergaris miring, memakai pemisah yang dipakai `dir`.
+/// Joins `dir` with a forward-slash relative path, using the separator that `dir` uses.
 pub fn join_path(dir: &str, relative: &str) -> String {
     let sep = separator_of(dir);
     let base = strip_trailing(dir);
@@ -49,7 +49,7 @@ pub fn join_path(dir: &str, relative: &str) -> String {
     }
 }
 
-/// Benar bila `path` sama dengan `ancestor` atau berada di dalamnya.
+/// True if `path` equals `ancestor` or is inside it.
 pub fn is_same_or_under(path: &str, ancestor: &str) -> bool {
     let base = strip_trailing(ancestor);
     if path == base || path == ancestor {
@@ -59,7 +59,7 @@ pub fn is_same_or_under(path: &str, ancestor: &str) -> bool {
     rest.starts_with(is_separator) || base.ends_with(is_separator)
 }
 
-/// Folder dari `root` sampai induk langsung `path` (urut dari luar ke dalam). Kosong bila `path` di luar `root`.
+/// The folders from `root` down to the direct parent of `path` (ordered outermost to innermost). Empty if `path` is outside `root`.
 pub fn ancestor_chain(root: &str, path: &str) -> Vec<String> {
     let base = strip_trailing(root);
     if path == base || !is_same_or_under(path, base) {
@@ -79,7 +79,7 @@ pub fn ancestor_chain(root: &str, path: &str) -> Vec<String> {
     chain
 }
 
-/// Path baru untuk `path` setelah `from` dipindah ke `to`; `None` bila `path` tidak ikut pindah.
+/// The new path for `path` after `from` is moved to `to`; `None` if `path` does not move along.
 pub fn moved_path(path: &str, from: &str, to: &str) -> Option<String> {
     if path == from {
         return Some(to.to_string());
@@ -90,19 +90,19 @@ pub fn moved_path(path: &str, from: &str, to: &str) -> Option<String> {
     Some(format!("{to}{}", &path[strip_trailing(from).len()..]))
 }
 
-/// Benar bila kedua path menunjuk tempat yang sama, tidak peduli pemisah dan garis miring penutup.
+/// True if both paths point to the same place, regardless of separator and trailing slash.
 pub fn same_path(a: &str, b: &str) -> bool {
     strip_trailing(a).replace('\\', "/") == strip_trailing(b).replace('\\', "/")
 }
 
-/// Benar bila `source` boleh dipindah ke dalam folder `dest_dir` lewat seret-lepas: harus berada di
-/// dalam `root` (folder proyek sendiri tidak bisa dipindah), tidak boleh masuk ke dirinya sendiri atau
-/// ke folder di dalamnya, dan tidak ada gunanya ke folder tempatnya sekarang berada.
+/// True if `source` may be moved into the folder `dest_dir` by drag and drop: it must be inside
+/// `root` (the project folder itself cannot be moved), must not go into itself or into a folder
+/// inside itself, and there is no point moving it to the folder it is already in.
 pub fn can_move_into(root: &str, source: &str, dest_dir: &str) -> bool {
     !same_path(source, root) && is_same_or_under(source, root) && !is_same_or_under(dest_dir, source) && !same_path(dir_name(source), dest_dir)
 }
 
-/// Nama berkas atau folder terakhir dari sebuah path.
+/// The last file or folder name of a path.
 pub fn base_name(path: &str) -> &str {
     let trimmed = strip_trailing(path);
     match trimmed.rfind(is_separator) {
@@ -111,7 +111,7 @@ pub fn base_name(path: &str) -> &str {
     }
 }
 
-/// Folder induk sebuah path; kosong bila tidak ada.
+/// The parent folder of a path; empty if there is none.
 pub fn dir_name(path: &str) -> &str {
     let trimmed = path.trim_end_matches(is_separator);
     match trimmed.rfind(is_separator) {
@@ -121,7 +121,7 @@ pub fn dir_name(path: &str) -> &str {
     }
 }
 
-/// Path relatif terhadap folder proyek, dengan garis miring biasa. Path di luar proyek dikembalikan apa adanya.
+/// The path relative to the project folder, with forward slashes. A path outside the project is returned as is.
 pub fn relative_path(root: &str, absolute: &str) -> String {
     let base = root.trim_end_matches(is_separator);
     if absolute == base {
@@ -133,12 +133,12 @@ pub fn relative_path(root: &str, absolute: &str) -> String {
     }
 }
 
-/// Tab berkas yang menunjuk `from` (atau berkas di dalamnya) ditulis ulang ke `to`; tab lain menghasilkan `None`.
+/// A file tab that points to `from` (or a file inside it) is rewritten to `to`; any other tab yields `None`.
 pub fn rewrite_file_tab(tab: &TabData, from: &str, to: &str) -> Option<TabData> {
     if tab.kind != "file" {
         return None;
     }
-    // Path tab sudah dalam bentuk `file_path` (`\` di Windows); `from`/`to` disamakan dulu.
+    // The tab path is already in `file_path` form (`\` on Windows); `from`/`to` are normalized first.
     let (from, to) = (oncode_ui::editor::file_path(from), oncode_ui::editor::file_path(to));
     let moved = moved_path(tab.param_str("path")?, &from, &to)?;
     let mut next = file_tab(&moved);
@@ -149,11 +149,11 @@ pub fn rewrite_file_tab(tab: &TabData, from: &str, to: &str) -> Option<TabData> 
     Some(next)
 }
 
-// ----- State pohon -----
+// ----- Tree state -----
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct DirState {
-    /// Isi folder; `None` selama belum pernah berhasil dimuat.
+    /// The folder contents; `None` until it has ever loaded successfully.
     pub entries: Option<Vec<DirEntry>>,
     pub loading: bool,
     pub error: Option<String>,
@@ -162,7 +162,7 @@ pub struct DirState {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Row {
     Entry { entry: DirEntry, depth: usize, expanded: bool, parent: String },
-    /// Keterangan di bawah folder yang terbuka: sedang memuat, kosong, atau gagal dibaca.
+    /// A note below an open folder: loading, empty, or failed to read.
     Note { depth: usize, parent: String, text: String, error: bool },
 }
 
@@ -185,27 +185,27 @@ impl Row {
     }
 }
 
-/// Hasil perataan pohon.
+/// The result of flattening the tree.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Flat {
-    /// Baris yang terlihat (hanya isi folder yang terbuka).
+    /// The visible rows (only the contents of open folders).
     pub rows: Vec<Row>,
-    /// Folder terbuka dan terlihat yang isinya belum pernah diminta; pemanggil memuatnya.
+    /// Open and visible folders whose contents have never been requested; the caller loads them.
     pub missing: Vec<String>,
 }
 
-/// Isi folder yang sudah dimuat, folder yang terbuka, dan baris terpilih.
+/// The contents of loaded folders, the open folders, and the selected row.
 ///
-/// Pemuatan dijalankan pemanggil: [`TreeState::begin_load`] menandai folder sedang dimuat dan
-/// memberi nomor permintaan, [`TreeState::finish_load`] menerapkan jawabannya. Jawaban dari
-/// permintaan yang sudah digantikan permintaan lebih baru diabaikan.
+/// Loading is run by the caller: [`TreeState::begin_load`] marks a folder as loading and
+/// issues a request number, [`TreeState::finish_load`] applies its response. A response to a
+/// request that has been superseded by a newer one is ignored.
 #[derive(Debug, Clone, Default)]
 pub struct TreeState {
     pub root: String,
     pub dirs: HashMap<String, DirState>,
     pub expanded: HashSet<String>,
     pub selected: Option<String>,
-    /// Permintaan terbaru per folder; jawaban yang lebih lama tidak boleh menimpa yang baru.
+    /// The latest request per folder; an older response must not overwrite a newer one.
     latest: HashMap<String, u64>,
     counter: u64,
 }
@@ -215,7 +215,7 @@ impl TreeState {
         Self { root: root.into(), ..Default::default() }
     }
 
-    /// Folder ini terbuka (akar selalu terbuka).
+    /// Whether this folder is open (the root is always open).
     pub fn is_open(&self, dir: &str) -> bool {
         dir == self.root || self.expanded.contains(dir)
     }
@@ -224,7 +224,7 @@ impl TreeState {
         self.dirs.get(dir)?.entries.as_deref()
     }
 
-    /// Entri untuk sebuah path, dicari di isi folder induknya.
+    /// The entry for a path, looked up in the contents of its parent folder.
     pub fn entry(&self, path: &str) -> Option<&DirEntry> {
         self.entries(dir_name(path))?.iter().find(|entry| entry.path == path)
     }
@@ -233,7 +233,7 @@ impl TreeState {
         self.dirs.values().any(|dir| dir.loading)
     }
 
-    /// Menandai folder sedang dimuat; isi lama tetap ditampilkan sampai jawabannya datang.
+    /// Marks a folder as loading; the old contents stay displayed until the response arrives.
     pub fn begin_load(&mut self, path: &str) -> u64 {
         self.counter += 1;
         self.latest.insert(path.to_string(), self.counter);
@@ -241,13 +241,13 @@ impl TreeState {
         self.counter
     }
 
-    /// Menerapkan jawaban sebuah permintaan. Hasil `true` bila isi folder kini tersedia.
+    /// Applies the response to a request. The result is `true` if the folder contents are now available.
     pub fn finish_load(&mut self, path: &str, request: u64, result: Result<Vec<DirEntry>, String>) -> bool {
         if self.latest.get(path) != Some(&request) {
             return false;
         }
         self.latest.remove(path);
-        // Folder yang sementara itu sudah hilang dari isi induknya tidak dihidupkan lagi oleh jawaban yang terlambat.
+        // A folder that has meanwhile disappeared from its parent's contents is not revived by a late response.
         if path != self.root {
             if let Some(siblings) = self.entries(dir_name(path)) {
                 if !siblings.iter().any(|entry| entry.path == path) {
@@ -270,7 +270,7 @@ impl TreeState {
         }
     }
 
-    /// Entri yang hilang dari sebuah folder ikut membawa pergi keadaan (cache, terbuka, terpilih) di bawahnya.
+    /// An entry that disappears from a folder takes the state below it (cache, open, selected) along with it.
     fn forget_removed(&mut self, previous: Option<&[DirEntry]>, entries: &[DirEntry]) {
         let Some(previous) = previous else { return };
         let removed: Vec<&str> = previous.iter().filter(|old| !entries.iter().any(|new| new.path == old.path)).map(|old| old.path.as_str()).collect();
@@ -298,8 +298,8 @@ impl TreeState {
         self.expanded.clear();
     }
 
-    /// Menyegarkan `path` dan semua folder di dalamnya: cache folder tertutup dibuang (dimuat lagi
-    /// saat dibuka) dan folder terbuka dikembalikan untuk dimuat ulang.
+    /// Refreshes `path` and all folders inside it: the cache of closed folders is dropped (loaded again
+    /// when opened) and open folders are returned to be reloaded.
     pub fn reload_under(&mut self, path: &str) -> Vec<String> {
         let root = self.root.clone();
         let expanded = &self.expanded;
@@ -312,8 +312,8 @@ impl TreeState {
         targets
     }
 
-    /// Menanggapi perubahan dari luar: folder terbuka yang memuat path yang berubah dikembalikan
-    /// untuk dimuat ulang; folder tertutup yang sudah pernah dimuat cukup dibuang cache-nya.
+    /// Reacts to outside changes: open folders that contain a changed path are returned
+    /// to be reloaded; closed folders that were loaded before just have their cache dropped.
     pub fn fs_changes<'a>(&mut self, paths: impl IntoIterator<Item = &'a str>, overflow: bool) -> Vec<String> {
         if overflow {
             let root = self.root.clone();
@@ -321,7 +321,7 @@ impl TreeState {
         }
         let mut reload: Vec<String> = Vec::new();
         for path in paths {
-            // Induknya berubah isi; path itu sendiri bisa berupa folder yang isinya berubah.
+            // Its parent's contents changed; the path itself may be a folder whose contents changed.
             for dir in [dir_name(path), path] {
                 if !self.dirs.contains_key(dir) {
                     continue;
@@ -339,8 +339,8 @@ impl TreeState {
         reload
     }
 
-    /// Setelah ganti nama: keadaan terbuka dan terpilih di bawah `from` ikut pindah ke `to`.
-    /// Cache di bawah `from` dibuang karena entrinya masih memuat path lama.
+    /// After a rename: the open and selected state below `from` moves along to `to`.
+    /// The cache below `from` is dropped because its entries still hold the old path.
     pub fn move_state(&mut self, from: &str, to: &str) {
         self.dirs.retain(|key, _| !is_same_or_under(key, from));
         self.latest.retain(|key, _| !is_same_or_under(key, from));
@@ -350,7 +350,7 @@ impl TreeState {
         }
     }
 
-    /// Meratakan pohon menjadi daftar baris yang terlihat.
+    /// Flattens the tree into a list of visible rows.
     pub fn flatten(&self) -> Flat {
         let mut flat = Flat::default();
         self.visit(&self.root, 0, &mut flat);
@@ -385,17 +385,17 @@ impl TreeState {
     }
 }
 
-// ----- Validasi nama -----
+// ----- Name validation -----
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct NameOptions<'a> {
-    /// Izinkan `a/b/c.txt`: folder antara dibuat sekaligus.
+    /// Allow `a/b/c.txt`: the intermediate folders are created at the same time.
     pub nested: bool,
-    /// Nama saat ini (ganti nama): tidak dianggap bentrok dengan dirinya sendiri.
+    /// The current name (rename): not considered a clash with itself.
     pub current: Option<&'a str>,
 }
 
-/// Memeriksa nama berkas/folder baru. Mengembalikan pesan galat, atau `None` bila sah.
+/// Checks a new file/folder name. Returns an error message, or `None` if valid.
 pub fn validate_entry_name(input: &str, siblings: Option<&[DirEntry]>, options: NameOptions) -> Option<String> {
     if input.trim().is_empty() {
         return Some("Enter a name.".into());
@@ -436,9 +436,9 @@ pub fn validate_entry_name(input: &str, siblings: Option<&[DirEntry]>, options: 
     None
 }
 
-// ----- Dekorasi Git -----
+// ----- Git decorations -----
 
-/// Keterangan status untuk tooltip.
+/// The status caption for the tooltip.
 pub fn mark_title(mark: FileMark) -> &'static str {
     match mark {
         FileMark::Modified => "Modified",
@@ -459,7 +459,7 @@ fn kind_mark(kind: &ChangeKind) -> FileMark {
     }
 }
 
-/// Bila satu berkas punya beberapa status (mis. staged dan unstaged), yang berperingkat tertinggi ditampilkan.
+/// If one file has several statuses (e.g. staged and unstaged), the highest-ranked one is shown.
 fn file_rank(mark: FileMark) -> u8 {
     match mark {
         FileMark::Modified => 1,
@@ -471,7 +471,7 @@ fn file_rank(mark: FileMark) -> u8 {
     }
 }
 
-/// Warna folder: konflik mengalahkan perubahan, perubahan mengalahkan berkas baru.
+/// Folder color: a conflict beats a change, a change beats a new file.
 fn folder_mark(mark: FileMark) -> FileMark {
     match mark {
         FileMark::Conflicted => FileMark::Conflicted,
@@ -498,17 +498,17 @@ fn slashes(path: &str) -> Cow<'_, str> {
     }
 }
 
-/// Status Git per path absolut. Kunci memakai garis miring biasa di semua platform.
+/// Git status per absolute path. Keys use forward slashes on all platforms.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct GitDecorations {
-    /// Status per berkas.
+    /// The status per file.
     pub files: HashMap<String, FileMark>,
-    /// Status gabungan per folder yang memuat perubahan.
+    /// The combined status per folder that contains changes.
     pub folders: HashMap<String, FileMark>,
 }
 
-/// Memetakan snapshot repositori ke path absolut. Path di snapshot relatif terhadap akar
-/// repositori (`snapshot.root`), yang belum tentu sama dengan folder proyek.
+/// Maps a repository snapshot to absolute paths. Paths in the snapshot are relative to the
+/// repository root (`snapshot.root`), which is not necessarily the same as the project folder.
 pub fn build_decorations(snapshot: Option<&RepoSnapshot>) -> GitDecorations {
     let mut decorations = GitDecorations::default();
     let Some(snapshot) = snapshot else { return decorations };
@@ -543,7 +543,7 @@ pub fn build_decorations(snapshot: Option<&RepoSnapshot>) -> GitDecorations {
 
     for (path, status) in &decorations.files {
         let inherited = folder_mark(*status);
-        // Semua folder di antara akar repositori dan berkas ikut diwarnai.
+        // All folders between the repository root and the file are colored too.
         for folder in ancestor_chain(&root, path).into_iter().skip(1) {
             match decorations.folders.get(&folder) {
                 Some(previous) if folder_rank(inherited) <= folder_rank(*previous) => {}
@@ -559,7 +559,7 @@ pub fn build_decorations(snapshot: Option<&RepoSnapshot>) -> GitDecorations {
 #[derive(Debug, Clone, PartialEq)]
 pub struct EntryDecoration {
     pub status: FileMark,
-    /// Huruf status; kosong untuk folder (hanya warna dan titik).
+    /// The status letter; empty for folders (color and dot only).
     pub letter: &'static str,
     pub title: String,
 }
@@ -570,7 +570,7 @@ pub fn decoration_for(decorations: &GitDecorations, path: &str, is_dir: bool) ->
     if !is_dir {
         return own.map(|status| EntryDecoration { status, letter: status.letter(), title: mark_title(status).to_string() });
     }
-    // Folder: gabungan isinya, atau statusnya sendiri (mis. submodule atau folder untracked).
+    // Folder: the combination of its contents, or its own status (e.g. a submodule or an untracked folder).
     let status = decorations.folders.get(path.as_ref()).copied().or(own)?;
     Some(EntryDecoration { status, letter: "", title: format!("Contains {} files", mark_title(status).to_lowercase()) })
 }
@@ -653,7 +653,7 @@ mod tests {
         assert_eq!(relative_path("/ws", "/ws2/a.ts"), "/ws2/a.ts");
     }
 
-    // ----- Perataan -----
+    // ----- Flattening -----
 
     fn sample() -> Vec<(&'static str, DirState)> {
         vec![
@@ -696,7 +696,7 @@ mod tests {
         assert_eq!(shape(&flat.rows), ["empty/-", "  (Empty)", "locked/-", "  (Permission denied)", "pending/-", "  (Loading…)", "unknown/-", "  (Loading…)"]);
         let tones: Vec<bool> = flat.rows.iter().filter_map(|row| if let Row::Note { error, .. } = row { Some(*error) } else { None }).collect();
         assert_eq!(tones, [false, true, false, false]);
-        // Hanya folder yang belum pernah diminta yang perlu dimuat pemanggil.
+        // Only folders that have never been requested need to be loaded by the caller.
         assert_eq!(flat.missing, ["/ws/unknown"]);
     }
 
@@ -713,7 +713,7 @@ mod tests {
         assert_eq!(flat.missing, ["/ws"]);
     }
 
-    // ----- Pemuatan -----
+    // ----- Loading -----
 
     #[test]
     fn a_newer_request_wins_over_a_late_answer() {
@@ -733,7 +733,7 @@ mod tests {
         let request = tree.begin_load("/ws/locked");
         assert!(!tree.finish_load("/ws/locked", request, Err("Permission denied".into())));
         assert_eq!(shape(&tree.flatten().rows), ["locked/-", "  (Permission denied)"]);
-        assert!(tree.flatten().missing.is_empty(), "folder yang gagal tidak diminta terus-menerus");
+        assert!(tree.flatten().missing.is_empty(), "a failed folder is not requested over and over");
     }
 
     #[test]
@@ -758,7 +758,7 @@ mod tests {
         assert_eq!(shape(&tree.flatten().rows), ["README.md"]);
     }
 
-    // ----- Perubahan dari luar -----
+    // ----- Outside changes -----
 
     #[test]
     fn reloads_only_the_open_folder_that_contains_the_changed_path() {
@@ -782,14 +782,14 @@ mod tests {
         let mut tree = tree(sample(), &[]);
         assert!(tree.fs_changes(["/ws/docs/out.bin"], false).is_empty());
         assert!(!tree.dirs.contains_key("/ws/docs"));
-        assert!(tree.dirs.contains_key("/ws/src"), "folder lain tidak tersentuh");
+        assert!(tree.dirs.contains_key("/ws/src"), "other folders are untouched");
     }
 
     #[test]
     fn reloads_the_root_and_every_expanded_folder_on_overflow() {
         let mut tree = tree(sample(), &["/ws/src"]);
         assert_eq!(tree.fs_changes([], true), ["/ws", "/ws/src"]);
-        assert!(!tree.dirs.contains_key("/ws/docs") && !tree.dirs.contains_key("/ws/src/app"), "cache folder tertutup dibuang");
+        assert!(!tree.dirs.contains_key("/ws/docs") && !tree.dirs.contains_key("/ws/src/app"), "the cache of closed folders is dropped");
     }
 
     #[test]
@@ -800,7 +800,7 @@ mod tests {
         assert!(!tree.dirs.contains_key("/ws/src/app"));
     }
 
-    // ----- Ganti nama -----
+    // ----- Rename -----
 
     #[test]
     fn move_state_carries_expansion_and_selection_to_the_new_path() {
@@ -823,7 +823,7 @@ mod tests {
         assert_eq!(moved_path("/ws/a.ts.bak", "/ws/a.ts", "/ws/b.ts"), None);
     }
 
-    /// Path dalam bentuk yang dipakai tab (`\` di Windows).
+    /// A path in the form tabs use (`\` on Windows).
     fn tab_path(path: &str) -> String {
         oncode_ui::editor::file_path(path)
     }
@@ -857,7 +857,7 @@ mod tests {
         assert_eq!(rewrite_file_tab(&diff, "/ws/src", "/ws/lib"), None);
     }
 
-    // ----- Validasi nama -----
+    // ----- Name validation -----
 
     fn siblings() -> Vec<DirEntry> {
         vec![dir("/ws/src"), file("/ws/README.md")]
@@ -900,7 +900,7 @@ mod tests {
         assert!(check("/abs.txt", NESTED).unwrap().contains("relative"));
         assert!(check("a//b", NESTED).unwrap().contains("empty"));
         assert!(check("a/", NESTED).unwrap().contains("empty"));
-        // Dua titik di dalam nama biasa bukan traversal.
+        // Two dots inside an ordinary name are not traversal.
         assert_eq!(check("a..b", NameOptions::default()), None);
     }
 
@@ -908,7 +908,7 @@ mod tests {
     fn rejects_a_name_that_a_loaded_sibling_already_has() {
         assert!(check("README.md", NameOptions::default()).unwrap().contains("already exists"));
         assert!(check("src", NameOptions::default()).unwrap().contains("already exists"));
-        // Sistem berkas Linux membedakan huruf besar-kecil; keputusan akhir ada di backend.
+        // Linux file systems are case-sensitive; the final decision is made in the backend.
         assert_eq!(check("readme.md", NameOptions::default()), None);
     }
 
@@ -925,7 +925,7 @@ mod tests {
         assert!(check("src", renaming).unwrap().contains("already exists"));
     }
 
-    // ----- Dekorasi Git -----
+    // ----- Git decorations -----
 
     fn snapshot(root: &str) -> RepoSnapshot {
         RepoSnapshot {
@@ -971,7 +971,7 @@ mod tests {
 
     #[test]
     fn resolves_snapshot_paths_against_the_repository_root_not_the_workspace_folder() {
-        // Folder proyek /repo/packages/app berada di dalam repositori /repo.
+        // The project folder /repo/packages/app is inside the repository /repo.
         let mut s = snapshot("/repo");
         s.unstaged = vec![change("packages/app/src/main.ts", ChangeKind::Modified)];
         s.untracked = vec!["packages/other/x.ts".into()];
@@ -981,7 +981,7 @@ mod tests {
         assert_eq!((folder.letter, folder.status), ("", FileMark::Modified));
         assert_eq!(folder.title, "Contains modified files");
         assert_eq!(decoration_for(&d, "/repo/packages/app", true).unwrap().status, FileMark::Modified);
-        // Path yang sama relatif terhadap folder proyek tidak boleh ikut cocok.
+        // The same path relative to the project folder must not match too.
         assert_eq!(decoration_for(&d, "/repo/packages/app/packages/app/src/main.ts", false), None);
         assert_eq!(decoration_for(&d, "/repo/src/main.ts", false), None);
     }
@@ -1042,26 +1042,26 @@ mod tests {
 
     #[test]
     fn an_entry_can_be_moved_into_any_other_folder_of_the_project() {
-        // Ke folder lain, termasuk akar proyek, dari berkas maupun folder.
+        // Into another folder, including the project root, for both files and folders.
         assert!(can_move_into("/ws", "/ws/a.txt", "/ws/src"));
         assert!(can_move_into("/ws", "/ws/src/a.txt", "/ws"));
         assert!(can_move_into("/ws", "/ws/src/deep/a.txt", "/ws/other"));
         assert!(can_move_into("/ws", "/ws/src", "/ws/other/inner"));
-        // Awalan nama yang sama bukan berarti di dalamnya.
+        // A shared name prefix does not mean it is inside.
         assert!(can_move_into("/ws", "/ws/src", "/ws/src-old"));
         assert!(can_move_into("/ws/", "/ws/a.txt", "/ws/src/"));
     }
 
     #[test]
     fn an_entry_cannot_be_dropped_where_nothing_would_change_or_into_itself() {
-        // Folder tempatnya sekarang: tidak ada yang berubah.
+        // The folder it is already in: nothing changes.
         assert!(!can_move_into("/ws", "/ws/a.txt", "/ws"));
         assert!(!can_move_into("/ws", "/ws/a.txt", "/ws/"));
         assert!(!can_move_into("/ws", "/ws/src/a.txt", "/ws/src"));
-        // Ke dirinya sendiri atau isinya.
+        // Into itself or its contents.
         assert!(!can_move_into("/ws", "/ws/src", "/ws/src"));
         assert!(!can_move_into("/ws", "/ws/src", "/ws/src/deep"));
-        // Folder proyek sendiri, dan yang di luarnya, tidak bisa dipindah.
+        // The project folder itself, and anything outside it, cannot be moved.
         assert!(!can_move_into("/ws", "/ws", "/ws/src"));
         assert!(!can_move_into("/ws", "/elsewhere/a.txt", "/ws/src"));
     }

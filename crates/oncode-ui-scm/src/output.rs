@@ -1,5 +1,5 @@
-//! Panel Git Output: setiap perintah git yang dijalankan aplikasi beserta keluarannya.
-//! Riwayatnya global (semua jendela) dan dibatasi [`MAX_ENTRIES`] perintah.
+//! The Git Output panel: every git command the app runs, with its output.
+//! The history is global (all windows) and limited to [`MAX_ENTRIES`] commands.
 
 use std::ops::Range;
 
@@ -14,25 +14,25 @@ use oncode_git::GitLogEntry;
 use oncode_ui::{core_bus, Lucide};
 
 pub const MAX_ENTRIES: usize = 500;
-/// Keluaran satu perintah yang lebih panjang dari ini dipotong di tampilan.
+/// The output of a single command longer than this is truncated in the view.
 const MAX_LINES_PER_ENTRY: usize = 400;
 const ROW_HEIGHT: f32 = 18.;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct OutputEntry {
     pub entry: GitLogEntry,
-    /// Jam setempat saat perintah selesai, mis. "14:03:27".
+    /// Local time when the command finished, e.g. "14:03:27".
     pub time: SharedString,
 }
 
-/// Satu baris tampilan: kepala perintah atau satu baris keluarannya.
+/// One display line: a command header or one line of its output.
 #[derive(Debug, Clone, PartialEq)]
 pub enum OutputLine {
     Command { time: SharedString, command: SharedString, meta: SharedString, failed: bool },
     Text(SharedString),
 }
 
-/// Keterangan di belakang perintah: durasi, dan kode keluar bila gagal.
+/// The note after a command: the duration, and the exit code if it failed.
 pub fn entry_meta(entry: &GitLogEntry) -> String {
     if entry.exit_code != 0 {
         format!("[{} ms, exit {}]", entry.duration_ms, entry.exit_code)
@@ -41,7 +41,7 @@ pub fn entry_meta(entry: &GitLogEntry) -> String {
     }
 }
 
-/// Meratakan riwayat menjadi baris-baris berketinggian sama untuk daftar virtual.
+/// Flattens the history into equal-height lines for the virtual list.
 pub fn flatten(entries: &[OutputEntry]) -> Vec<OutputLine> {
     let mut lines = Vec::new();
     for item in entries {
@@ -57,7 +57,7 @@ pub fn flatten(entries: &[OutputEntry]) -> Vec<OutputLine> {
         }
         let total = output.lines().count();
         for line in output.lines().take(MAX_LINES_PER_ENTRY) {
-            // Baris progres git memakai `\r`; hanya keadaan terakhirnya yang berarti.
+            // git progress lines use `\r`; only the last state matters.
             let line = line.rsplit('\r').find(|part| !part.is_empty()).unwrap_or("");
             lines.push(OutputLine::Text(line.replace('\t', "    ").into()));
         }
@@ -74,7 +74,7 @@ pub struct GitOutput {
     _subscriptions: Vec<Subscription>,
 }
 
-/// Riwayat berubah (perintah baru atau dikosongkan).
+/// The history changed (a new command or cleared).
 pub struct OutputChanged;
 
 impl EventEmitter<OutputChanged> for GitOutput {}
@@ -105,7 +105,7 @@ struct GitOutputGlobal(Entity<GitOutput>);
 
 impl Global for GitOutputGlobal {}
 
-/// Riwayat perintah git global.
+/// The global git command history.
 pub fn git_output(cx: &App) -> Entity<GitOutput> {
     cx.global::<GitOutputGlobal>().0.clone()
 }
@@ -124,7 +124,7 @@ pub(crate) fn install(cx: &mut App) {
     cx.set_global(GitOutputGlobal(log));
 }
 
-/// Tombol "Clear output" di bilah tab panel.
+/// The "Clear output" button in the panel's tab bar.
 pub fn panel_actions(_: &mut Window, _: &mut App) -> gpui_kit::AnyElement {
     Button::new("git-output-clear")
         .ghost()
@@ -147,7 +147,7 @@ impl GitOutputPanel {
         let log = git_output(cx);
         let subscription = cx.subscribe(&log, |this: &mut Self, log, _: &OutputChanged, cx| {
             this.lines = flatten(log.read(cx).entries());
-            // Perintah terbaru selalu terlihat.
+            // The newest command is always visible.
             if !this.lines.is_empty() {
                 this.scroll.scroll_to_item(this.lines.len() - 1, ScrollStrategy::Bottom);
             }
@@ -206,11 +206,11 @@ mod tests {
 
     #[test]
     fn entries_flatten_to_command_and_output_lines() {
-        let lines = flatten(&[entry("git add -A -- a.txt", 0, ""), entry("git push", 1, "remote: ditolak\nerror: failed to push\n")]);
+        let lines = flatten(&[entry("git add -A -- a.txt", 0, ""), entry("git push", 1, "remote: rejected\nerror: failed to push\n")]);
         assert_eq!(lines.len(), 4);
         assert_eq!(lines[0], OutputLine::Command { time: "10:00:00".into(), command: "> git add -A -- a.txt".into(), meta: "[12 ms]".into(), failed: false });
         assert_eq!(lines[1], OutputLine::Command { time: "10:00:00".into(), command: "> git push".into(), meta: "[12 ms, exit 1]".into(), failed: true });
-        assert_eq!(lines[2], OutputLine::Text("remote: ditolak".into()));
+        assert_eq!(lines[2], OutputLine::Text("remote: rejected".into()));
         assert_eq!(lines[3], OutputLine::Text("error: failed to push".into()));
     }
 
@@ -220,7 +220,7 @@ mod tests {
         assert_eq!(lines[1], OutputLine::Text("done.".into()));
         assert_eq!(lines[2], OutputLine::Text("    indented".into()));
 
-        let long: String = (0..MAX_LINES_PER_ENTRY + 25).map(|i| format!("baris {i}\n")).collect();
+        let long: String = (0..MAX_LINES_PER_ENTRY + 25).map(|i| format!("line {i}\n")).collect();
         let lines = flatten(&[entry("git log", 0, &long)]);
         assert_eq!(lines.len(), 1 + MAX_LINES_PER_ENTRY + 1);
         assert_eq!(lines.last(), Some(&OutputLine::Text("… 25 more lines".into())));

@@ -1,11 +1,11 @@
-//! Laporan mouse untuk program TUI (protokol X10/normal, UTF-8, dan SGR). Logika murni.
+//! Mouse reporting for TUI programs (the X10/normal, UTF-8, and SGR protocols). Pure logic.
 
-/// Tombol atau gerakan yang dilaporkan.
+/// The button or motion being reported.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MouseAction {
     Press(ReportButton),
     Release(ReportButton),
-    /// Gerakan; `Some` bila sebuah tombol sedang ditekan.
+    /// Motion; `Some` if a button is being held down.
     Motion(Option<ReportButton>),
     WheelUp,
     WheelDown,
@@ -37,27 +37,27 @@ pub struct ReportModifiers {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MouseEncoding {
-    /// `CSI M Cb Cx Cy`, satu byte per koordinat (maksimum kolom/baris 223).
+    /// `CSI M Cb Cx Cy`, one byte per coordinate (maximum column/line 223).
     Normal,
-    /// Seperti `Normal`, tetapi koordinat besar ditulis sebagai UTF-8.
+    /// Like `Normal`, but large coordinates are written as UTF-8.
     Utf8,
     /// `CSI < Cb ; Cx ; Cy M|m`.
     Sgr,
 }
 
-/// Ke mana gulir roda mouse diteruskan.
+/// Where the mouse wheel scroll is forwarded to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WheelTarget {
-    /// Riwayat (scrollback) terminal digulir.
+    /// The terminal's history (scrollback) is scrolled.
     History,
-    /// Program layar penuh tanpa laporan mouse (less, man): roda menjadi panah atas/bawah.
+    /// A full-screen program without mouse reporting (less, man): the wheel becomes up/down arrows.
     Arrows,
-    /// Program meminta laporan mouse (vim `mouse=a`, htop, lazygit): roda dilaporkan ke program.
+    /// The program asked for mouse reporting (vim `mouse=a`, htop, lazygit): the wheel is reported to the program.
     Report,
 }
 
-/// Menentukan tujuan roda. Shift+roda selalu menggulir riwayat terminal (cara keluar dari
-/// program yang menangkap mouse), kecuali di layar alternatif yang memang tanpa riwayat.
+/// Decides where the wheel goes. Shift+wheel always scrolls the terminal history (a way out of a
+/// program that captures the mouse), except on the alternate screen, which has no history.
 pub fn wheel_target(mouse_mode: bool, alt_screen: bool, alternate_scroll: bool, shift: bool) -> WheelTarget {
     if mouse_mode && !shift {
         WheelTarget::Report
@@ -68,14 +68,14 @@ pub fn wheel_target(mouse_mode: bool, alt_screen: bool, alternate_scroll: bool, 
     }
 }
 
-/// Posisi gulir (`display_offset`) dari titik pada scrollbar: `fraction` 0 = atas (riwayat
-/// tertua), 1 = bawah (keluaran terbaru).
+/// The scroll position (`display_offset`) from a point on the scrollbar: `fraction` 0 = top (the
+/// oldest history), 1 = bottom (the newest output).
 pub fn offset_at_fraction(fraction: f32, history: usize) -> usize {
     let fraction = if fraction.is_finite() { fraction.clamp(0.0, 1.0) } else { 1.0 };
     ((1.0 - fraction) * history as f32).round() as usize
 }
 
-/// Letak ibu jari scrollbar sebagai pecahan tinggi lintasan: (atas, tinggi).
+/// The scrollbar thumb's placement as a fraction of the track height: (top, height).
 pub fn scrollbar_thumb(rows: usize, history: usize, offset: usize) -> (f32, f32) {
     let total = (rows + history).max(1) as f32;
     let height = rows as f32 / total;
@@ -83,13 +83,13 @@ pub fn scrollbar_thumb(rows: usize, history: usize, offset: usize) -> (f32, f32)
     (top, height)
 }
 
-/// Urutan byte laporan mouse untuk sel (`column`, `line`) berbasis nol, atau `None` bila
-/// posisinya tidak bisa dinyatakan dalam pengodean itu.
+/// The mouse report byte sequence for the zero-based cell (`column`, `line`), or `None` if the
+/// position cannot be expressed in that encoding.
 pub fn mouse_report(action: MouseAction, column: usize, line: usize, modifiers: ReportModifiers, encoding: MouseEncoding) -> Option<Vec<u8>> {
     let sgr = encoding == MouseEncoding::Sgr;
     let (mut code, release) = match action {
         MouseAction::Press(button) => (button.code(), false),
-        // Protokol lama tidak menyebut tombol mana yang dilepas.
+        // The old protocol does not say which button was released.
         MouseAction::Release(button) => (if sgr { button.code() } else { 3 }, true),
         MouseAction::Motion(button) => (32 + button.map_or(3, ReportButton::code), false),
         MouseAction::WheelUp => (64, false),
@@ -136,25 +136,25 @@ mod tests {
 
     #[test]
     fn wheel_goes_to_the_program_history_or_arrows() {
-        // Shell biasa: riwayat terminal.
+        // A plain shell: the terminal history.
         assert_eq!(wheel_target(false, false, true, false), WheelTarget::History);
-        // less/man: layar alternatif tanpa mouse, roda jadi panah.
+        // less/man: alternate screen without a mouse, the wheel becomes arrows.
         assert_eq!(wheel_target(false, true, true, false), WheelTarget::Arrows);
-        // vim mouse=a, htop: dilaporkan ke program, juga di layar utama.
+        // vim mouse=a, htop: reported to the program, also on the main screen.
         assert_eq!(wheel_target(true, true, true, false), WheelTarget::Report);
         assert_eq!(wheel_target(true, false, true, false), WheelTarget::Report);
-        // Shift+roda di layar utama: tetap riwayat terminal.
+        // Shift+wheel on the main screen: still the terminal history.
         assert_eq!(wheel_target(true, false, true, true), WheelTarget::History);
     }
 
     #[test]
     fn scrollbar_maps_between_offset_and_position() {
-        assert_eq!(offset_at_fraction(0.0, 100), 100, "atas = riwayat tertua");
-        assert_eq!(offset_at_fraction(1.0, 100), 0, "bawah = terbaru");
+        assert_eq!(offset_at_fraction(0.0, 100), 100, "top = oldest history");
+        assert_eq!(offset_at_fraction(1.0, 100), 0, "bottom = newest");
         assert_eq!(offset_at_fraction(0.5, 100), 50);
         assert_eq!(offset_at_fraction(-3.0, 100), 100);
         assert_eq!(offset_at_fraction(f32::NAN, 100), 0);
-        // 20 baris layar, 80 riwayat.
+        // 20 screen lines, 80 history.
         assert_eq!(scrollbar_thumb(20, 80, 0), (0.8, 0.2));
         assert_eq!(scrollbar_thumb(20, 80, 80), (0.0, 0.2));
         assert_eq!(scrollbar_thumb(20, 0, 0), (0.0, 1.0));

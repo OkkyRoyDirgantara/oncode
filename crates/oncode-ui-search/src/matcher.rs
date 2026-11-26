@@ -1,12 +1,12 @@
-//! Pencocok untuk berkas yang sedang terbuka di editor (dan untuk pratinjau teks pengganti).
+//! Matcher for files currently open in the editor (and for the replacement text preview).
 //!
-//! Memakai mesin yang sama dengan backend (`grep-regex`, disusun dengan opsi yang sama seperti
-//! `oncode_workspace::search`), sehingga hasil di editor tidak pernah berbeda dari hasil di disk:
-//! baris demi baris, kecocokan kosong dilewati, kata utuh memakai batas kata Unicode, dan
-//! `$1`/`${nama}`/`$$` pada teks pengganti mengikuti aturan `grep-matcher`.
+//! Uses the same engine as the backend (`grep-regex`, built with the same options as
+//! `oncode_workspace::search`), so results in the editor never differ from results on disk:
+//! line by line, empty matches are skipped, whole word uses Unicode word boundaries, and
+//! `$1`/`${name}`/`$$` in the replacement text follow the `grep-matcher` rules.
 //!
-//! Posisi di dalam baris disimpan dalam byte (yang dipakai editor); `LineMatch` dari backend
-//! memakai unit UTF-16, jadi pembantu konversinya ada di sini juga.
+//! Positions within a line are stored in bytes (what the editor uses); the backend's `LineMatch`
+//! uses UTF-16 units, so the conversion helpers live here too.
 
 use std::ops::Range;
 
@@ -14,7 +14,7 @@ use grep_matcher::{Captures as _, Matcher as _};
 use grep_regex::{RegexMatcher, RegexMatcherBuilder};
 use oncode_workspace::SearchQuery;
 
-/// Bagian kueri yang menentukan kecocokan (tanpa saringan berkas dan batas hasil).
+/// The part of the query that determines matching (without file filters and the result cap).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MatchOptions {
     pub pattern: String,
@@ -29,8 +29,8 @@ impl From<&SearchQuery> for MatchOptions {
     }
 }
 
-/// Identitas sebuah kecocokan seperti dilaporkan backend: baris mulai dari 1, kolom dan panjang
-/// dalam unit UTF-16.
+/// The identity of a match as reported by the backend: line starting at 1, column and length
+/// in UTF-16 units.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct MatchKey {
     pub line: u32,
@@ -38,25 +38,25 @@ pub struct MatchKey {
     pub length: u32,
 }
 
-/// Satu kecocokan di dalam sebuah baris.
+/// A single match within a line.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LineHit {
-    /// Awal dan akhir kecocokan di dalam baris, dalam byte.
+    /// Start and end of the match within the line, in bytes.
     pub start: usize,
     pub end: usize,
-    /// Rentang byte tiap grup tangkapan; indeks 0 adalah seluruh kecocokan. `None` bila grup
-    /// tidak ikut cocok.
+    /// Byte range of each capture group; index 0 is the whole match. `None` if the group
+    /// did not participate in the match.
     pub groups: Vec<Option<Range<usize>>>,
 }
 
-/// Pencocok per baris untuk sebuah kueri.
+/// A per-line matcher for a query.
 #[derive(Clone)]
 pub struct LineMatcher {
     matcher: RegexMatcher,
 }
 
 impl LineMatcher {
-    /// Menyusun pencocok; galatnya adalah pesan yang sama dengan yang dikirim backend.
+    /// Builds the matcher; its error is the same message the backend sends.
     pub fn new(options: &MatchOptions) -> Result<Self, String> {
         if options.pattern.is_empty() {
             return Err("The search pattern is empty".into());
@@ -64,7 +64,7 @@ impl LineMatcher {
         if !options.is_regex && options.pattern.contains(['\n', '\r']) {
             return Err("Multiline search is not supported yet".into());
         }
-        // Harus sama persis dengan `build_matcher` di `oncode-workspace/src/search.rs`.
+        // Must be exactly the same as `build_matcher` in `oncode-workspace/src/search.rs`.
         RegexMatcherBuilder::new()
             .case_insensitive(!options.case_sensitive)
             .word(options.whole_word)
@@ -76,14 +76,14 @@ impl LineMatcher {
             .map_err(|error| format!("Invalid search pattern: {error}"))
     }
 
-    /// Semua kecocokan tak kosong pada satu baris (tanpa akhir baris), dari kiri ke kanan dan
-    /// tidak tumpang-tindih.
+    /// All non-empty matches on a single line (without the line ending), from left to right and
+    /// non-overlapping.
     pub fn find(&self, line: &str) -> Vec<LineHit> {
         let mut hits = Vec::new();
         let Ok(mut captures) = self.matcher.new_captures() else { return hits };
         let _ = self.matcher.captures_iter(line.as_bytes(), &mut captures, |captures| {
             let Some(whole) = captures.get(0) else { return true };
-            // Kecocokan kosong tidak dilaporkan backend.
+            // Empty matches are not reported by the backend.
             if whole.is_empty() {
                 return true;
             }
@@ -94,13 +94,13 @@ impl LineMatcher {
         hits
     }
 
-    /// Indeks grup tangkapan bernama, bila ada.
+    /// The index of a named capture group, if any.
     pub fn capture_index(&self, name: &str) -> Option<usize> {
         self.matcher.capture_index(name)
     }
 
-    /// Teks pengganti untuk satu kecocokan. `interpolate` (mode regex) menafsirkan `$1` dkk.;
-    /// pada mode literal teks pengganti dipakai apa adanya.
+    /// The replacement text for a single match. `interpolate` (regex mode) interprets `$1` etc.;
+    /// in literal mode the replacement text is used as is.
     pub fn replacement_for(&self, line: &str, hit: &LineHit, replacement: &str, interpolate: bool) -> String {
         if !interpolate {
             return replacement.to_string();
@@ -109,10 +109,10 @@ impl LineMatcher {
     }
 }
 
-/// Mengisi `$1`, `$nama`, `${nama}`, dan `$$` pada teks pengganti, mengikuti `interpolate` milik
-/// crate `grep-matcher`: nama tanpa kurung kurawal memakan huruf/angka/garis bawah sebanyak
-/// mungkin (`$1a` adalah grup bernama "1a"), dan grup yang tidak ada atau tidak ikut cocok
-/// menjadi teks kosong.
+/// Fills in `$1`, `$name`, `${name}`, and `$$` in the replacement text, following `interpolate` from
+/// the `grep-matcher` crate: a name without braces consumes as many letters/digits/underscores as
+/// possible (`$1a` is a group named "1a"), and a group that doesn't exist or didn't participate in
+/// the match becomes empty text.
 pub fn expand_replacement<'a>(template: &str, group: impl Fn(usize) -> Option<&'a str>, name_to_index: impl Fn(&str) -> Option<usize>) -> String {
     let bytes = template.as_bytes();
     let mut out = String::with_capacity(template.len());
@@ -150,13 +150,13 @@ pub fn expand_replacement<'a>(template: &str, group: impl Fn(usize) -> Option<&'
     out
 }
 
-/// Panjang teks dalam unit UTF-16.
+/// Length of text in UTF-16 units.
 pub fn utf16_len(text: &str) -> usize {
     text.chars().map(char::len_utf16).sum()
 }
 
-/// Offset byte untuk posisi `units` (unit UTF-16) di dalam `text`; dibatasi sampai akhir teks
-/// dan tidak pernah membelah karakter.
+/// Byte offset for position `units` (UTF-16 units) within `text`; clamped to the end of the text
+/// and never splits a character.
 pub fn utf16_to_byte(text: &str, units: usize) -> usize {
     let mut seen = 0;
     for (index, ch) in text.char_indices() {
@@ -168,13 +168,13 @@ pub fn utf16_to_byte(text: &str, units: usize) -> usize {
     text.len()
 }
 
-/// Kecocokan mana yang diganti.
+/// Which matches get replaced.
 #[derive(Debug, Clone, Copy)]
 pub enum Pick<'a> {
     All,
-    /// Semua kecuali yang disingkirkan pengguna.
+    /// All except those the user dismissed.
     Except(&'a [MatchKey]),
-    /// Hanya satu kecocokan ini.
+    /// Only this one match.
     Only(&'a MatchKey),
 }
 
@@ -188,21 +188,21 @@ impl Pick<'_> {
     }
 }
 
-/// Satu penggantian pada sebuah dokumen.
+/// A single replacement in a document.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TextEdit {
-    /// Nomor baris, mulai dari 1.
+    /// Line number, starting at 1.
     pub line: u32,
-    /// Awal dan panjang kecocokan di dalam baris, dalam unit UTF-16 (seperti `LineMatch`).
+    /// Start and length of the match within the line, in UTF-16 units (like `LineMatch`).
     pub column: u32,
     pub length: u32,
-    /// Rentang byte yang diganti di dalam seluruh dokumen.
+    /// The byte range being replaced within the whole document.
     pub range: Range<usize>,
     pub insert: String,
 }
 
-/// Suntingan untuk mengganti kecocokan pada `text`, urut dari awal dokumen. Baris dipisah pada
-/// `\n` (dengan `\r` di ujung dibuang), sama seperti backend.
+/// Edits that replace matches in `text`, ordered from the start of the document. Lines are split on
+/// `\n` (with a trailing `\r` dropped), the same as the backend.
 pub fn compute_edits(matcher: &LineMatcher, text: &str, replacement: &str, interpolate: bool, pick: Pick<'_>) -> Vec<TextEdit> {
     let mut edits = Vec::new();
     let mut offset = 0;
@@ -215,7 +215,7 @@ pub fn compute_edits(matcher: &LineMatcher, text: &str, replacement: &str, inter
                 continue;
             }
         }
-        // Offset UTF-16 dihitung bertahap agar baris panjang tidak dipindai ulang tiap kecocokan.
+        // UTF-16 offsets are computed incrementally so a long line isn't rescanned for every match.
         let (mut seen_byte, mut seen_units) = (0, 0);
         for hit in matcher.find(line) {
             seen_units += utf16_len(&line[seen_byte..hit.start]);
@@ -237,7 +237,7 @@ pub fn compute_edits(matcher: &LineMatcher, text: &str, replacement: &str, inter
     edits
 }
 
-/// Menerapkan suntingan (urut seperti keluaran [`compute_edits`]) pada `text`.
+/// Applies edits (ordered like the output of [`compute_edits`]) to `text`.
 pub fn apply_edits(text: &str, edits: &[TextEdit]) -> String {
     let grow: usize = edits.iter().map(|edit| edit.insert.len()).sum();
     let mut out = String::with_capacity(text.len() + grow);
@@ -257,8 +257,8 @@ fn saturate(n: usize) -> u32 {
 
 #[cfg(test)]
 mod tests {
-    //! Harapan di sini mengikuti pengujian backend (`crates/oncode-workspace/src/search.rs`) dan
-    //! pengujian pencocok versi 0.2 (`matcher.test.ts`): kecocokan dan teks pengganti harus sama.
+    //! The expectations here follow the backend tests (`crates/oncode-workspace/src/search.rs`) and
+    //! the v0.2 matcher tests (`matcher.test.ts`): matches and replacement text must be the same.
 
     use super::*;
 
@@ -286,10 +286,10 @@ mod tests {
     }
 
     fn matcher_of(options: &MatchOptions) -> LineMatcher {
-        LineMatcher::new(options).unwrap_or_else(|reason| panic!("tidak bisa disusun: {reason}"))
+        LineMatcher::new(options).unwrap_or_else(|reason| panic!("cannot be built: {reason}"))
     }
 
-    /// `[kolom, panjang]` tiap kecocokan pada satu baris, dalam unit UTF-16.
+    /// `[column, length]` of each match on a line, in UTF-16 units.
     fn spans(options: MatchOptions, line: &str) -> Vec<[usize; 2]> {
         matcher_of(&options).find(line).iter().map(|hit| [utf16_len(&line[..hit.start]), utf16_len(&line[hit.start..hit.end])]).collect()
     }
@@ -298,7 +298,7 @@ mod tests {
         spans(options, line).into_iter().map(|[start, _]| start).collect()
     }
 
-    /// Isi berkas setelah semua kecocokan diganti, seperti `replace_in_files` di backend.
+    /// File content after all matches are replaced, like `replace_in_files` in the backend.
     fn replaced(options: MatchOptions, replacement: &str, text: &str) -> String {
         let edits = compute_edits(&matcher_of(&options), text, replacement, options.is_regex, Pick::All);
         apply_edits(text, &edits)
@@ -318,7 +318,7 @@ mod tests {
         }
         assert_eq!(columns(sensitive(literal("hello")), "Hello"), [] as [usize; 0]);
         assert_eq!(columns(sensitive(literal("hello")), "hello"), [0]);
-        // Pelipatan huruf Unicode, bukan hanya ASCII.
+        // Unicode case folding, not just ASCII.
         assert_eq!(columns(literal("ÉCOLE"), "une école"), [4]);
     }
 
@@ -339,15 +339,15 @@ mod tests {
     fn whole_word_uses_unicode_word_characters() {
         assert_eq!(columns(word(literal("cat")), "écat caté cat"), [10]);
         assert_eq!(columns(word(literal("cat")), "猫cat cat٣ cat"), [10]);
-        // Karakter astral (dua unit UTF-16) di depan kecocokan.
+        // An astral character (two UTF-16 units) before the match.
         assert_eq!(columns(word(literal("cat")), "𝒳cat 😀cat"), [8]);
     }
 
     #[test]
     fn whole_word_only_constrains_the_two_ends_of_the_match() {
         assert_eq!(spans(word(literal("a.b")), "x a.b y a.bc"), [[2, 3]]);
-        // Batas "separuh" hanya melihat tetangga: tidak boleh ada karakter kata tepat di luar
-        // kecocokan, apa pun karakter pertama dan terakhir kecocokan itu sendiri.
+        // A "half" boundary only looks at the neighbours: there must be no word character right outside
+        // the match, whatever the first and last characters of the match itself are.
         assert_eq!(spans(word(literal("(cat)")), "x (cat) y"), [[2, 5]]);
         assert_eq!(spans(word(literal("(cat)")), "a(cat) (cat)b"), [] as [[usize; 2]; 0]);
     }
@@ -395,7 +395,7 @@ mod tests {
         assert_eq!(spans(regex("\\w$"), "x𝒳"), [[1, 2]]);
         assert_eq!(spans(regex("[^a]$"), "a😀"), [[1, 2]]);
         assert_eq!(spans(word(regex("cat")), "cat𝒳 cat"), [[6, 3]]);
-        // Kecocokan kosong di depan karakter astral tidak membelah karakter itu.
+        // An empty match before an astral character doesn't split that character.
         assert_eq!(spans(regex("x*"), "😀x"), [[2, 1]]);
     }
 
@@ -411,8 +411,8 @@ mod tests {
         assert_eq!(spans(regex("[\\-\\]\\\\^]+"), "a-]\\^b"), [[1, 4]]);
         assert_eq!(spans(regex("a{2,3}?"), "aaaa"), [[0, 2], [2, 2]]);
         assert_eq!(spans(regex("x/y"), "x/y"), [[0, 3]]);
-        // Versi 0.2 menolak konstruksi berikut karena tidak bisa diterjemahkan ke `RegExp` JS;
-        // di sini mesinnya sama dengan backend, jadi semuanya berlaku juga di editor.
+        // Version 0.2 rejected the following constructs because they can't be translated to a JS `RegExp`;
+        // here the engine is the same as the backend's, so all of them work in the editor too.
         assert_eq!(spans(regex("(?i)abc"), "xABC"), [[1, 3]]);
         assert_eq!(spans(regex("[[:alpha:]]+"), "ab1"), [[0, 2]]);
         assert_eq!(spans(regex("[a-z&&[^b]]+"), "abc"), [[0, 1], [2, 1]]);
@@ -425,10 +425,10 @@ mod tests {
         let reason = LineMatcher::new(&regex("(unclosed")).err().unwrap();
         assert!(reason.starts_with("Invalid search pattern:"), "{reason}");
         assert!(LineMatcher::new(&regex("a**")).is_err() || !spans(regex("a**"), "aa").is_empty());
-        assert!(LineMatcher::new(&regex("(a)\\1")).is_err(), "backreference tidak didukung crate regex");
+        assert!(LineMatcher::new(&regex("(a)\\1")).is_err(), "backreferences are not supported by the regex crate");
     }
 
-    /// Kecocokan tiruan: grup bernomor 0..=3, lalu `val` (indeks 4) dan `none` (indeks 5, tidak ikut cocok).
+    /// Mock match: numbered groups 0..=3, then `val` (index 4) and `none` (index 5, did not participate in the match).
     fn expand(template: &str) -> String {
         let groups = [Some("whole"), Some("one"), None, Some("three"), Some("V"), None];
         expand_replacement(
@@ -466,7 +466,7 @@ mod tests {
     #[test]
     fn uses_an_empty_string_for_groups_that_are_missing_or_did_not_participate() {
         assert_eq!(expand("[$2][$9][$nope][$none][$constructor]"), "[][][][][]");
-        // Teks non-ASCII di sekitar rujukan tidak terpotong.
+        // Non-ASCII text around a reference isn't truncated.
         assert_eq!(expand("é$1ü→$val"), "éoneü→V");
     }
 
@@ -494,7 +494,7 @@ mod tests {
     fn applies_line_anchors_per_line_and_leaves_empty_lines_untouched() {
         assert_eq!(replaced(regex("\\s+$"), "", "a  \nb\n\nc "), "a\nb\n\nc");
         assert_eq!(replaced(regex("^foo"), "bar", "foo foo\nfoo"), "bar foo\nbar");
-        // Akhir baris CRLF dipertahankan dan `$` cocok sebelum `\r\n`.
+        // CRLF line endings are preserved and `$` matches before `\r\n`.
         assert_eq!(replaced(regex("foo$"), "bar", "a foo\r\nfoo\r\n"), "a bar\r\nbar\r\n");
     }
 
@@ -525,7 +525,7 @@ mod tests {
         let only = MatchKey { line: 1, column: 9, length: 3 };
         let one = compute_edits(&matcher, text, "bar", false, Pick::Only(&only));
         assert_eq!(apply_edits(text, &one), "x 😀 foo bar\n\nfoo");
-        // Kecocokan yang sudah tidak ada di posisi itu tidak diganti.
+        // A match that is no longer at that position is not replaced.
         let gone = MatchKey { line: 2, column: 0, length: 3 };
         assert!(compute_edits(&matcher, text, "bar", false, Pick::Only(&gone)).is_empty());
     }
@@ -539,15 +539,15 @@ mod tests {
         assert_eq!(utf16_to_byte(text, 3), 6);
         assert_eq!(utf16_to_byte(text, 4), 7);
         assert_eq!(utf16_to_byte(text, 99), 7);
-        // Posisi di tengah pasangan surrogate dibulatkan ke akhir karakternya.
+        // A position in the middle of a surrogate pair is rounded up to the end of its character.
         assert_eq!(utf16_to_byte(text, 2), 6);
     }
 
-    /// Penggantian di editor harus menghasilkan isi yang sama dengan penggantian backend di disk.
+    /// Replacement in the editor must produce the same content as the backend's replacement on disk.
     #[test]
     fn replacing_in_memory_matches_the_backend_byte_for_byte() {
         let cases: [(MatchOptions, &str, &str); 6] = [
-            (literal("jarum"), "benang", "satu jarum\nJARUM dua jarum\n"),
+            (literal("needle"), "thread", "one needle\nNEEDLE two needle\n"),
             (word(literal("cat")), "dog", "cat concat cat_x (cat) cats\r\ncat\r\n"),
             (regex("let (\\w+) = (?P<val>\\d+);"), "const ${1}: u32 = $val; // $$ $9", "let alpha = 1;\nlet beta = 22;\n"),
             (regex("\\s+$"), "", "a  \nb\n\nc \n"),
@@ -570,8 +570,8 @@ mod tests {
             let on_disk = std::fs::read_to_string(dir.path().join("a.txt")).unwrap();
 
             let edits = compute_edits(&matcher_of(&options), text, replacement, options.is_regex, Pick::All);
-            assert_eq!(apply_edits(text, &edits), on_disk, "pola {:?}", options.pattern);
-            assert_eq!(edits.len() as u32, summary.replacements, "pola {:?}", options.pattern);
+            assert_eq!(apply_edits(text, &edits), on_disk, "pattern {:?}", options.pattern);
+            assert_eq!(edits.len() as u32, summary.replacements, "pattern {:?}", options.pattern);
         }
     }
 }

@@ -4,36 +4,36 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
-description = "Kerangka UI native OnCode: jendela, tab, panel, command, keybinding, dan buffer editor"
+description = "OnCode native UI framework: window, tabs, panels, commands, keybindings, and the editor buffer"
 
 [dependencies]
 oncode-core = { path = "../oncode-core" }
 oncode-git = { path = "../oncode-git" }
 oncode-workspace = { path = "../oncode-workspace" }
-# Konversi path ↔ URI LSP untuk Go to Definition berbasis pencarian proyek.
+# Path ↔ LSP URI conversion for project-search-based Go to Definition.
 oncode-lsp = { path = "../oncode-lsp" }
-# Satu-satunya pintu ke GPUI: versi GPUI ditentukan oleh gpui-kit (lihat docs/RANCANGAN.md 3.2).
+# The only gateway to GPUI: the GPUI version is determined by gpui-kit (see docs/DESIGN.md 3.2).
 gpui-kit = { version = "=0.10.0", features = [
     "tree-sitter-bash", "tree-sitter-c", "tree-sitter-cpp", "tree-sitter-css", "tree-sitter-diff",
     "tree-sitter-go", "tree-sitter-html", "tree-sitter-java", "tree-sitter-javascript",
     "tree-sitter-markdown", "tree-sitter-python", "tree-sitter-ruby", "tree-sitter-rust",
     "tree-sitter-sql", "tree-sitter-toml", "tree-sitter-tsx", "tree-sitter-typescript",
     "tree-sitter-yaml",
-    # Ekstensi "Extra languages" (bisa dimatikan di Settings → Extensions).
+    # "Extra languages" extension (can be turned off in Settings → Extensions).
     "tree-sitter-kotlin", "tree-sitter-csharp", "tree-sitter-php", "tree-sitter-lua",
     "tree-sitter-swift", "tree-sitter-scala", "tree-sitter-graphql", "tree-sitter-proto",
     "tree-sitter-make", "tree-sitter-cmake", "tree-sitter-zig", "tree-sitter-elixir",
     "tree-sitter-svelte",
 ] }
-# Grammar Dart (Flutter): tidak disediakan gpui-kit, didaftarkan sendiri ke highlighter.
+# Dart (Flutter) grammar: not provided by gpui-kit, registered with the highlighter separately.
 tree-sitter-dart = "0.3"
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
-# Versi yang sama dengan yang dipakai gpui-component untuk kait LSP editor.
+# Same version gpui-component uses for the editor's LSP hooks.
 lsp-types = { version = "0.97", features = ["proposed"] }
 
-# Hanya dipakai pembantu uji (`testing.rs`).
+# Only used by the test helpers (`testing.rs`).
 tempfile = { workspace = true, optional = true }
 oncode-forge = { path = "../oncode-forge", optional = true }
 
@@ -41,5 +41,5 @@ oncode-forge = { path = "../oncode-forge", optional = true }
 oncode-ui = { path = ".", features = ["test-support"] }
 
 [features]
-# Pembantu uji tampilan (`oncode_ui::testing`) untuk crate ini dan crate fitur.
+# View test helpers (`oncode_ui::testing`) for this crate and the feature crates.
 test-support = ["gpui-kit/test-support", "dep:tempfile", "dep:oncode-forge"]

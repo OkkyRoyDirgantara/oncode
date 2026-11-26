@@ -1,4 +1,4 @@
-//! Satu trait untuk semua penyedia, plus pembantu yang bergantung pada jenis penyedia.
+//! One trait for all providers, plus helpers that depend on the provider kind.
 
 use crate::error::{ForgeError, Result};
 use crate::github::GitHubProvider;
@@ -8,41 +8,41 @@ use crate::model::{
     RepoRef,
 };
 
-/// Operasi yang didukung semua penyedia. Nomor halaman mulai dari 1 (0 dianggap 1);
-/// untuk halaman berikutnya, kirim kembali `Page::next_page` apa adanya.
+/// Operations supported by all providers. Page numbers start at 1 (0 is treated as 1);
+/// for the next page, send `Page::next_page` back as-is.
 #[async_trait::async_trait]
 pub trait ForgeProvider: Send + Sync {
-    /// Akun pemilik token. Dipakai juga untuk memvalidasi token (termasuk PAT) saat login.
+    /// The account that owns the token. Also used to validate the token (including PATs) at login.
     async fn current_user(&self) -> Result<Account>;
 
-    /// Repositori yang bisa diakses akun ini, yang paling baru diperbarui lebih dulu.
-    /// `query` menyaring berdasarkan nama; string kosong berarti tanpa saringan.
+    /// Repositories this account can access, most recently updated first.
+    /// `query` filters by name; an empty string means no filter.
     ///
-    /// GitLab mencari di sisi server. GitHub tidak punya pencarian sisi server untuk
-    /// "repositori yang bisa saya akses", jadi di sana daftar dipindai di sisi klien:
-    /// satu panggilan bisa mengembalikan lebih atau kurang dari 30 butir (bahkan nol)
-    /// sementara `next_page` masih terisi.
+    /// GitLab searches on the server side. GitHub has no server-side search for
+    /// "repositories I can access", so there the list is scanned on the client side:
+    /// a single call may return more or fewer than 30 items (even zero)
+    /// while `next_page` is still set.
     async fn list_repos(&self, query: &str, page: u32) -> Result<Page<RemoteRepo>>;
 
-    /// PR/MR di `repo`, yang paling baru diperbarui lebih dulu.
+    /// PRs/MRs in `repo`, most recently updated first.
     async fn list_pull_requests(&self, repo: &RepoRef, filter: PrFilter, page: u32) -> Result<Page<PullRequest>>;
 
-    /// Detail satu PR/MR.
+    /// Details of a single PR/MR.
     async fn get_pull_request(&self, repo: &RepoRef, number: u32) -> Result<PullRequestDetail>;
 
-    /// Pemeriksaan CI untuk commit `sha`. GitHub: check run digabung dengan commit status.
-    /// GitLab: job dari pipeline terbaru untuk commit itu, atau status pipelinenya bila
-    /// belum ada job. Kosong bila commit tidak punya CI.
+    /// CI checks for commit `sha`. GitHub: check runs combined with commit statuses.
+    /// GitLab: jobs from the latest pipeline for that commit, or the pipeline's status if
+    /// there are no jobs yet. Empty if the commit has no CI.
     async fn list_checks(&self, repo: &RepoRef, sha: &str) -> Result<Vec<Check>>;
 
-    /// Membuat PR/MR. Branch sumber harus sudah ada di remote.
+    /// Creates a PR/MR. The source branch must already exist on the remote.
     async fn create_pull_request(&self, repo: &RepoRef, input: &NewPullRequest) -> Result<PullRequest>;
 
-    /// Branch bawaan repositori (untuk mengisi awal branch tujuan).
+    /// The repository's default branch (to pre-fill the target branch).
     async fn default_branch(&self, repo: &RepoRef) -> Result<String>;
 }
 
-/// Ref Git yang di-fetch untuk checkout PR/MR `number`: GitHub `refs/pull/{n}/head`,
+/// The Git ref to fetch for checking out PR/MR `number`: GitHub `refs/pull/{n}/head`,
 /// GitLab `refs/merge-requests/{n}/head`.
 pub fn pull_request_ref(kind: ForgeKind, number: u32) -> String {
     match kind {
@@ -51,10 +51,10 @@ pub fn pull_request_ref(kind: ForgeKind, number: u32) -> String {
     }
 }
 
-/// Pasangan username/password yang dipakai git lewat HTTPS untuk host ini dengan token
-/// OAuth atau PAT: GitHub `("x-access-token", token)`, GitLab `("oauth2", token)`.
+/// The username/password pair git uses over HTTPS for this host with an OAuth token
+/// or PAT: GitHub `("x-access-token", token)`, GitLab `("oauth2", token)`.
 ///
-/// Nilai kedua adalah rahasia: jangan dicatat ke log dan jangan dijadikan argumen perintah.
+/// The second value is a secret: do not log it and do not pass it as a command argument.
 pub fn git_credentials(kind: ForgeKind, token: &str) -> (String, String) {
     let username = match kind {
         ForgeKind::GitHub => "x-access-token",
@@ -63,8 +63,8 @@ pub fn git_credentials(kind: ForgeKind, token: &str) -> (String, String) {
     (username.to_string(), token.to_string())
 }
 
-/// Membuat penyedia untuk `host` dengan `token`. `api_base_override` mengganti basis
-/// REST, supaya tes bisa menunjuk ke server tiruan.
+/// Creates a provider for `host` with `token`. `api_base_override` replaces the REST
+/// base, so tests can point at a mock server.
 pub fn provider(host: &ForgeHost, token: &str, api_base_override: Option<&str>) -> Box<dyn ForgeProvider + Send + Sync> {
     match host.kind {
         ForgeKind::GitHub => Box::new(GitHubProvider::new(host, token, api_base_override)),
@@ -72,7 +72,7 @@ pub fn provider(host: &ForgeHost, token: &str, api_base_override: Option<&str>) 
     }
 }
 
-/// Memeriksa masukan PR/MR sebelum dikirim ke server.
+/// Validates PR/MR input before it is sent to the server.
 pub(crate) fn validate_new_pull_request(input: &NewPullRequest) -> Result<()> {
     if input.title.trim().is_empty() {
         return Err(ForgeError::invalid("Title must not be empty"));
@@ -97,9 +97,9 @@ mod tests {
     #[test]
     fn validates_new_pull_request() {
         let valid = NewPullRequest {
-            title: "Judul".into(),
+            title: "Title".into(),
             body: String::new(),
-            source_branch: "fitur".into(),
+            source_branch: "feature".into(),
             target_branch: "main".into(),
             draft: false,
         };
@@ -110,7 +110,7 @@ mod tests {
             NewPullRequest { target_branch: String::new(), ..valid.clone() },
             NewPullRequest { source_branch: "main".into(), ..valid.clone() },
         ] {
-            let err = validate_new_pull_request(&broken).expect_err("harus ditolak");
+            let err = validate_new_pull_request(&broken).expect_err("must be rejected");
             assert_eq!(err.code, ForgeErrorCode::InvalidInput);
         }
     }

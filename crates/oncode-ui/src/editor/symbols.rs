@@ -1,9 +1,9 @@
-//! Go to Definition dan Ctrl+klik tanpa language server (ekstensi `extensions.symbolSearch`):
-//! definisi dicari di seluruh proyek lewat `oncode_core::api::symbols`.
+//! Go to Definition and Ctrl+click without a language server (the `extensions.symbolSearch` extension):
+//! definitions are searched across the whole project through `oncode_core::api::symbols`.
 //!
-//! Setiap editor berkas mendapat penyedia ini sejak dibuat. Bila language server terhubung, hub
-//! LSP menggantinya dengan penyedianya sendiri, yang kembali ke pencarian ini bila server tidak
-//! menemukan apa-apa.
+//! Every file editor gets this provider from the moment it is created. When a language server is
+//! connected, the LSP hub replaces it with its own provider, which falls back to this search when
+//! the server finds nothing.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -17,12 +17,12 @@ use oncode_core::api::symbols::{self as symbols_api, SymbolLocation};
 use super::{is_untitled, open_file, OpenFile};
 use crate::workbench::{Env, Workbench};
 
-/// Hasil pencarian dipakai ulang sebentar: Ctrl+arahkan kursor memanggil penyedia berulang kali.
+/// Search results are reused briefly: Ctrl+hover calls the provider repeatedly.
 const CACHE_FOR: Duration = Duration::from_secs(3);
 
 type Cache = Rc<RefCell<Option<(String, Instant, Vec<SymbolLocation>)>>>;
 
-/// Penyedia definisi berbasis pencarian proyek untuk satu berkas.
+/// A project-search-based definition provider for one file.
 pub struct SymbolSearchProvider {
     env: Env,
     path: String,
@@ -41,8 +41,8 @@ impl DefinitionProvider for SymbolSearchProvider {
     }
 }
 
-/// Definisi simbol di `offset` lewat pencarian proyek, sebagai `LocationLink` untuk editor.
-/// Dipakai juga hub LSP bila server tidak menemukan definisi.
+/// Definitions of the symbol at `offset` via project search, as `LocationLink`s for the editor.
+/// Also used by the LSP hub when the server finds no definition.
 pub fn symbol_definition_links(env: &Env, path: &str, text: &Rope, offset: usize, cx: &mut App) -> Task<GpuiResult<Vec<LocationLink>>> {
     search_links(env, path, text, offset, None, cx)
 }
@@ -63,7 +63,7 @@ fn search_links(env: &Env, path: &str, text: &Rope, offset: usize, cache: Option
     let (core, label, query) = (env.core.clone(), env.window.to_string(), symbol.clone());
     let task = crate::spawn_core(cx, async move { symbols_api::symbol_definitions(&core, &label, query, current).await });
     cx.spawn(async move |_| {
-        // Galat pencarian (mis. tidak ada folder terbuka) berarti tidak ada definisi, bukan kegagalan.
+        // A search error (e.g. no folder open) means no definitions, not a failure.
         let locations = task.await.unwrap_or_default();
         if let Some(cache) = cache {
             *cache.borrow_mut() = Some((symbol, Instant::now(), locations.clone()));
@@ -84,8 +84,8 @@ fn links(locations: &[SymbolLocation], origin: Range) -> Vec<LocationLink> {
         .collect()
 }
 
-/// Memasang penyedia pencarian simbol pada editor yang baru dibuat, beserta pembuka berkas untuk
-/// definisi di berkas lain. Hub LSP boleh menimpanya sesudah ini.
+/// Attaches the symbol search provider to a newly created editor, along with a file opener for
+/// definitions in other files. The LSP hub may override it afterwards.
 pub(crate) fn attach(state: &Entity<EditorState>, env: &Env, path: &str, cx: &mut App) {
     let provider = Rc::new(SymbolSearchProvider::new(env.clone(), path.to_string()));
     let show_document = show_document_handler(env.workbench.clone(), path.to_string());
@@ -97,8 +97,8 @@ pub(crate) fn attach(state: &Entity<EditorState>, env: &Env, path: &str, cx: &mu
     });
 }
 
-/// `true` bila kedua path menunjuk berkas yang sama. Di Windows tidak peka huruf besar-kecil dan
-/// pemisah path (server bahasa bisa menulis `c:/…` untuk `C:\…`).
+/// `true` if both paths point to the same file. On Windows it is case-insensitive and ignores
+/// the path separator (language servers may write `c:/…` for `C:\…`).
 pub fn same_path(a: &str, b: &str) -> bool {
     let normalize = |path: &str| {
         let path = path.replace('\\', "/");
@@ -112,11 +112,11 @@ pub fn same_path(a: &str, b: &str) -> bool {
     normalize(a) == normalize(b)
 }
 
-/// Handler `show_document` untuk editor berkas `own_path` (Ctrl+klik / F12 ke definisi).
+/// The `show_document` handler for the editor of file `own_path` (Ctrl+click / F12 to a definition).
 ///
-/// Editor memanggilnya selagi dirinya sendiri sedang diperbarui, jadi handler ini tidak boleh
-/// menyentuh editor itu: definisi di berkas yang sama dikembalikan ke editor (`false`, kursor
-/// dipindah editor sendiri), dan berkas lain dibuka setelah pembaruan itu selesai.
+/// The editor calls it while it is itself being updated, so this handler must not touch that
+/// editor: a definition in the same file is handed back to the editor (`false`, the editor moves
+/// the cursor itself), and other files are opened after that update has finished.
 pub fn show_document_handler(workbench: WeakEntity<Workbench>, own_path: String) -> Rc<dyn Fn(&lsp_types::ShowDocumentParams, &mut Window, &mut App) -> bool> {
     Rc::new(move |params: &lsp_types::ShowDocumentParams, window: &mut Window, cx: &mut App| {
         if params.external == Some(true) {

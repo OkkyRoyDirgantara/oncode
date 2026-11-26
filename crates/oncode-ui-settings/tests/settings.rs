@@ -1,5 +1,5 @@
-//! Uji tampilan halaman pengaturan: kontrol sungguhan di jendela tanpa layar, backend sungguhan,
-//! dan hasil akhirnya diperiksa di `settings.json` pada disk.
+//! View tests for the settings page: real controls in a headless window, a real backend,
+//! and the end result checked in `settings.json` on disk.
 
 use std::cell::Cell;
 use std::path::Path;
@@ -22,7 +22,7 @@ fn setup(cx: &mut TestAppContext) -> TestApp {
     app
 }
 
-/// Isi `settings.json` di disk; `Null` bila berkasnya belum pernah ditulis.
+/// The content of `settings.json` on disk; `Null` if the file has never been written.
 fn on_disk(app: &TestApp) -> Value {
     std::fs::read_to_string(app.core.settings_path()).ok().and_then(|text| serde_json::from_str(&text).ok()).unwrap_or(Value::Null)
 }
@@ -41,14 +41,14 @@ fn open_settings(window: &TestWindow, cx: &mut TestAppContext) -> Entity<Setting
     assert!(window.run_command(cx, "settings.open"));
     cx.run_until_parked();
     let workbench = window.workbench(cx);
-    let page = cx.update(|cx| oncode_ui_settings::active_page(workbench.read(cx)).expect("tab pengaturan aktif"));
+    let page = cx.update(|cx| oncode_ui_settings::active_page(workbench.read(cx)).expect("settings tab active"));
     window.update(cx, |window, cx| window.render_frame(cx));
     page
 }
 
-/// Menunggu sampai semua perubahan tersimpan (termasuk jeda isian teks).
+/// Waits until all changes are saved (including the text input delay).
 async fn settle(window: &TestWindow, page: &Entity<SettingsPage>, cx: &mut TestAppContext) {
-    window.wait_until(cx, "pengaturan tersimpan", |_, cx| page.read(cx).is_settled()).await;
+    window.wait_until(cx, "settings saved", |_, cx| page.read(cx).is_settled()).await;
     cx.run_until_parked();
     window.update(cx, |window, cx| window.render_frame(cx));
 }
@@ -60,7 +60,7 @@ fn exists(window: &TestWindow, cx: &mut TestAppContext, id: &'static str) -> boo
     })
 }
 
-/// Mengklik kotak isian, memilih seluruh isinya, lalu mengetik penggantinya.
+/// Clicks an input box, selects all its content, then types the replacement.
 fn retype(window: &TestWindow, cx: &mut TestAppContext, id: &'static str, text: &str) {
     window.update(cx, |window, cx| {
         window.render_frame(cx);
@@ -75,7 +75,7 @@ fn retype(window: &TestWindow, cx: &mut TestAppContext, id: &'static str, text: 
     cx.run_until_parked();
 }
 
-/// Menyaring halaman lewat kotak pencarian, supaya baris yang dituju berada di area terlihat.
+/// Filters the page through the search box, so the target row is in the visible area.
 fn search(window: &TestWindow, cx: &mut TestAppContext, query: &str) {
     retype(window, cx, "settings-search", query);
     window.update(cx, |window, cx| window.render_frame(cx));
@@ -87,12 +87,12 @@ fn click(window: &TestWindow, cx: &mut TestAppContext, id: &'static str) {
         window.click(id, cx);
     });
     cx.run_until_parked();
-    // Pendengar fokus (mis. `on_blur` kotak isian) dipanggil GPUI setelah frame berikutnya digambar.
+    // Focus listeners (e.g. an input box's `on_blur`) are invoked by GPUI after the next frame is drawn.
     window.update(cx, |window, cx| window.render_frame(cx));
     cx.run_until_parked();
 }
 
-/// Menulis pengaturan pengguna dari luar halaman, seperti jendela lain.
+/// Writes the user settings from outside the page, like another window.
 fn save_externally(app: &TestApp, settings: Settings) {
     let core = app.core.clone();
     app.runtime.block_on(async move { api::app::settings_set(&core, settings).await }).unwrap();
@@ -103,13 +103,13 @@ fn write_project_settings(project: &Path, json: &str) {
     std::fs::write(project.join(".oncode/settings.json"), json).unwrap();
 }
 
-// Padanan e2e "layar awal tanpa folder; Settings tetap bisa dibuka" dan uji pendaftaran v0.2.
+// Counterpart of the e2e "start screen without a folder; Settings can still be opened" and the v0.2 registration test.
 #[gpui_kit::test]
 async fn settings_open_without_a_folder_through_the_shortcut(cx: &mut TestAppContext) {
     let app = setup(cx);
     let window = app.open(None, cx).await;
 
-    let command = window.update(cx, |window, cx| oncode_ui::commands::get("settings.open", window, cx)).expect("settings.open terdaftar");
+    let command = window.update(cx, |window, cx| oncode_ui::commands::get("settings.open", window, cx)).expect("settings.open registered");
     assert_eq!((command.title.as_ref(), command.category.as_deref(), command.keybindings.as_slice()), ("Open Settings", Some("Preferences"), &["Mod+,".to_string()][..]));
     assert!(tab_ids(&window, cx).is_empty());
 
@@ -122,7 +122,7 @@ async fn settings_open_without_a_folder_through_the_shortcut(cx: &mut TestAppCon
     assert!(exists(&window, cx, "settings-page"));
     assert!(exists(&window, cx, "st-editor.wordWrap"));
 
-    // Membukanya lagi mengaktifkan tab yang sama, tidak menggandakannya.
+    // Opening it again activates the same tab rather than duplicating it.
     assert!(window.run_command(cx, "settings.open"));
     cx.run_until_parked();
     assert_eq!(tab_ids(&window, cx), ["settings"]);
@@ -130,35 +130,35 @@ async fn settings_open_without_a_folder_through_the_shortcut(cx: &mut TestAppCon
     let tab = cx.update(|cx| workbench.read(cx).model().active().map(|(_, tab)| tab.clone())).unwrap();
     assert_eq!((tab.kind.as_str(), tab.title.as_str(), tab.description.as_deref()), ("settings", "Settings", Some("User settings")));
 
-    // Tanpa folder formulir bekerja penuh dan tidak ada penanda proyek.
+    // Without a folder the form works fully and there is no project marker.
     click(&window, cx, "st-editor.wordWrap");
     let page = cx.update(|cx| oncode_ui_settings::active_page(workbench.read(cx))).unwrap();
     settle(&window, &page, cx).await;
     assert_eq!(on_disk(&app)["editor"]["wordWrap"], json!(true));
     assert!(!exists(&window, cx, "st-editor.wordWrap-override"));
 
-    // Menutup tab terakhir kembali ke layar kosong.
+    // Closing the last tab returns to the empty screen.
     assert!(window.run_command(cx, "workbench.closeTab"));
-    window.wait_until(cx, "tab tertutup", |shell, cx| shell.read(cx).workbench().read(cx).model().all_tabs().next().is_none()).await;
+    window.wait_until(cx, "tab closed", |shell, cx| shell.read(cx).workbench().read(cx).model().all_tabs().next().is_none()).await;
 }
 
-// Padanan e2e "pengaturan tersimpan ke settings.json dan langsung berlaku".
+// Counterpart of the e2e "settings are saved to settings.json and take effect immediately".
 #[gpui_kit::test]
 async fn toggling_a_switch_persists_and_applies_immediately(cx: &mut TestAppContext) {
     let app = setup(cx);
     let project = app.project(&[("README.md", "# Demo\n")]);
     let window = app.open(Some(&project), cx).await;
     let page = open_settings(&window, cx);
-    assert!(!effective(&window, cx).editor.word_wrap, "awalnya tanpa word wrap");
+    assert!(!effective(&window, cx).editor.word_wrap, "initially without word wrap");
     assert_eq!(window.update(cx, |window, _| window.find("st-editor.wordWrap").checked()), Some(false));
 
     click(&window, cx, "st-editor.wordWrap");
     settle(&window, &page, cx).await;
     let saved = on_disk(&app);
-    assert_eq!(saved["editor"]["wordWrap"], json!(true), "settings.json diperbarui");
-    assert_eq!(saved["editor"]["tabSize"], json!(4), "pengaturan lain tetap utuh");
-    assert!(std::fs::read_to_string(app.core.settings_path()).unwrap().contains("\"wordWrap\": true"), "format berkas sama dengan v0.2");
-    window.wait_until(cx, "pengaturan jendela ikut berubah", |shell, cx| shell.read(cx).workbench().read(cx).settings().editor.word_wrap).await;
+    assert_eq!(saved["editor"]["wordWrap"], json!(true), "settings.json updated");
+    assert_eq!(saved["editor"]["tabSize"], json!(4), "other settings remain intact");
+    assert!(std::fs::read_to_string(app.core.settings_path()).unwrap().contains("\"wordWrap\": true"), "file format is the same as v0.2");
+    window.wait_until(cx, "window settings change too", |shell, cx| shell.read(cx).workbench().read(cx).settings().editor.word_wrap).await;
     assert_eq!(window.update(cx, |window, cx| {
         window.render_frame(cx);
         window.find("st-editor.wordWrap").checked()
@@ -166,9 +166,9 @@ async fn toggling_a_switch_persists_and_applies_immediately(cx: &mut TestAppCont
 
     click(&window, cx, "st-editor.wordWrap");
     settle(&window, &page, cx).await;
-    assert_eq!(on_disk(&app)["editor"]["wordWrap"], json!(false), "pengaturan dikembalikan");
-    window.wait_until(cx, "pengaturan jendela kembali", |shell, cx| !shell.read(cx).workbench().read(cx).settings().editor.word_wrap).await;
-    // Tanpa `.oncode/settings.json` di proyek, tidak boleh ada penanda "overridden by project" yang menetap.
+    assert_eq!(on_disk(&app)["editor"]["wordWrap"], json!(false), "setting restored");
+    window.wait_until(cx, "window settings revert", |shell, cx| !shell.read(cx).workbench().read(cx).settings().editor.word_wrap).await;
+    // Without a `.oncode/settings.json` in the project, there must be no lingering "overridden by project" marker.
     assert!(!exists(&window, cx, "st-editor.wordWrap-override"));
     assert_eq!(Settings::load(app.core.settings_path()), Settings::default());
 }
@@ -180,20 +180,20 @@ async fn text_input_is_debounced_and_saved_once_with_the_last_value(cx: &mut Tes
     let page = open_settings(&window, cx);
 
     retype(&window, cx, "st-editor.fontFamily", "  Fira Code, monospace ");
-    assert_eq!(on_disk(&app), Value::Null, "belum disimpan selama jeda berjalan");
+    assert_eq!(on_disk(&app), Value::Null, "not saved while the delay is running");
     assert!(!cx.update(|cx| page.read(cx).is_settled()));
     cx.executor().advance_clock(TEXT_DEBOUNCE - Duration::from_millis(1));
     cx.run_until_parked();
-    assert_eq!(cx.update(|cx| page.read(cx).user_settings().editor.font_family.clone()), Settings::default().editor.font_family, "jeda belum habis");
+    assert_eq!(cx.update(|cx| page.read(cx).user_settings().editor.font_family.clone()), Settings::default().editor.font_family, "delay has not elapsed");
 
     cx.executor().advance_clock(Duration::from_millis(1));
     cx.run_until_parked();
-    assert_eq!(cx.update(|cx| page.read(cx).user_settings().editor.font_family.clone()), "Fira Code, monospace", "spasi di tepi dipangkas");
+    assert_eq!(cx.update(|cx| page.read(cx).user_settings().editor.font_family.clone()), "Fira Code, monospace", "edge whitespace is trimmed");
     settle(&window, &page, cx).await;
     assert_eq!(on_disk(&app)["editor"]["fontFamily"], json!("Fira Code, monospace"));
     assert_eq!(effective(&window, cx).editor.font_family, "Fira Code, monospace");
 
-    // Enter menyimpan tanpa menunggu jeda.
+    // Enter saves without waiting for the delay.
     search(&window, cx, "terminal.shell");
     retype(&window, cx, "st-terminal.shell", "/bin/zsh");
     assert_eq!(cx.update(|cx| page.read(cx).user_settings().terminal.shell.clone()), None);
@@ -203,7 +203,7 @@ async fn text_input_is_debounced_and_saved_once_with_the_last_value(cx: &mut Tes
     settle(&window, &page, cx).await;
     assert_eq!(on_disk(&app)["terminal"]["shell"], json!("/bin/zsh"));
 
-    // Mengosongkan kolom yang boleh kosong menyimpan null; fokus lepas menyimpan tanpa menunggu jeda.
+    // Emptying a field that may be empty stores null; losing focus saves without waiting for the delay.
     retype(&window, cx, "st-terminal.shell", "");
     click(&window, cx, "settings-search");
     assert_eq!(cx.update(|cx| page.read(cx).user_settings().terminal.shell.clone()), None);
@@ -219,29 +219,29 @@ async fn invalid_input_is_shown_and_never_saved(cx: &mut TestAppContext) {
     let problem = |cx: &mut TestAppContext, id: &str| cx.update(|cx| page.read(cx).problem(id));
     let shown = |cx: &mut TestAppContext, id: &str| cx.update(|cx| page.read(cx).field_input(id, cx)).unwrap();
 
-    // Teks: daftar font kosong ditolak, isian tetap terlihat agar bisa diperbaiki.
+    // Text: an empty font list is rejected, the input stays visible so it can be fixed.
     retype(&window, cx, "st-editor.fontFamily", "   ");
     assert!(problem(cx, "editor.fontFamily").unwrap().contains("at least one font"));
     assert!(exists(&window, cx, "st-editor.fontFamily-error"));
     settle(&window, &page, cx).await;
     click(&window, cx, "settings-search");
-    assert_eq!(on_disk(&app), Value::Null, "nilai tidak sah tidak pernah disimpan");
+    assert_eq!(on_disk(&app), Value::Null, "an invalid value is never saved");
     assert_eq!(shown(cx, "editor.fontFamily"), "   ");
-    assert!(exists(&window, cx, "st-editor.fontFamily-error"), "pesan tetap ada setelah fokus lepas");
+    assert!(exists(&window, cx, "st-editor.fontFamily-error"), "the message remains after focus is lost");
 
-    // Setelah diperbaiki, pesan hilang dan nilai tersimpan.
+    // Once fixed, the message disappears and the value is saved.
     retype(&window, cx, "st-editor.fontFamily", "monospace");
     assert_eq!(problem(cx, "editor.fontFamily"), None);
     settle(&window, &page, cx).await;
     assert!(!exists(&window, cx, "st-editor.fontFamily-error"));
     assert_eq!(on_disk(&app)["editor"]["fontFamily"], json!("monospace"));
 
-    // Angka: yang bukan digit tidak bisa diketik sama sekali.
+    // Numbers: non-digits cannot be typed at all.
     retype(&window, cx, "st-editor.tabSize", "x-.");
     assert_eq!(shown(cx, "editor.tabSize"), "4");
     assert_eq!(problem(cx, "editor.tabSize"), None);
 
-    // Kolom wajib yang dikosongkan: pesan, tidak disimpan, juga setelah fokus lepas.
+    // A required field that is emptied: a message, not saved, also after focus is lost.
     retype(&window, cx, "st-editor.tabSize", "");
     assert!(problem(cx, "editor.tabSize").unwrap().contains("Enter a number"));
     click(&window, cx, "settings-search");
@@ -249,14 +249,14 @@ async fn invalid_input_is_shown_and_never_saved(cx: &mut TestAppContext) {
     assert!(problem(cx, "editor.tabSize").unwrap().contains("Enter a number"));
     assert_eq!(on_disk(&app)["editor"]["tabSize"], json!(4));
 
-    // Di luar rentang: pesan selama mengetik dan tidak disimpan walau jeda habis…
+    // Out of range: a message while typing, and not saved even when the delay elapses…
     retype(&window, cx, "st-editor.tabSize", "99");
     assert!(problem(cx, "editor.tabSize").unwrap().contains("from 1 to 16"));
     assert!(exists(&window, cx, "st-editor.tabSize-error"));
     settle(&window, &page, cx).await;
     assert_eq!(on_disk(&app)["editor"]["tabSize"], json!(4));
     assert_eq!(effective(&window, cx).editor.tab_size, 4);
-    // …lalu dijepit ke batas terdekat saat fokus lepas, dan nilai yang sah itu disimpan.
+    // …then clamped to the nearest limit when focus is lost, and that valid value is saved.
     click(&window, cx, "settings-search");
     settle(&window, &page, cx).await;
     assert_eq!(shown(cx, "editor.tabSize"), "16");
@@ -264,13 +264,13 @@ async fn invalid_input_is_shown_and_never_saved(cx: &mut TestAppContext) {
     assert!(!exists(&window, cx, "st-editor.tabSize-error"));
     assert_eq!(on_disk(&app)["editor"]["tabSize"], json!(16));
 
-    // Nilai sah dalam rentang disimpan apa adanya; nol di depan dinormalkan saat fokus lepas.
+    // A valid in-range value is saved as is; a leading zero is normalized when focus is lost.
     retype(&window, cx, "st-editor.tabSize", "02");
     click(&window, cx, "settings-search");
     settle(&window, &page, cx).await;
     assert_eq!(shown(cx, "editor.tabSize"), "2");
     assert_eq!(on_disk(&app)["editor"]["tabSize"], json!(2));
-    window.wait_until(cx, "pengaturan jendela", |shell, cx| shell.read(cx).workbench().read(cx).settings().editor.tab_size == 2).await;
+    window.wait_until(cx, "window settings", |shell, cx| shell.read(cx).workbench().read(cx).settings().editor.tab_size == 2).await;
 }
 
 #[gpui_kit::test]
@@ -279,7 +279,7 @@ async fn number_steppers_and_optional_number(cx: &mut TestAppContext) {
     let window = app.open(None, cx).await;
     let page = open_settings(&window, cx);
 
-    // Tombol + dan - milik NumberInput.
+    // The + and - buttons of NumberInput.
     window.update(cx, |window, cx| {
         window.render_frame(cx);
         window.within("st-editor.fontSize").click("increment", cx);
@@ -294,9 +294,9 @@ async fn number_steppers_and_optional_number(cx: &mut TestAppContext) {
     cx.run_until_parked();
     settle(&window, &page, cx).await;
     assert_eq!(on_disk(&app)["editor"]["fontSize"], json!(13));
-    window.wait_until(cx, "pengaturan jendela", |shell, cx| shell.read(cx).workbench().read(cx).settings().editor.font_size == 13).await;
+    window.wait_until(cx, "window settings", |shell, cx| shell.read(cx).workbench().read(cx).settings().editor.font_size == 13).await;
 
-    // Ukuran font terminal boleh kosong (null = ikut editor).
+    // The terminal font size may be empty (null = follow the editor).
     search(&window, cx, "terminal.fontSize");
     retype(&window, cx, "st-terminal.fontSize", "12");
     settle(&window, &page, cx).await;
@@ -321,7 +321,7 @@ async fn select_persists_and_reopening_shows_persisted_values(cx: &mut TestAppCo
         window.press("down", cx);
         window.press("enter", cx);
     });
-    window.wait_until(cx, "pilihan tersimpan", |_, cx| page.read(cx).user_settings().git.pull_strategy == oncode_git::PullStrategy::Rebase).await;
+    window.wait_until(cx, "choice saved", |_, cx| page.read(cx).user_settings().git.pull_strategy == oncode_git::PullStrategy::Rebase).await;
     settle(&window, &page, cx).await;
     assert_eq!(on_disk(&app)["git"]["pullStrategy"], json!("rebase"));
     assert_eq!(effective(&window, cx).git.pull_strategy, oncode_git::PullStrategy::Rebase);
@@ -336,13 +336,13 @@ async fn select_persists_and_reopening_shows_persisted_values(cx: &mut TestAppCo
         window.press("down", cx);
         window.press("enter", cx);
     });
-    window.wait_until(cx, "tema tersimpan", |_, cx| page.read(cx).user_settings().workbench.theme == Theme::Dark).await;
+    window.wait_until(cx, "theme saved", |_, cx| page.read(cx).user_settings().workbench.theme == Theme::Dark).await;
     settle(&window, &page, cx).await;
     drop(page);
 
-    // Tutup lalu buka lagi: kontrol menampilkan nilai yang tersimpan.
+    // Close and open again: the controls show the stored values.
     assert!(window.run_command(cx, "workbench.closeTab"));
-    window.wait_until(cx, "tab tertutup", |shell, cx| shell.read(cx).workbench().read(cx).model().all_tabs().next().is_none()).await;
+    window.wait_until(cx, "tab closed", |shell, cx| shell.read(cx).workbench().read(cx).model().all_tabs().next().is_none()).await;
     let page = open_settings(&window, cx);
     let shown = |cx: &mut TestAppContext, id: &str| cx.update(|cx| page.read(cx).field_input(id, cx)).unwrap();
     assert_eq!(shown(cx, "git.autoFetchMinutes"), "30");
@@ -371,8 +371,8 @@ async fn pending_edit_is_saved_when_the_tab_closes(cx: &mut TestAppContext) {
     drop(page);
     assert!(window.run_command(cx, "workbench.closeTab"));
     let path = app.core.settings_path().to_path_buf();
-    window.wait_until(cx, "suntingan yang menunggu ikut disimpan", |_, _| Settings::load(&path).editor.tab_size == 3).await;
-    window.wait_until(cx, "pengaturan jendela", |shell, cx| shell.read(cx).workbench().read(cx).settings().editor.tab_size == 3).await;
+    window.wait_until(cx, "pending edit is saved too", |_, _| Settings::load(&path).editor.tab_size == 3).await;
+    window.wait_until(cx, "window settings", |shell, cx| shell.read(cx).workbench().read(cx).settings().editor.tab_size == 3).await;
 }
 
 #[gpui_kit::test]
@@ -384,22 +384,22 @@ async fn external_change_updates_controls_but_not_the_field_being_typed(cx: &mut
 
     retype(&window, cx, "st-editor.fontFamily", "Fira Co");
 
-    // Jendela lain mengubah tema, ukuran tab, sakelar, DAN font yang sedang diketik di sini.
+    // Another window changes the theme, tab size, a switch, AND the font being typed here.
     let mut other = Settings::default();
     other.workbench.theme = Theme::Light;
     other.editor.tab_size = 8;
     other.editor.line_numbers = false;
     other.editor.font_family = "Other Window Font".into();
     save_externally(&app, other.clone());
-    window.wait_until(cx, "perubahan luar diterima", |_, cx| page.read(cx).user_settings().editor.tab_size == 8).await;
+    window.wait_until(cx, "external change received", |_, cx| page.read(cx).user_settings().editor.tab_size == 8).await;
     window.update(cx, |window, cx| window.render_frame(cx));
 
     assert_eq!(shown(cx, "editor.tabSize"), "8");
     assert_eq!(window.update(cx, |window, _| window.find("st-editor.lineNumbers").checked()), Some(false));
     assert_eq!(window.update(cx, |window, _| window.find("st-workbench.theme").value().map(str::to_owned)).as_deref(), Some("Light"));
-    assert_eq!(shown(cx, "editor.fontFamily"), "Fira Co", "kolom yang sedang diketik tidak ditimpa");
+    assert_eq!(shown(cx, "editor.fontFamily"), "Fira Co", "the field being typed is not overwritten");
 
-    // Ketikan dilanjutkan; yang tersimpan memuat perubahan dari luar plus kolom yang diketik.
+    // Typing continues; what is saved contains the external changes plus the field being typed.
     window.update(cx, |window, cx| window.input("de", cx));
     cx.run_until_parked();
     settle(&window, &page, cx).await;
@@ -407,15 +407,15 @@ async fn external_change_updates_controls_but_not_the_field_being_typed(cx: &mut
     assert_eq!(Settings::load(app.core.settings_path()), other);
     assert_eq!(shown(cx, "editor.fontFamily"), "Fira Code");
 
-    // Kolom yang tidak disunting langsung mengikuti nilai luar.
+    // A field that is not being edited follows the external value right away.
     other.editor.font_family = "Yet Another".into();
     other.editor.font_size = 19;
     click(&window, cx, "settings-search");
     save_externally(&app, other.clone());
-    window.wait_until(cx, "perubahan luar kedua", |_, cx| page.read(cx).user_settings().editor.font_size == 19).await;
+    window.wait_until(cx, "second external change", |_, cx| page.read(cx).user_settings().editor.font_size == 19).await;
     assert_eq!(shown(cx, "editor.fontFamily"), "Yet Another");
     assert_eq!(shown(cx, "editor.fontSize"), "19");
-    assert_eq!(Settings::load(app.core.settings_path()), other, "halaman tidak menyimpan ulang perubahan dari luar");
+    assert_eq!(Settings::load(app.core.settings_path()), other, "the page does not re-save external changes");
 }
 
 #[gpui_kit::test]
@@ -423,7 +423,7 @@ async fn search_box_hides_rows_and_sections_that_do_not_match(cx: &mut TestAppCo
     let app = setup(cx);
     let window = app.open(None, cx).await;
     let page = open_settings(&window, cx);
-    window.wait_until(cx, "tabel server dimuat", |_, cx| page.read(cx).servers().is_some()).await;
+    window.wait_until(cx, "server table loaded", |_, cx| page.read(cx).servers().is_some()).await;
     let visible = |cx: &mut TestAppContext, ids: &[&'static str]| ids.iter().map(|id| exists(&window, cx, id)).collect::<Vec<_>>();
 
     assert_eq!(visible(cx, &["section-editor", "section-files", "section-appearance", "section-git", "section-terminal", "section-lsp", "section-accounts", "section-ai", "section-extensions", "section-keyboard"]), [true; 10]);
@@ -436,7 +436,7 @@ async fn search_box_hides_rows_and_sections_that_do_not_match(cx: &mut TestAppCo
     search(&window, cx, "rebase");
     assert_eq!(visible(cx, &["row-git.pullStrategy", "row-git.path", "section-editor"]), [true, false, false]);
 
-    // Baris tabel server ikut disaring menurut bahasa/perintah.
+    // Server table rows are filtered by language/command too.
     search(&window, cx, "rust-analyzer");
     assert_eq!(visible(cx, &["row-lsp.servers", "server-rust", "server-go", "row-lsp.enabled"]), [true, true, false, false]);
     search(&window, cx, "language servers");
@@ -459,7 +459,7 @@ async fn project_override_marker_follows_effective_settings(cx: &mut TestAppCont
     let project = app.project(&[("a.txt", "a\n")]);
     write_project_settings(&project, r#"{ "editor": { "tabSize": 2 }, "git": { "pullStrategy": "rebase" }, "lsp": { "servers": { "rust": { "command": "ra-project" } } } }"#);
 
-    // Mode terbatas: pengaturan proyek diabaikan, jadi tidak ada penanda.
+    // Restricted mode: project settings are ignored, so there is no marker.
     let window = app.open(Some(&project), cx).await;
     let page = open_settings(&window, cx);
     assert!(!exists(&window, cx, "st-editor.tabSize-override"));
@@ -471,11 +471,11 @@ async fn project_override_marker_follows_effective_settings(cx: &mut TestAppCont
     let window = app.open(Some(&project), cx).await;
     assert_eq!(effective(&window, cx).editor.tab_size, 2);
     let page = open_settings(&window, cx);
-    window.wait_until(cx, "tabel server dimuat", |_, cx| page.read(cx).servers().is_some()).await;
+    window.wait_until(cx, "server table loaded", |_, cx| page.read(cx).servers().is_some()).await;
 
     assert!(exists(&window, cx, "st-editor.tabSize-override"));
     assert!(!exists(&window, cx, "st-editor.fontSize-override"));
-    // Kontrol tetap menampilkan nilai pengguna, bukan nilai efektif proyek.
+    // The control still shows the user's value, not the project's effective value.
     assert_eq!(cx.update(|cx| page.read(cx).field_input("editor.tabSize", cx)).as_deref(), Some("4"));
     search(&window, cx, "git.pullStrategy");
     assert!(exists(&window, cx, "st-git.pullStrategy-override"));
@@ -484,14 +484,14 @@ async fn project_override_marker_follows_effective_settings(cx: &mut TestAppCont
     assert!(exists(&window, cx, "server-rust-override"));
     assert!(!exists(&window, cx, "server-go-override"));
 
-    // Penanda hilang saat nilai pengguna disamakan dengan nilai proyek.
+    // The marker disappears when the user's value is made equal to the project's value.
     search(&window, cx, "editor.tabSize");
     retype(&window, cx, "st-editor.tabSize", "2");
     settle(&window, &page, cx).await;
     assert_eq!(on_disk(&app)["editor"]["tabSize"], json!(2));
-    window.wait_until(cx, "penanda hilang", |_, _| true).await;
+    window.wait_until(cx, "marker disappears", |_, _| true).await;
     assert!(!exists(&window, cx, "st-editor.tabSize-override"));
-    // Pengaturan proyek sendiri tidak pernah ditulis dari halaman ini.
+    // The project's own settings are never written from this page.
     assert!(std::fs::read_to_string(project.join(".oncode/settings.json")).unwrap().contains("\"tabSize\": 2 }"));
 }
 
@@ -508,12 +508,12 @@ async fn reset_per_field_and_reset_all_with_confirmation(cx: &mut TestAppContext
     let window = app.open(None, cx).await;
     let page = open_settings(&window, cx);
 
-    // Tombol reset hanya ada pada kolom yang berbeda dari bawaan.
+    // The reset button only exists on fields that differ from the default.
     assert!(exists(&window, cx, "st-editor.fontSize-reset"));
     assert!(exists(&window, cx, "st-editor.wordWrap-reset"));
     assert!(!exists(&window, cx, "st-editor.tabSize-reset"));
 
-    // Tombol muncul begitu nilai diubah; reset membuang isian tidak sah yang sedang ditampilkan.
+    // The button appears as soon as the value is changed; reset discards invalid input currently displayed.
     retype(&window, cx, "st-editor.tabSize", "8");
     settle(&window, &page, cx).await;
     assert!(exists(&window, cx, "st-editor.tabSize-reset"));
@@ -525,7 +525,7 @@ async fn reset_per_field_and_reset_all_with_confirmation(cx: &mut TestAppContext
     assert!(!exists(&window, cx, "st-editor.tabSize-error"));
     assert!(!exists(&window, cx, "st-editor.tabSize-reset"));
 
-    // Reset satu kolom hanya mengembalikan kolom itu.
+    // Resetting one field only restores that field.
     click(&window, cx, "st-editor.fontSize-reset");
     settle(&window, &page, cx).await;
     let mut expected = changed.clone();
@@ -540,18 +540,18 @@ async fn reset_per_field_and_reset_all_with_confirmation(cx: &mut TestAppContext
     assert_eq!(Settings::load(app.core.settings_path()), expected);
     assert_eq!(window.update(cx, |window, _| window.find("st-editor.wordWrap").checked()), Some(false));
 
-    // Reset to defaults meminta konfirmasi; batal tidak mengubah apa pun.
+    // Reset to defaults asks for confirmation; canceling changes nothing.
     click(&window, cx, "settings-reset-all");
-    assert!(exists(&window, cx, "ok"), "dialog konfirmasi terbuka");
+    assert!(exists(&window, cx, "ok"), "confirmation dialog open");
     click(&window, cx, "cancel");
     settle(&window, &page, cx).await;
     assert_eq!(Settings::load(app.core.settings_path()), expected);
 
-    // Setelah konfirmasi: persis nilai bawaan, termasuk penimpaan server, dan semua kontrol ikut.
+    // After confirming: exactly the defaults, including server overrides, and all controls follow.
     retype(&window, cx, "st-editor.tabSize", "");
     click(&window, cx, "settings-reset-all");
     click(&window, cx, "ok");
-    window.wait_until(cx, "kembali ke bawaan", |_, cx| page.read(cx).user_settings() == &Settings::default()).await;
+    window.wait_until(cx, "back to defaults", |_, cx| page.read(cx).user_settings() == &Settings::default()).await;
     settle(&window, &page, cx).await;
     assert_eq!(Settings::load(app.core.settings_path()), Settings::default());
     assert_eq!(effective(&window, cx), Settings::default());
@@ -560,7 +560,7 @@ async fn reset_per_field_and_reset_all_with_confirmation(cx: &mut TestAppContext
     assert!(!exists(&window, cx, "st-editor.tabSize-error"));
     assert_eq!(window.update(cx, |window, _| window.find("st-workbench.theme").value().map(str::to_owned)).as_deref(), Some("System"));
 
-    // Semua sudah bawaan: tombolnya nonaktif, mengkliknya tidak membuka dialog.
+    // Everything is already default: the button is disabled, clicking it doesn't open a dialog.
     click(&window, cx, "settings-reset-all");
     assert!(!exists(&window, cx, "ok"));
 }
@@ -570,11 +570,11 @@ async fn language_server_override_customize_edit_and_reset(cx: &mut TestAppConte
     let app = setup(cx);
     let window = app.open(None, cx).await;
     let page = open_settings(&window, cx);
-    window.wait_until(cx, "tabel server dimuat", |_, cx| page.read(cx).servers().is_some()).await;
-    let builtin = cx.update(|cx| page.read(cx).servers().unwrap().iter().find(|info| info.language == "typescript").cloned()).expect("server typescript bawaan");
+    window.wait_until(cx, "server table loaded", |_, cx| page.read(cx).servers().is_some()).await;
+    let builtin = cx.update(|cx| page.read(cx).servers().unwrap().iter().find(|info| info.language == "typescript").cloned()).expect("built-in typescript server");
     assert!(!builtin.install_hint.is_empty());
 
-    // Customize membuat penimpaan dari server bawaan.
+    // Customize creates an override from the built-in server.
     search(&window, cx, "typescript");
     assert!(!exists(&window, cx, "server-typescript-command"));
     click(&window, cx, "server-typescript-customize");
@@ -583,16 +583,16 @@ async fn language_server_override_customize_edit_and_reset(cx: &mut TestAppConte
     assert!(exists(&window, cx, "server-typescript-command"));
     assert!(!exists(&window, cx, "server-typescript-customize"));
 
-    // Perintah dan argumen tersimpan di lsp.servers[bahasa]; argumen berkutip dipecah dengan benar.
+    // The command and arguments are stored in lsp.servers[language]; quoted arguments are split correctly.
     retype(&window, cx, "server-typescript-command", "/opt/node/bin/tsls");
     settle(&window, &page, cx).await;
     retype(&window, cx, "server-typescript-args", r#"--stdio --log "/tmp/my logs/ts.log""#);
     settle(&window, &page, cx).await;
     assert_eq!(on_disk(&app)["lsp"]["servers"]["typescript"], json!({ "command": "/opt/node/bin/tsls", "args": ["--stdio", "--log", "/tmp/my logs/ts.log"], "env": [] }));
-    // Tabel dimuat ulang dan menampilkan server yang sekarang berlaku.
-    window.wait_until(cx, "tabel memuat penimpaan", |_, cx| page.read(cx).servers().is_some_and(|list| list.iter().any(|info| info.command == "/opt/node/bin/tsls" && !info.installed))).await;
+    // The table is reloaded and shows the server now in effect.
+    window.wait_until(cx, "table loads the override", |_, cx| page.read(cx).servers().is_some_and(|list| list.iter().any(|info| info.command == "/opt/node/bin/tsls" && !info.installed))).await;
 
-    // Tidak sah: kutip tidak ditutup atau perintah kosong; tidak ada yang disimpan.
+    // Invalid: an unclosed quote or an empty command; nothing is saved.
     retype(&window, cx, "server-typescript-args", r#"--log "unclosed"#);
     assert!(exists(&window, cx, "server-typescript-args-error"));
     retype(&window, cx, "server-typescript-command", "  ");
@@ -601,7 +601,7 @@ async fn language_server_override_customize_edit_and_reset(cx: &mut TestAppConte
     assert_eq!(on_disk(&app)["lsp"]["servers"]["typescript"]["command"], json!("/opt/node/bin/tsls"));
     assert_eq!(on_disk(&app)["lsp"]["servers"]["typescript"]["args"], json!(["--stdio", "--log", "/tmp/my logs/ts.log"]));
 
-    // Reset menghapus penimpaan dan kembali ke server bawaan.
+    // Reset removes the override and goes back to the built-in server.
     click(&window, cx, "server-typescript-reset");
     settle(&window, &page, cx).await;
     assert_eq!(Settings::load(app.core.settings_path()), Settings::default());
@@ -617,7 +617,7 @@ async fn existing_override_keeps_env_when_the_command_changes(cx: &mut TestAppCo
     app.core.set_user_settings(user).unwrap();
     let window = app.open(None, cx).await;
     let page = open_settings(&window, cx);
-    window.wait_until(cx, "tabel server dimuat", |_, cx| page.read(cx).servers().is_some()).await;
+    window.wait_until(cx, "server table loaded", |_, cx| page.read(cx).servers().is_some()).await;
 
     search(&window, cx, "rust");
     retype(&window, cx, "server-rust-command", "ra-nightly");
@@ -634,29 +634,29 @@ async fn links_open_settings_json_and_keybindings_json(cx: &mut TestAppContext) 
     let keybindings_path = app.core.keybindings_path().to_string_lossy().into_owned();
     assert!(!app.core.settings_path().exists() && !app.core.keybindings_path().exists());
 
-    // Open settings.json: berkas yang belum ada dibuat dulu, lalu dibuka di editor.
+    // Open settings.json: a file that doesn't exist is created first, then opened in the editor.
     click(&window, cx, "settings-open-json");
     let id = format!("file:{settings_path}");
-    window.wait_until(cx, "settings.json terbuka", |shell, cx| shell.read(cx).workbench().read(cx).model().all_tabs().any(|tab| tab.id == id)).await;
+    window.wait_until(cx, "settings.json open", |shell, cx| shell.read(cx).workbench().read(cx).model().all_tabs().any(|tab| tab.id == id)).await;
     assert_eq!(Settings::load(app.core.settings_path()), Settings::default());
     assert!(app.core.settings_path().exists());
 
-    // Keyboard Shortcuts: tombol menjalankan command keybindings.openJson milik kerangka.
+    // Keyboard Shortcuts: the button runs the framework's keybindings.openJson command.
     assert!(window.run_command(cx, "settings.open"));
     cx.run_until_parked();
     search(&window, cx, "keyboard shortcuts");
     click(&window, cx, "settings-open-keybindings");
     let id = format!("file:{keybindings_path}");
-    window.wait_until(cx, "keybindings.json terbuka", |shell, cx| shell.read(cx).workbench().read(cx).model().all_tabs().any(|tab| tab.id == id)).await;
+    window.wait_until(cx, "keybindings.json open", |shell, cx| shell.read(cx).workbench().read(cx).model().all_tabs().any(|tab| tab.id == id)).await;
     assert!(std::fs::read_to_string(app.core.keybindings_path()).unwrap().starts_with("// User keyboard shortcuts."));
 
-    // Command settings.openJson juga tersedia dari palet, tanpa folder.
+    // The settings.openJson command is also available from the palette, without a folder.
     assert!(window.run_command(cx, "workbench.closeAllTabs"));
-    window.wait_until(cx, "semua tab tertutup", |shell, cx| shell.read(cx).workbench().read(cx).model().all_tabs().next().is_none()).await;
+    window.wait_until(cx, "all tabs closed", |shell, cx| shell.read(cx).workbench().read(cx).model().all_tabs().next().is_none()).await;
     assert!(window.run_command(cx, "settings.openJson"));
     let id = format!("file:{settings_path}");
-    window.wait_until(cx, "settings.json terbuka lewat command", |shell, cx| shell.read(cx).workbench().read(cx).model().all_tabs().any(|tab| tab.id == id)).await;
-    // Pintasan yang ditimpa lewat keybindings.json tetap berlaku untuk command pengaturan.
+    window.wait_until(cx, "settings.json open via command", |shell, cx| shell.read(cx).workbench().read(cx).model().all_tabs().any(|tab| tab.id == id)).await;
+    // Shortcuts overridden through keybindings.json also apply to the settings commands.
     std::fs::write(app.core.keybindings_path(), r#"{ "settings.open": "Mod+Alt+S" }"#).unwrap();
     assert!(window.run_command(cx, "keybindings.reload"));
     for _ in 0..100 {
@@ -672,32 +672,32 @@ async fn links_open_settings_json_and_keybindings_json(cx: &mut TestAppContext) 
         window.press("secondary-,", cx);
     });
     cx.run_until_parked();
-    assert!(!tab_ids(&window, cx).contains(&"settings".to_string()), "pintasan bawaan tidak lagi berlaku");
+    assert!(!tab_ids(&window, cx).contains(&"settings".to_string()), "the default shortcut no longer applies");
     window.update(cx, |window, cx| window.press("secondary-alt-s", cx));
     cx.run_until_parked();
-    assert!(tab_ids(&window, cx).contains(&"settings".to_string()), "pintasan pengguna membuka pengaturan");
+    assert!(tab_ids(&window, cx).contains(&"settings".to_string()), "the user's shortcut opens settings");
 }
 
 #[gpui_kit::test]
 async fn git_error_is_shown_and_the_path_can_be_fixed_without_a_folder(cx: &mut TestAppContext) {
     let app = setup(cx);
-    // Path git yang salah tersimpan dari sesi sebelumnya; git belum pernah dicari di proses ini.
+    // A wrong git path stored from a previous session; git has not been looked up yet in this process.
     let mut broken = Settings::default();
-    broken.git.path = Some(app.dirs.path().join("tidak-ada/git").to_string_lossy().into_owned());
+    broken.git.path = Some(app.dirs.path().join("does-not-exist/git").to_string_lossy().into_owned());
     app.core.set_user_settings(broken.clone()).unwrap();
 
     let window = app.open(None, cx).await;
     let page = open_settings(&window, cx);
-    window.wait_until(cx, "informasi aplikasi dimuat", |_, cx| page.read(cx).app_info().is_some()).await;
+    window.wait_until(cx, "app info loaded", |_, cx| page.read(cx).app_info().is_some()).await;
     let info = cx.update(|cx| page.read(cx).app_info().cloned()).unwrap();
-    assert!(info.git.is_none(), "git tidak ditemukan di path yang salah");
+    assert!(info.git.is_none(), "git is not found at the wrong path");
     assert!(info.git_error.as_deref().is_some_and(|error| !error.is_empty()));
 
     search(&window, cx, "git.path");
-    assert!(exists(&window, cx, "st-git-status"), "alasan Git tidak tersedia ditampilkan di baris path");
+    assert!(exists(&window, cx, "st-git-status"), "the reason Git is unavailable is shown in the path row");
     assert_eq!(cx.update(|cx| page.read(cx).field_input("git.path", cx)), broken.git.path);
 
-    // Mengosongkan path memperbaikinya (berlaku setelah aplikasi dimulai ulang).
+    // Emptying the path fixes it (takes effect after the app restarts).
     retype(&window, cx, "st-git.path", "");
     settle(&window, &page, cx).await;
     assert_eq!(on_disk(&app)["git"]["path"], Value::Null);
@@ -709,9 +709,9 @@ async fn git_version_is_shown_when_git_is_found(cx: &mut TestAppContext) {
     let app = setup(cx);
     let window = app.open(None, cx).await;
     let page = open_settings(&window, cx);
-    window.wait_until(cx, "informasi aplikasi dimuat", |_, cx| page.read(cx).app_info().is_some()).await;
+    window.wait_until(cx, "app info loaded", |_, cx| page.read(cx).app_info().is_some()).await;
     let info = cx.update(|cx| page.read(cx).app_info().cloned()).unwrap();
-    assert!(info.git.is_some(), "git tersedia di mesin uji: {:?}", info.git_error);
+    assert!(info.git.is_some(), "git is available on the test machine: {:?}", info.git_error);
     search(&window, cx, "git.path");
     assert!(exists(&window, cx, "st-git-status"));
     let _ = app;
@@ -730,7 +730,7 @@ impl Render for FakeAccounts {
 async fn accounts_section_runs_the_sign_in_command_or_embeds_a_registered_view(cx: &mut TestAppContext) {
     let app = setup(cx);
     let runs = Rc::new(Cell::new(0));
-    // Pengganti fitur forge: hanya command masuknya.
+    // Stand-in for the forge feature: only its sign-in command.
     cx.update(|cx| {
         let runs = runs.clone();
         oncode_ui::register_feature(cx, move |workbench, _, _| {
@@ -741,7 +741,7 @@ async fn accounts_section_runs_the_sign_in_command_or_embeds_a_registered_view(c
     let window = app.open(None, cx).await;
     let _page = open_settings(&window, cx);
 
-    // Tanpa tampilan terdaftar: kolom Client ID dan tombol yang menjalankan forge.signIn.
+    // Without a registered view: the Client ID fields and a button that runs forge.signIn.
     search(&window, cx, "accounts");
     assert!(exists(&window, cx, "st-forge.githubClientId"));
     assert!(exists(&window, cx, "st-forge.gitlabClientId"));
@@ -749,21 +749,21 @@ async fn accounts_section_runs_the_sign_in_command_or_embeds_a_registered_view(c
     click(&window, cx, "settings-sign-in");
     assert_eq!(runs.get(), 1);
 
-    // Dengan tampilan terdaftar: tampilan itu disisipkan dan tombol pengganti hilang.
+    // With a registered view: that view is inserted and the stand-in button disappears.
     cx.update(|cx| {
         oncode_ui_settings::register_accounts_view(cx, |env, _, cx| {
-            // Pembangun boleh membaca `Workbench`: dipanggil setelah tab selesai dibangun.
+            // The builder may read `Workbench`: it is called after the tab has finished building.
             let _ = env.workbench.upgrade().map(|workbench| workbench.read(cx).settings().clone());
             cx.new(|_| FakeAccounts).into()
         })
     });
     assert!(window.run_command(cx, "workbench.closeTab"));
-    window.wait_until(cx, "tab tertutup", |shell, cx| shell.read(cx).workbench().read(cx).model().all_tabs().next().is_none()).await;
+    window.wait_until(cx, "tab closed", |shell, cx| shell.read(cx).workbench().read(cx).model().all_tabs().next().is_none()).await;
     let _page = open_settings(&window, cx);
     search(&window, cx, "accounts");
     assert!(exists(&window, cx, "fake-accounts"));
     assert!(!exists(&window, cx, "settings-sign-in"));
-    assert!(exists(&window, cx, "st-forge.githubClientId"), "kolom Client ID tetap ada");
+    assert!(exists(&window, cx, "st-forge.githubClientId"), "the Client ID fields are still there");
     let _ = app;
 }
 

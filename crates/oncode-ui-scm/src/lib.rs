@@ -1,4 +1,4 @@
-//! Panel Source Control, commit, branch, remote, stash, dan Git Output.
+//! The Source Control panel, commit, branch, remote, stash, and Git Output.
 
 pub mod actions;
 mod ai;
@@ -13,7 +13,7 @@ pub mod view;
 
 use gpui_kit::App;
 
-/// Mendaftarkan fitur ini. Dipanggil sekali dari `app/src/main.rs` setelah `oncode_ui::init`.
+/// Registers this feature. Called once from `app/src/main.rs` after `oncode_ui::init`.
 pub fn init(cx: &mut App) {
     output::install(cx);
     oncode_ui::register_feature(cx, register::setup);

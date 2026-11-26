@@ -1,4 +1,4 @@
-//! Uji tampilan penanda perubahan di gutter editor dan blame.
+//! View tests for change markers in the editor gutter and for blame.
 
 use std::time::{Duration, Instant};
 
@@ -15,39 +15,39 @@ use oncode_ui_diff::markers::change_markers;
 async fn editor_shows_changes_against_the_index_and_blame(cx: &mut TestAppContext) {
     let app = TestApp::new(cx);
     cx.update(oncode_ui_diff::init);
-    let project = app.git_project(&[("a.txt", "satu\ndua\ntiga\n")]);
-    std::fs::write(project.join("a.txt"), "satu\nDUA\ntiga\nempat\n").unwrap();
+    let project = app.git_project(&[("a.txt", "one\ntwo\nthree\n")]);
+    std::fs::write(project.join("a.txt"), "one\nTWO\nthree\nfour\n").unwrap();
     let window = app.open(Some(&project), cx).await;
     let workbench = window.workbench(cx);
-    window.wait_until(cx, "repositori terbuka", |_, cx| !repos(cx).read(cx).roots().is_empty()).await;
+    window.wait_until(cx, "repository open", |_, cx| !repos(cx).read(cx).roots().is_empty()).await;
     let path = project.join("a.txt").to_string_lossy().into_owned();
     window.update(cx, |window, cx| workbench.update(cx, |w, cx| open_file(w, OpenFile::new(path.clone()), window, cx)));
-    let markers = cx.update(|cx| change_markers(workbench.read(cx)).expect("penanda terpasang"));
+    let markers = cx.update(|cx| change_markers(workbench.read(cx)).expect("markers installed"));
 
-    // Baris 2 diubah, baris 4 ditambah.
+    // Line 2 changed, line 4 added.
     window
-        .wait_until(cx, "penanda dihitung", |_, cx| {
+        .wait_until(cx, "markers computed", |_, cx| {
             markers.read(cx).marker_ranges(&path, cx).is_some_and(|ranges| ranges.iter().map(|(_, kind)| *kind).collect::<Vec<_>>() == [ChangeKind::Modified, ChangeKind::Added])
         })
         .await;
 
-    // Setelah di-stage, tidak ada lagi perbedaan dengan index.
+    // Once staged, there is no longer any difference from the index.
     git(&project, &["add", "a.txt"]);
-    window.wait_until(cx, "penanda hilang setelah stage", |_, cx| markers.read(cx).marker_ranges(&path, cx).is_some_and(|ranges| ranges.is_empty())).await;
+    window.wait_until(cx, "markers disappear after staging", |_, cx| markers.read(cx).marker_ranges(&path, cx).is_some_and(|ranges| ranges.is_empty())).await;
 
-    // Blame: menyala bawaan (inline blame), bisa dimatikan dan dinyalakan per berkas.
+    // Blame: on by default (inline blame), can be turned off and on per file.
     assert!(cx.update(|cx| active_file(workbench.read(cx), cx).is_some()));
-    window.wait_until(cx, "blame dimuat", |_, cx| markers.read(cx).blame_for(&path).is_some_and(|ranges| !ranges.is_empty())).await;
+    window.wait_until(cx, "blame loaded", |_, cx| markers.read(cx).blame_for(&path).is_some_and(|ranges| !ranges.is_empty())).await;
     let author = cx.update(|cx| markers.read(cx).blame_for(&path).unwrap()[0].author.clone());
-    assert_eq!(author, "Penguji");
+    assert_eq!(author, "Tester");
     assert!(window.run_command(cx, "git.toggleBlame"));
     cx.run_until_parked();
-    assert!(cx.update(|cx| markers.read(cx).blame_for(&path).is_none()), "blame dimatikan");
+    assert!(cx.update(|cx| markers.read(cx).blame_for(&path).is_none()), "blame turned off");
     assert!(window.run_command(cx, "git.toggleBlame"));
-    window.wait_until(cx, "blame dinyalakan lagi", |_, cx| markers.read(cx).blame_for(&path).is_some_and(|ranges| !ranges.is_empty())).await;
+    window.wait_until(cx, "blame turned on again", |_, cx| markers.read(cx).blame_for(&path).is_some_and(|ranges| !ranges.is_empty())).await;
 }
 
-/// Hint ujung baris yang tergambar di editor, setelah frame digambar ulang sampai `ok` terpenuhi.
+/// The end-of-line hint painted in the editor, after redrawing frames until `ok` is satisfied.
 async fn painted_hint(
     window: &TestWindow,
     view: &Entity<FileView>,
@@ -63,44 +63,44 @@ async fn painted_hint(
         if ok(hint.as_ref()) {
             return hint;
         }
-        assert!(Instant::now() < deadline, "menunggu terlalu lama: {what} (terakhir: {hint:?})");
+        assert!(Instant::now() < deadline, "waited too long: {what} (last: {hint:?})");
         cx.executor().timer(Duration::from_millis(20)).await;
     }
 }
 
-/// Inline blame seperti GitLens: penulis, waktu, dan pesan commit samar di ujung baris kursor.
+/// Inline blame like GitLens: author, time, and a faint commit message at the end of the cursor line.
 #[gpui_kit::test]
 async fn inline_blame_is_drawn_at_the_end_of_the_cursor_line(cx: &mut TestAppContext) {
     let app = TestApp::new(cx);
     cx.update(oncode_ui_diff::init);
-    let project = app.git_project(&[("a.txt", "a\nbaris kedua yang jauh lebih panjang\n")]);
+    let project = app.git_project(&[("a.txt", "a\nthe second line is much longer\n")]);
     let window = app.open(Some(&project), cx).await;
     let workbench = window.workbench(cx);
-    window.wait_until(cx, "repositori terbuka", |_, cx| !repos(cx).read(cx).roots().is_empty()).await;
+    window.wait_until(cx, "repository open", |_, cx| !repos(cx).read(cx).roots().is_empty()).await;
     let path = project.join("a.txt").to_string_lossy().into_owned();
     window.update(cx, |window, cx| workbench.update(cx, |w, cx| open_file(w, OpenFile::new(path.clone()), window, cx)));
-    window.wait_until(cx, "a.txt dimuat", |_, cx| active_file(workbench.read(cx), cx).is_some_and(|(_, buffer, _)| buffer.read(cx).is_ready())).await;
+    window.wait_until(cx, "a.txt loaded", |_, cx| active_file(workbench.read(cx), cx).is_some_and(|(_, buffer, _)| buffer.read(cx).is_ready())).await;
     let (view, _, state) = cx.update(|cx| active_file(workbench.read(cx), cx).unwrap());
 
-    // Menyala tanpa diatur: commit milik pengguna sendiri ditulis "You".
-    let (text, first) = painted_hint(&window, &view, cx, "blame baris 1", |hint| hint.is_some()).await.unwrap();
-    assert!(text.starts_with("You, ") && text.ends_with(" • Commit pertama"), "{text}");
+    // On without any configuration: the user's own commit is written as "You".
+    let (text, first) = painted_hint(&window, &view, cx, "blame of line 1", |hint| hint.is_some()).await.unwrap();
+    assert!(text.starts_with("You, ") && text.ends_with(" • First commit"), "{text}");
 
-    // Pindah ke baris yang lebih panjang: hint ikut turun dan bergeser ke kanan.
+    // Move to the longer line: the hint moves down and shifts to the right.
     window.update(cx, |window, cx| state.update(cx, |state, cx| state.set_cursor_position(Position { line: 1, character: 3 }, window, cx)));
-    let (_, second) = painted_hint(&window, &view, cx, "blame baris 2", |hint| hint.is_some_and(|(_, bounds)| bounds.origin.y > first.origin.y)).await.unwrap();
-    assert!(second.origin.x > first.origin.x + px(100.), "di ujung baris yang lebih panjang: {first:?} → {second:?}");
+    let (_, second) = painted_hint(&window, &view, cx, "blame of line 2", |hint| hint.is_some_and(|(_, bounds)| bounds.origin.y > first.origin.y)).await.unwrap();
+    assert!(second.origin.x > first.origin.x + px(100.), "at the end of the longer line: {first:?} → {second:?}");
 
-    // Baris yang baru disunting belum di-commit.
+    // A line that was just edited is not committed yet.
     window.update(cx, |window, cx| {
         state.update(cx, |state, cx| state.focus(window, cx));
         window.input("X", cx);
     });
-    let (text, _) = painted_hint(&window, &view, cx, "baris yang disunting", |hint| hint.is_some_and(|(text, _)| text == "You • Uncommitted changes")).await.unwrap();
+    let (text, _) = painted_hint(&window, &view, cx, "edited line", |hint| hint.is_some_and(|(text, _)| text == "You • Uncommitted changes")).await.unwrap();
     assert_eq!(text, "You • Uncommitted changes");
 
-    // Dimatikan lewat menu Git → Toggle Inline Blame.
+    // Turned off via the Git menu → Toggle Inline Blame.
     assert!(window.run_command(cx, "git.toggleInlineBlame"));
-    painted_hint(&window, &view, cx, "inline blame dimatikan", |hint| hint.is_none()).await;
+    painted_hint(&window, &view, cx, "inline blame turned off", |hint| hint.is_none()).await;
     assert!(!app.core.user_settings().editor.inline_blame);
 }

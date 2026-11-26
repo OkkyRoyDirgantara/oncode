@@ -1,7 +1,7 @@
-//! Tombol terminal: (1) penyaring yang menentukan tombol mana yang diteruskan ke shell, mana yang
-//! ditangani terminal sendiri (salin, tempel, cari), dan mana yang dibiarkan untuk aplikasi;
-//! (2) penerjemahan tombol menjadi urutan byte ala xterm; (3) pembungkus tempelan.
-//! Murni (tanpa GPUI) agar bisa diuji untuk kedua platform.
+//! Terminal keys: (1) a filter that decides which keys are forwarded to the shell, which are
+//! handled by the terminal itself (copy, paste, find), and which are left to the application;
+//! (2) translating keys into xterm-style byte sequences; (3) the paste wrapper.
+//! Pure (no GPUI) so it can be tested for both platforms.
 
 use std::collections::HashSet;
 
@@ -16,9 +16,9 @@ pub enum KeyAction {
     Find,
 }
 
-/// Command aplikasi yang tetap berlaku saat terminal fokus. Keybinding-nya diambil dari registry
-/// (termasuk penimpaan pengguna); tombol lain yang terikat ke command di luar daftar ini
-/// (mis. Ctrl+W, Ctrl+S, Ctrl+O) diteruskan ke shell.
+/// Application commands that stay in effect while the terminal is focused. Their keybindings are taken
+/// from the registry (including user overrides); other keys bound to commands outside this list
+/// (e.g. Ctrl+W, Ctrl+S, Ctrl+O) are forwarded to the shell.
 pub const COMMANDS_TO_SKIP_SHELL: &[&str] = &[
     "workbench.commandPalette",
     "workbench.quickOpen",
@@ -37,19 +37,19 @@ pub const COMMANDS_TO_SKIP_SHELL: &[&str] = &[
     "terminal.focus",
 ];
 
-/// Keybinding kanonis sebuah penekanan, dengan format yang sama seperti
-/// `oncode_ui::keys::keybinding_from_press`, tetapi platformnya diberikan dari luar.
-/// `None` bila hanya modifier.
+/// The canonical keybinding of a key press, in the same format as
+/// `oncode_ui::keys::keybinding_from_press`, but with the platform supplied from outside.
+/// `None` if it is only a modifier.
 pub fn binding_of(press: &KeyPress, is_mac: bool) -> Option<String> {
     keybinding_from_press_on(press, is_mac)
 }
 
-/// - `Copy` / `Paste`: Mod+Shift+C / Mod+Shift+V; di macOS juga Cmd+C / Cmd+V.
-///   Ctrl+C polos selalu sampai ke shell sebagai SIGINT.
-/// - `Find`: Mod+F membuka bilah cari terminal.
-/// - `App`: keybinding aplikasi yang diizinkan; di macOS semua kombinasi Cmd lain juga milik aplikasi
-///   karena Cmd tidak punya arti bagi shell.
-/// - `Shell`: sisanya.
+/// - `Copy` / `Paste`: Mod+Shift+C / Mod+Shift+V; on macOS also Cmd+C / Cmd+V.
+///   A plain Ctrl+C always reaches the shell as SIGINT.
+/// - `Find`: Mod+F opens the terminal's find bar.
+/// - `App`: the allowed application keybindings; on macOS all other Cmd combinations also belong to
+///   the application because Cmd has no meaning for the shell.
+/// - `Shell`: everything else.
 pub fn classify_key(press: &KeyPress, is_mac: bool, app_bindings: &HashSet<String>) -> KeyAction {
     let Some(binding) = binding_of(press, is_mac) else { return KeyAction::Shell };
     if binding == "Mod+Shift+C" || (is_mac && binding == "Mod+C") {
@@ -70,7 +70,7 @@ pub fn classify_key(press: &KeyPress, is_mac: bool, app_bindings: &HashSet<Strin
     KeyAction::Shell
 }
 
-/// Gulir riwayat terminal lewat keyboard.
+/// Scrolling the terminal history via the keyboard.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ScrollKey {
     PageUp,
@@ -81,8 +81,8 @@ pub enum ScrollKey {
     Bottom,
 }
 
-/// Shift+PageUp/PageDown (halaman), Ctrl+Shift+↑/↓ (baris), Ctrl+Shift+Home/End (ujung), seperti
-/// VS Code. Hanya berlaku di luar program layar penuh; pemanggil yang memeriksanya.
+/// Shift+PageUp/PageDown (page), Ctrl+Shift+↑/↓ (line), Ctrl+Shift+Home/End (ends), like
+/// VS Code. Only applies outside full-screen programs; the caller checks that.
 pub fn scroll_key(press: &KeyPress) -> Option<ScrollKey> {
     if press.alt || press.platform || !press.shift {
         return None;
@@ -98,21 +98,21 @@ pub fn scroll_key(press: &KeyPress) -> Option<ScrollKey> {
     }
 }
 
-/// Mode terminal yang memengaruhi urutan byte tombol.
+/// Terminal modes that affect the key byte sequences.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct KeyModes {
-    /// DECCKM: tombol panah mengirim `ESC O A` alih-alih `ESC [ A`.
+    /// DECCKM: arrow keys send `ESC O A` instead of `ESC [ A`.
     pub app_cursor: bool,
-    /// LNM: Enter mengirim CR LF.
+    /// LNM: Enter sends CR LF.
     pub line_feed_new_line: bool,
 }
 
-/// Parameter modifier xterm: 1 + Shift(1) + Alt(2) + Ctrl(4).
+/// The xterm modifier parameter: 1 + Shift(1) + Alt(2) + Ctrl(4).
 fn modifier_param(press: &KeyPress) -> u8 {
     1 + u8::from(press.shift) + 2 * u8::from(press.alt) + 4 * u8::from(press.control)
 }
 
-/// Kode kontrol untuk Ctrl+<tombol>, mengikuti xterm.
+/// The control code for Ctrl+<key>, following xterm.
 fn control_code(key: &str) -> Option<u8> {
     let mut chars = key.chars();
     let (Some(c), None) = (chars.next(), chars.next()) else {
@@ -134,7 +134,7 @@ fn control_code(key: &str) -> Option<u8> {
     }
 }
 
-/// Urutan `CSI 1 ; m X` atau bentuk pendeknya untuk tombol kursor dan F1–F4.
+/// The `CSI 1 ; m X` sequence or its short form for cursor keys and F1–F4.
 fn cursor_sequence(final_byte: char, press: &KeyPress, ss3_when_plain: bool) -> Vec<u8> {
     let modifier = modifier_param(press);
     if modifier == 1 {
@@ -143,7 +143,7 @@ fn cursor_sequence(final_byte: char, press: &KeyPress, ss3_when_plain: bool) -> 
     format!("\x1b[1;{modifier}{final_byte}").into_bytes()
 }
 
-/// Urutan `CSI n ~` (dengan modifier: `CSI n ; m ~`).
+/// The `CSI n ~` sequence (with a modifier: `CSI n ; m ~`).
 fn tilde_sequence(number: u8, press: &KeyPress) -> Vec<u8> {
     let modifier = modifier_param(press);
     if modifier == 1 {
@@ -159,12 +159,12 @@ fn with_alt_prefix(press: &KeyPress, mut bytes: Vec<u8>) -> Vec<u8> {
     bytes
 }
 
-/// Byte yang dikirim ke PTY untuk sebuah tombol, atau `None` bila tombol itu menghasilkan teks biasa
-/// (yang datang lewat jalur masukan teks/IME) atau tidak berarti bagi terminal.
+/// The bytes sent to the PTY for a key, or `None` if the key produces ordinary text
+/// (which arrives through the text input/IME path) or means nothing to the terminal.
 ///
-/// `key` memakai penamaan GPUI: huruf kecil (`"a"`), nama (`"enter"`, `"pageup"`, `"f5"`), atau simbol.
+/// `key` uses GPUI naming: lowercase letters (`"a"`), names (`"enter"`, `"pageup"`, `"f5"`), or symbols.
 pub fn key_to_bytes(press: &KeyPress, modes: KeyModes, is_mac: bool) -> Option<Vec<u8>> {
-    // Cmd (macOS) dan Super tidak punya arti bagi shell.
+    // Cmd (macOS) and Super have no meaning for the shell.
     if press.platform {
         return None;
     }
@@ -208,8 +208,8 @@ pub fn key_to_bytes(press: &KeyPress, modes: KeyModes, is_mac: bool) -> Option<V
         "f20" => tilde_sequence(34, press),
         _ if plain => return None,
         _ if press.control => with_alt_prefix(press, vec![control_code(&key)?]),
-        // Alt+<karakter> = ESC lalu karakternya. Di macOS Option menyusun karakter khusus,
-        // jadi dibiarkan lewat jalur masukan teks.
+        // Alt+<character> = ESC followed by the character. On macOS Option composes special characters,
+        // so it is left to the text input path.
         _ if press.alt && !is_mac => {
             let text = if key == "space" {
                 " ".to_string()
@@ -226,17 +226,17 @@ pub fn key_to_bytes(press: &KeyPress, modes: KeyModes, is_mac: bool) -> Option<V
             bytes.extend_from_slice(text.as_bytes());
             bytes
         }
-        // Shift+<karakter> menghasilkan teks biasa.
+        // Shift+<character> produces ordinary text.
         _ => return None,
     };
     Some(bytes)
 }
 
-/// Menyiapkan teks tempelan untuk dikirim ke PTY.
+/// Prepares pasted text to be sent to the PTY.
 ///
-/// Dalam mode bracketed paste teksnya dibungkus `ESC [ 200 ~` … `ESC [ 201 ~`, dan ESC serta ETX
-/// dibuang agar isi tempelan tidak bisa menutup bungkusnya sendiri. Tanpa mode itu, akhir baris
-/// dijadikan CR seperti ketikan.
+/// In bracketed paste mode the text is wrapped in `ESC [ 200 ~` … `ESC [ 201 ~`, and ESC and ETX
+/// are dropped so the pasted content cannot close its own wrapper. Without that mode, line endings
+/// are turned into CR like typed input.
 pub fn paste_bytes(text: &str, bracketed: bool) -> Vec<u8> {
     if bracketed {
         let clean: String = text.chars().filter(|c| !matches!(c, '\x1b' | '\x03')).collect();
@@ -253,7 +253,7 @@ pub fn paste_bytes(text: &str, bracketed: bool) -> Vec<u8> {
 mod tests {
     use super::*;
 
-    /// Penekanan tiruan dari notasi seperti "Ctrl+Shift+c" (bagian terakhir adalah `key` ala GPUI).
+    /// A fake key press from a notation like "Ctrl+Shift+c" (the last part is the GPUI-style `key`).
     fn key(spec: &str) -> KeyPress {
         let mut parts: Vec<&str> = spec.split('+').collect();
         let key = parts.pop().unwrap();
@@ -266,7 +266,7 @@ mod tests {
         }
     }
 
-    // Keybinding bawaan command yang tetap berlaku di terminal.
+    // The default keybindings of the commands that stay in effect in the terminal.
     fn app_bindings() -> HashSet<String> {
         ["Mod+`", "Mod+Shift+`", "Mod+J", "Mod+Shift+P", "F1", "Mod+P", "Mod+B"].into_iter().map(String::from).collect()
     }
@@ -284,7 +284,7 @@ mod tests {
         assert_eq!(binding_of(&key("Ctrl+p"), false).as_deref(), Some("Mod+P"));
         assert_eq!(binding_of(&key("Meta+p"), true).as_deref(), Some("Mod+P"));
         assert_eq!(binding_of(&key("Ctrl+p"), true).as_deref(), Some("Ctrl+P"));
-        // Sama dengan kerangka: Super di Linux/Windows ditulis `Meta`, bukan `Mod`.
+        // Same as the framework: Super on Linux/Windows is written `Meta`, not `Mod`.
         assert_eq!(binding_of(&key("Meta+p"), false).as_deref(), Some("Meta+P"));
     }
 
@@ -297,7 +297,7 @@ mod tests {
             }
         }
         assert_eq!(binding_of(&key("Ctrl+Shift+c"), false).as_deref(), Some("Mod+Shift+C"));
-        // Simbol ber-Shift dinormalkan: Windows mengirim Ctrl+Shift+` sebagai Ctrl + "~".
+        // Shifted symbols are normalized: Windows sends Ctrl+Shift+` as Ctrl + "~".
         assert_eq!(binding_of(&key("Ctrl+~"), false).as_deref(), Some("Mod+Shift+`"));
         assert_eq!(binding_of(&key("Ctrl+Alt+s"), false).as_deref(), Some("Mod+Alt+S"));
     }
@@ -394,7 +394,7 @@ mod tests {
         assert_eq!(scroll_key(&key("Ctrl+Shift+down")), Some(ScrollKey::LineDown));
         assert_eq!(scroll_key(&key("Ctrl+Shift+home")), Some(ScrollKey::Top));
         assert_eq!(scroll_key(&key("Ctrl+Shift+end")), Some(ScrollKey::Bottom));
-        // Tanpa Shift tetap milik shell (PageUp untuk riwayat perintah, dsb.).
+        // Without Shift they still belong to the shell (PageUp for command history, etc.).
         for spec in ["pageup", "Ctrl+up", "up", "Shift+up", "Alt+Shift+pageup"] {
             assert_eq!(scroll_key(&key(spec)), None, "{spec}");
         }
@@ -436,7 +436,7 @@ mod tests {
         assert_eq!(app_cursor("left").as_deref(), Some("\x1bOD"));
         assert_eq!(app_cursor("home").as_deref(), Some("\x1bOH"));
         assert_eq!(app_cursor("end").as_deref(), Some("\x1bOF"));
-        // Dengan modifier selalu bentuk CSI, juga dalam mode aplikasi.
+        // With a modifier it is always the CSI form, also in application mode.
         assert_eq!(app_cursor("Ctrl+left").as_deref(), Some("\x1b[1;5D"));
     }
 
@@ -464,7 +464,7 @@ mod tests {
         assert_eq!(bytes("f12").as_deref(), Some("\x1b[24~"));
         assert_eq!(bytes("Shift+f1").as_deref(), Some("\x1b[1;2P"));
         assert_eq!(bytes("Ctrl+f5").as_deref(), Some("\x1b[15;5~"));
-        assert_eq!(bytes("F2").as_deref(), Some("\x1bOQ"), "nama tombol tidak peka huruf besar");
+        assert_eq!(bytes("F2").as_deref(), Some("\x1bOQ"), "key names are case-insensitive");
     }
 
     #[test]
@@ -493,8 +493,8 @@ mod tests {
         assert_eq!(bytes("Alt+Shift+b").as_deref(), Some("\x1bB"));
         assert_eq!(bytes("Alt+.").as_deref(), Some("\x1b."));
         assert_eq!(bytes("Alt+space").as_deref(), Some("\x1b "));
-        assert_eq!(key_to_bytes(&key("Alt+b"), KeyModes::default(), true), None, "Option menyusun karakter di macOS");
-        // Tombol bernama tetap diterjemahkan di macOS.
+        assert_eq!(key_to_bytes(&key("Alt+b"), KeyModes::default(), true), None, "Option composes characters on macOS");
+        // Named keys are still translated on macOS.
         assert_eq!(key_to_bytes(&key("Alt+left"), KeyModes::default(), true).as_deref(), Some(&b"\x1b[1;3D"[..]));
     }
 
@@ -508,7 +508,7 @@ mod tests {
     fn paste_is_bracketed_only_when_the_program_asked_for_it() {
         assert_eq!(paste_bytes("ls\npwd\r\n", false), b"ls\rpwd\r");
         assert_eq!(paste_bytes("ls\npwd", true), b"\x1b[200~ls\npwd\x1b[201~");
-        // Isi tempelan tidak bisa menutup bungkusnya atau mengirim Ctrl+C.
+        // The pasted content cannot close its wrapper or send Ctrl+C.
         assert_eq!(paste_bytes("a\x1b[201~b\x03c", true), b"\x1b[200~a[201~bc\x1b[201~");
     }
 }

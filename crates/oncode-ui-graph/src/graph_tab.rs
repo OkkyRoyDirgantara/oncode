@@ -1,5 +1,5 @@
-//! Tab Graph (juga dipakai untuk riwayat sebuah berkas): panel ref di kiri, daftar commit dengan
-//! jalur graph di tengah, dan detail commit di kanan.
+//! Graph tab (also used for the history of a file): ref panel on the left, commit list with
+//! graph lanes in the middle, and commit details on the right.
 
 use std::ops::Range;
 
@@ -30,18 +30,18 @@ use crate::store::{snapshot as repo_snapshot, GraphStore, StoreEvent};
 
 const PAGE: u32 = 300;
 
-/// Warna jalur graph (berulang per 8 jalur).
+/// Graph lane color (repeats every 8 lanes).
 fn lane_color(index: usize, cx: &App) -> Hsla {
     let theme = cx.theme();
     [theme.blue, theme.green, theme.magenta, theme.yellow, theme.cyan, theme.red, theme.primary, theme.muted_foreground][index % 8]
 }
 
-/// Isi panel kanan.
+/// Contents of the right panel.
 enum Details {
     None,
     Loading,
     Commit(Box<CommitDetail>),
-    /// Perbandingan dua commit: [lama, baru] dan berkas yang berbeda.
+    /// Comparison of two commits: [old, new] and the files that differ.
     Compare { from: String, to: String, files: Vec<CommitFile> },
     Failed(String),
 }
@@ -49,7 +49,7 @@ enum Details {
 pub struct GraphTab {
     ctx: Ctx,
     env: Env,
-    /// `Some(path)`: riwayat satu berkas (path relatif repositori).
+    /// `Some(path)`: the history of a single file (a repository-relative path).
     path: Option<String>,
     search: Entity<InputState>,
     query: LogQuery,
@@ -58,11 +58,11 @@ pub struct GraphTab {
     stream: Option<u32>,
     loading: bool,
     error: Option<String>,
-    /// Naik setiap kali kueri dimulai ulang; hasil kueri lama dibuang.
+    /// Incremented each time the query restarts; results of the old query are discarded.
     revision: u64,
     selected: Vec<String>,
     details: Details,
-    /// Commit yang harus dipilih begitu muncul (dari panel ref atau permintaan "Show in Graph").
+    /// A commit to select as soon as it appears (from the ref panel or a "Show in Graph" request).
     hunt: Option<String>,
     scroll: UniformListScrollHandle,
     focus_handle: FocusHandle,
@@ -150,7 +150,7 @@ impl GraphTab {
         });
     }
 
-    /// Memulai ulang daftar dengan kueri saat ini.
+    /// Restarts the list with the current query.
     pub fn reload(&mut self, cx: &mut Context<Self>) {
         let grep = self.search.read(cx).value().to_string();
         self.query = build_query("all", &grep, "", self.path.as_deref().unwrap_or(""));
@@ -180,7 +180,7 @@ impl GraphTab {
                         this.stream = Some(stream);
                         this.rows = page.rows;
                         this.done = page.done;
-                        // Pilihan dipertahankan bila commit-nya masih ada.
+                        // The selection is kept if its commit still exists.
                         this.selected.retain(|oid| this.rows.iter().any(|row| &row.commit.oid == oid));
                         if this.selected.is_empty() {
                             if let Some(first) = this.rows.first() {
@@ -230,7 +230,7 @@ impl GraphTab {
         });
     }
 
-    /// Bila ada commit yang sedang dicari, pilih begitu terlihat; bila belum, muat halaman berikutnya.
+    /// If a commit is being hunted, select it once visible; otherwise load the next page.
     fn after_rows_changed(&mut self, cx: &mut Context<Self>) {
         let Some(oid) = self.hunt.clone() else { return };
         if let Some(index) = self.rows.iter().position(|row| row.commit.oid == oid) {
@@ -245,7 +245,7 @@ impl GraphTab {
         }
     }
 
-    /// Memilih sebuah commit, memuat halaman berikutnya bila belum terlihat.
+    /// Selects a commit, loading the next page if it is not visible yet.
     pub fn reveal(&mut self, oid: &str, cx: &mut Context<Self>) {
         self.hunt = Some(oid.to_string());
         self.after_rows_changed(cx);
@@ -316,7 +316,7 @@ impl GraphTab {
     }
 
 
-    // ----- Tampilan -----
+    // ----- View -----
 
     fn render_refs(&self, cx: &mut Context<Self>) -> AnyElement {
         let store = self.ctx.store.read(cx);
@@ -511,7 +511,7 @@ impl GraphTab {
     }
 }
 
-/// Item menu konteks; aksinya dijalankan lewat `dispatch`.
+/// Context menu item; its action is run through `dispatch`.
 fn graph_menu(ctx: &Ctx, entries: Vec<MenuEntry>, mut menu: PopupMenu) -> PopupMenu {
     for entry in entries {
         menu = match entry {
@@ -525,13 +525,13 @@ fn graph_menu(ctx: &Ctx, entries: Vec<MenuEntry>, mut menu: PopupMenu) -> PopupM
     menu
 }
 
-/// Membuka diff satu berkas sebuah commit (atau rentang).
+/// Opens the diff of one file of a commit (or range).
 fn open_file_diff(workbench: &gpui_kit::WeakEntity<oncode_ui::Workbench>, root: String, file: &CommitFile, source: DiffSource, window: &mut Window, cx: &mut App) {
     let request = DiffRequest { root, path: file.path.clone(), orig_path: file.orig_path.clone(), source, preview: true };
     let _ = workbench.update(cx, |workbench, cx| open_diff(workbench, request, window, cx));
 }
 
-/// Menjalankan aksi menu; "Compare with HEAD" ditangani di sini karena butuh tab Graph.
+/// Runs a menu action; "Compare with HEAD" is handled here because it needs the Graph tab.
 fn dispatch(ctx: &Ctx, action: GitAction, window: &mut Window, cx: &mut App) {
     if let GitAction::CompareWithHead(oid) = &action {
         let head = repo_snapshot(&ctx.root, cx).and_then(|s| s.head_oid);
@@ -569,7 +569,7 @@ fn paint_row(row: &GraphRow, bounds: Bounds<gpui_kit::Pixels>, colors: &[Hsla], 
     let dot = Bounds::new(point(center.x - radius, center.y - radius), size(radius * 2., radius * 2.));
     let color = colors[lane_color_index(row.color as i32)];
     if row.commit.parents.len() > 1 {
-        // Commit merge: lingkaran kosong.
+        // Merge commit: an empty circle.
         window.paint_quad(fill(dot, gpui_kit::transparent_black()).corner_radii(radius).border_widths(px(1.5)).border_color(color));
     } else {
         window.paint_quad(fill(dot, color).corner_radii(radius));
@@ -623,7 +623,7 @@ impl Render for GraphTab {
     }
 }
 
-/// Isi pesan commit tanpa baris subjek (yang sudah ditampilkan sebagai judul); `None` bila kosong.
+/// The commit message body without the subject line (already shown as the title); `None` if empty.
 pub fn message_body(subject: &str, body: &str) -> Option<String> {
     let trimmed = body.trim();
     let rest = trimmed.strip_prefix(subject.trim()).map(str::trim).unwrap_or(trimmed);
@@ -636,9 +636,9 @@ mod tests {
 
     #[test]
     fn body_without_repeated_subject() {
-        assert_eq!(message_body("Judul", "Judul"), None);
-        assert_eq!(message_body("Judul", "Judul\n\nPenjelasan panjang"), Some("Penjelasan panjang".to_string()));
-        assert_eq!(message_body("Judul", "Hanya isi"), Some("Hanya isi".to_string()));
-        assert_eq!(message_body("Judul", "  "), None);
+        assert_eq!(message_body("Title", "Title"), None);
+        assert_eq!(message_body("Title", "Title\n\nLong explanation"), Some("Long explanation".to_string()));
+        assert_eq!(message_body("Title", "Body only"), Some("Body only".to_string()));
+        assert_eq!(message_body("Title", "  "), None);
     }
 }

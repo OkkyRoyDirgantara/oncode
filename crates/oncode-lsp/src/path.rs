@@ -1,22 +1,22 @@
-//! Pencarian program di PATH.
+//! Looking up programs on PATH.
 
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
-/// Mencari `command` di PATH dan mengembalikan path programnya.
+/// Looks up `command` on PATH and returns the program's path.
 ///
-/// Perintah yang memuat pemisah path (absolut maupun relatif) diperiksa langsung tanpa PATH.
-/// Di Windows ekstensi dari `PATHEXT` (`.EXE`, `.CMD`, ...) ikut dicoba.
+/// A command containing a path separator (absolute or relative) is checked directly without PATH.
+/// On Windows, extensions from `PATHEXT` (`.EXE`, `.CMD`, ...) are tried as well.
 pub fn find_on_path(command: &str) -> Option<PathBuf> {
     resolve_command(command, None)
 }
 
-/// Seperti [`find_on_path`], tetapi path relatif yang memuat pemisah dihitung dari `base`.
+/// Like [`find_on_path`], but a relative path containing a separator is resolved from `base`.
 pub(crate) fn resolve_command(command: &str, base: Option<&Path>) -> Option<PathBuf> {
     resolve_in(command, base, std::env::var_os("PATH").as_deref(), &executable_extensions())
 }
 
-/// Ekstensi yang dicoba saat mencari program; kosong di luar Windows.
+/// Extensions tried when looking up a program; empty outside Windows.
 fn executable_extensions() -> Vec<String> {
     if cfg!(windows) {
         let raw = std::env::var("PATHEXT").unwrap_or_default();
@@ -55,8 +55,8 @@ fn resolve_in(command: &str, base: Option<&Path>, path_var: Option<&OsStr>, exte
         .find_map(|dir| executable_at(&dir.join(command), extensions))
 }
 
-/// Memeriksa satu kandidat. Tanpa daftar ekstensi (Unix) berkas harus punya bit eksekusi;
-/// dengan daftar ekstensi (Windows) berkas harus berakhiran salah satu ekstensi itu.
+/// Checks a single candidate. Without an extension list (Unix) the file must have the execute bit;
+/// with an extension list (Windows) the file must end with one of those extensions.
 fn executable_at(candidate: &Path, extensions: &[String]) -> Option<PathBuf> {
     if extensions.is_empty() {
         return is_executable_file(candidate).then(|| candidate.to_path_buf());
@@ -69,7 +69,7 @@ fn executable_at(candidate: &Path, extensions: &[String]) -> Option<PathBuf> {
         return Some(candidate.to_path_buf());
     }
     extensions.iter().find_map(|ext| {
-        // Ekstensi ditambahkan, bukan mengganti: `foo.bar` menjadi `foo.bar.exe`.
+        // The extension is appended, not replaced: `foo.bar` becomes `foo.bar.exe`.
         let mut with_ext = candidate.as_os_str().to_os_string();
         with_ext.push(ext);
         let with_ext = PathBuf::from(with_ext);
@@ -93,7 +93,7 @@ mod tests {
     use super::*;
 
     fn touch(path: &Path) {
-        std::fs::write(path, b"").expect("tulis berkas");
+        std::fs::write(path, b"").expect("write file");
     }
 
     #[cfg(unix)]
@@ -105,7 +105,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn finds_sh_on_path() {
-        let found = find_on_path("sh").expect("sh ada di PATH");
+        let found = find_on_path("sh").expect("sh is on PATH");
         assert!(found.is_absolute());
         assert!(found.is_file());
         assert_eq!(find_on_path(&found.to_string_lossy()), Some(found));
@@ -113,10 +113,10 @@ mod tests {
 
     #[test]
     fn missing_or_empty_command_is_none() {
-        assert_eq!(find_on_path("oncode-perintah-yang-tidak-ada"), None);
+        assert_eq!(find_on_path("oncode-no-such-command"), None);
         assert_eq!(find_on_path(""), None);
         assert_eq!(find_on_path("   "), None);
-        assert_eq!(find_on_path("/tidak/ada/program"), None);
+        assert_eq!(find_on_path("/no/such/program"), None);
     }
 
     #[cfg(unix)]
@@ -124,21 +124,21 @@ mod tests {
     fn unix_requires_the_executable_bit_and_respects_path_order() {
         let first = tempfile::tempdir().expect("tempdir");
         let second = tempfile::tempdir().expect("tempdir");
-        touch(&first.path().join("alat"));
-        touch(&second.path().join("alat"));
-        make_executable(&second.path().join("alat"));
+        touch(&first.path().join("tool"));
+        touch(&second.path().join("tool"));
+        make_executable(&second.path().join("tool"));
         std::fs::create_dir(first.path().join("folder")).expect("mkdir");
         std::fs::create_dir(second.path().join("folder")).expect("mkdir");
 
         let path_var = std::env::join_paths([first.path(), second.path()]).expect("join_paths");
-        // Berkas tanpa bit eksekusi di folder pertama dilewati.
-        assert_eq!(resolve_in("alat", None, Some(&path_var), &[]), Some(second.path().join("alat")));
-        // Folder bukan program.
+        // A file without the execute bit in the first folder is skipped.
+        assert_eq!(resolve_in("tool", None, Some(&path_var), &[]), Some(second.path().join("tool")));
+        // A folder is not a program.
         assert_eq!(resolve_in("folder", None, Some(&path_var), &[]), None);
-        assert_eq!(resolve_in("alat", None, None, &[]), None);
+        assert_eq!(resolve_in("tool", None, None, &[]), None);
 
-        make_executable(&first.path().join("alat"));
-        assert_eq!(resolve_in("alat", None, Some(&path_var), &[]), Some(first.path().join("alat")));
+        make_executable(&first.path().join("tool"));
+        assert_eq!(resolve_in("tool", None, Some(&path_var), &[]), Some(first.path().join("tool")));
     }
 
     #[cfg(unix)]
@@ -146,39 +146,39 @@ mod tests {
     fn paths_with_separators_skip_path_lookup() {
         let dir = tempfile::tempdir().expect("tempdir");
         std::fs::create_dir(dir.path().join("bin")).expect("mkdir");
-        let program = dir.path().join("bin").join("alat");
+        let program = dir.path().join("bin").join("tool");
         touch(&program);
         make_executable(&program);
 
         let empty = std::ffi::OsString::new();
         assert_eq!(resolve_in(&program.to_string_lossy(), None, Some(&empty), &[]), Some(program.clone()));
-        // Relatif terhadap `base` bila diberikan.
-        assert_eq!(resolve_in("./bin/alat", Some(dir.path()), Some(&empty), &[]), Some(dir.path().join("./bin/alat")));
-        assert_eq!(resolve_in("bin/alat", Some(dir.path()), Some(&empty), &[]), Some(dir.path().join("bin/alat")));
-        assert_eq!(resolve_in("bin/hilang", Some(dir.path()), Some(&empty), &[]), None);
-        // Nama polos tidak dicari di `base`.
-        assert_eq!(resolve_in("alat", Some(&dir.path().join("bin")), Some(&empty), &[]), None);
+        // Relative to `base` if given.
+        assert_eq!(resolve_in("./bin/tool", Some(dir.path()), Some(&empty), &[]), Some(dir.path().join("./bin/tool")));
+        assert_eq!(resolve_in("bin/tool", Some(dir.path()), Some(&empty), &[]), Some(dir.path().join("bin/tool")));
+        assert_eq!(resolve_in("bin/missing", Some(dir.path()), Some(&empty), &[]), None);
+        // A bare name is not looked up in `base`.
+        assert_eq!(resolve_in("tool", Some(&dir.path().join("bin")), Some(&empty), &[]), None);
     }
 
     #[test]
     fn pathext_extensions_are_appended() {
-        // Sistem berkas Linux peka huruf besar, jadi berkas uji memakai ejaan yang sama dengan PATHEXT.
+        // Linux file systems are case-sensitive, so the test files use the same spelling as PATHEXT.
         let dir = tempfile::tempdir().expect("tempdir");
         touch(&dir.path().join("gopls.EXE"));
         touch(&dir.path().join("clangd.exe"));
-        touch(&dir.path().join("tsserver")); // skrip sh dari npm: bukan program Windows
+        touch(&dir.path().join("tsserver")); // sh script from npm: not a Windows program
         touch(&dir.path().join("tsserver.CMD"));
-        touch(&dir.path().join("catatan.txt"));
+        touch(&dir.path().join("notes.txt"));
         let path_var = std::env::join_paths([dir.path()]).expect("join_paths");
         let exts = parse_pathext(".COM;.EXE;.BAT;.CMD");
 
         assert_eq!(resolve_in("gopls", None, Some(&path_var), &exts), Some(dir.path().join("gopls.EXE")));
-        // Ekstensi yang sudah ditulis dicocokkan tanpa membedakan huruf besar.
+        // An extension that is already written is matched case-insensitively.
         assert_eq!(resolve_in("clangd.exe", None, Some(&path_var), &exts), Some(dir.path().join("clangd.exe")));
         assert_eq!(resolve_in("tsserver", None, Some(&path_var), &exts), Some(dir.path().join("tsserver.CMD")));
-        assert_eq!(resolve_in("catatan.txt", None, Some(&path_var), &exts), None);
-        assert_eq!(resolve_in("hilang", None, Some(&path_var), &exts), None);
-        // Path dengan pemisah juga mendapat ekstensi.
+        assert_eq!(resolve_in("notes.txt", None, Some(&path_var), &exts), None);
+        assert_eq!(resolve_in("missing", None, Some(&path_var), &exts), None);
+        // A path with a separator also gets the extension.
         let direct = dir.path().join("gopls");
         assert_eq!(resolve_in(&direct.to_string_lossy(), None, None, &exts), Some(dir.path().join("gopls.EXE")));
     }

@@ -1,14 +1,14 @@
-//! Klien JSON-RPC/LSP di atas transport pesan mentah (teks JSON tanpa bingkai).
+//! A JSON-RPC/LSP client on top of a raw message transport (unframed JSON text).
 //!
-//! Klien tidak tahu cara pesan dikirim: pesan keluar ditaruh di kanal yang dikembalikan
-//! [`Client::new`] (urutannya = urutan pemanggilan), dan pesan masuk diserahkan lewat
-//! [`Client::receive`]. Dengan begitu klien yang sama dipakai di atas [`LspManager`](crate::LspManager),
-//! di atas API `oncode-core`, dan di atas server tiruan di dalam proses.
+//! The client does not know how messages are sent: outgoing messages are placed on the channel returned by
+//! [`Client::new`] (in call order), and incoming messages are handed over via
+//! [`Client::receive`]. That way the same client is used on top of [`LspManager`](crate::LspManager),
+//! on top of the `oncode-core` API, and on top of an in-process mock server.
 //!
-//! Permintaan dikirim **saat fungsi dipanggil**, bukan saat future-nya pertama kali di-poll,
-//! sehingga `did_change` yang dipanggil lebih dulu selalu tiba lebih dulu di server. Future
-//! hasilnya memakai pewaktu tokio dan harus ditunggu di dalam runtime tokio. Membuang future
-//! sebelum selesai membatalkan permintaannya (`$/cancelRequest`).
+//! A request is sent **when the function is called**, not when its future is first polled,
+//! so a `did_change` called earlier always arrives at the server earlier. The result
+//! future uses the tokio timer and must be awaited inside a tokio runtime. Dropping the future
+//! before it completes cancels its request (`$/cancelRequest`).
 
 use std::collections::HashMap;
 use std::future::Future;
@@ -34,7 +34,7 @@ use crate::capabilities::{client_capabilities, server_supports, Feature, SyncOpt
 use crate::position::PositionEncoding;
 use crate::uri::path_to_lsp_uri;
 
-/// Kode galat JSON-RPC yang dipakai klien saat menjawab server.
+/// JSON-RPC error codes the client uses when answering the server.
 const METHOD_NOT_FOUND: i64 = -32601;
 const INVALID_PARAMS: i64 = -32602;
 
@@ -52,7 +52,7 @@ pub enum RpcError {
     Closed,
     #[error("The language server has not finished starting")]
     NotReady,
-    /// Galat yang dikirim server (`error` pada jawaban JSON-RPC).
+    /// An error sent by the server (`error` in a JSON-RPC response).
     #[error("{message}")]
     Server { code: i64, message: String },
     #[error("Unexpected answer from the language server: {0}")]
@@ -61,14 +61,14 @@ pub enum RpcError {
 
 #[derive(Debug, Clone)]
 pub struct ClientConfig {
-    /// Nama dan versi klien untuk `clientInfo`.
+    /// The client's name and version for `clientInfo`.
     pub name: String,
     pub version: Option<String>,
-    /// Path absolut folder proyek; menjadi `rootUri` dan satu-satunya `workspaceFolders`.
+    /// Absolute path of the project folder; becomes `rootUri` and the only `workspaceFolders` entry.
     pub root: Option<String>,
-    /// Batas waktu tiap permintaan.
+    /// Timeout of each request.
     pub request_timeout: Duration,
-    /// Batas waktu `initialize` (server besar perlu waktu untuk memuat proyek).
+    /// Timeout of `initialize` (a large server needs time to load the project).
     pub initialize_timeout: Duration,
     pub initialization_options: Option<Value>,
 }
@@ -86,31 +86,31 @@ impl Default for ClientConfig {
     }
 }
 
-/// Penerima pesan dari server yang bukan jawaban permintaan. Dipanggil dari thread transport,
-/// jadi harus cepat dan tidak memblokir (biasanya hanya meneruskan ke kanal milik UI).
+/// Receiver of messages from the server that are not responses to requests. Called from the transport thread,
+/// so it must be fast and must not block (usually it just forwards to a channel owned by the UI).
 pub trait ClientHandler: Send + Sync + 'static {
-    /// Notifikasi dari server, mis. `textDocument/publishDiagnostics` atau `window/showMessage`.
+    /// A notification from the server, e.g. `textDocument/publishDiagnostics` or `window/showMessage`.
     fn notification(&self, method: &str, params: Value);
 
-    /// `workspace/applyEdit`. Jawaban dikirim lewat `respond`; bila `respond` dibuang tanpa
-    /// dijawab, server menerima `applied: false`.
+    /// `workspace/applyEdit`. The answer is sent via `respond`; if `respond` is dropped without
+    /// answering, the server receives `applied: false`.
     fn apply_edit(&self, params: ApplyWorkspaceEditParams, respond: Responder<ApplyWorkspaceEditResponse>) {
         let _ = (params, respond);
     }
 
-    /// `window/showDocument`. Tanpa jawaban, server menerima `success: false`.
+    /// `window/showDocument`. Without an answer, the server receives `success: false`.
     fn show_document(&self, params: ShowDocumentParams, respond: Responder<ShowDocumentResult>) {
         let _ = (params, respond);
     }
 
-    /// `workspace/configuration`: satu nilai per butir; `null` berarti "tidak ada pengaturan".
+    /// `workspace/configuration`: one value per item; `null` means "no setting".
     fn configuration(&self, items: &[ConfigurationItem]) -> Vec<Value> {
         vec![Value::Null; items.len()]
     }
 }
 
-/// Jawaban tertunda untuk permintaan dari server. Selalu menjawab: bila dibuang tanpa
-/// [`Responder::respond`], nilai cadangan yang dikirim agar server tidak menunggu selamanya.
+/// A pending answer to a request from the server. It always answers: if dropped without
+/// [`Responder::respond`], a fallback value is sent so the server does not wait forever.
 pub struct Responder<T: Serialize> {
     client: Weak<Inner>,
     id: Value,
@@ -157,11 +157,11 @@ struct State {
     server_info: Option<ServerInfo>,
     encoding: PositionEncoding,
     sync: SyncOptions,
-    /// Dokumen yang sedang terbuka di server, menurut teks URI-nya.
+    /// Documents currently open on the server, keyed by their URI text.
     documents: HashMap<String, Document>,
-    /// Versi terakhir tiap URI; tidak diulang walau dokumen ditutup lalu dibuka lagi.
+    /// The last version of each URI; not repeated even if the document is closed and then reopened.
     versions: HashMap<String, i32>,
-    /// Pendaftaran dinamis (`client/registerCapability`): id → metode.
+    /// Dynamic registrations (`client/registerCapability`): id → method.
     registrations: HashMap<String, String>,
 }
 
@@ -194,7 +194,7 @@ impl Inner {
     }
 }
 
-/// Membatalkan permintaan bila future-nya dibuang sebelum jawaban tiba.
+/// Cancels the request if its future is dropped before the answer arrives.
 struct CancelGuard {
     client: Weak<Inner>,
     id: i64,
@@ -209,22 +209,22 @@ impl Drop for CancelGuard {
         }
         let Some(client) = self.client.upgrade() else { return };
         let was_pending = lock(&client.pending).remove(&self.id).is_some();
-        // `initialize` tidak boleh dibatalkan menurut spesifikasi.
+        // `initialize` must not be canceled per the spec.
         if was_pending && self.method != lsp_types::request::Initialize::METHOD {
             client.send(json!({ "jsonrpc": "2.0", "method": "$/cancelRequest", "params": { "id": self.id } }));
         }
     }
 }
 
-/// Klien satu language server. Murah di-clone; semua clone berbagi keadaan yang sama.
+/// The client of one language server. Cheap to clone; all clones share the same state.
 #[derive(Clone)]
 pub struct Client {
     inner: Arc<Inner>,
 }
 
 impl Client {
-    /// Membuat klien dan kanal pesan keluarnya. Pemanggil menguras kanal itu secara berurutan
-    /// ke transport, dan menyerahkan setiap pesan dari server ke [`Client::receive`].
+    /// Creates the client and its outgoing message channel. The caller drains that channel in order
+    /// to the transport, and hands every message from the server to [`Client::receive`].
     pub fn new(config: ClientConfig, handler: Arc<dyn ClientHandler>) -> (Self, mpsc::UnboundedReceiver<String>) {
         let (outgoing, receiver) = mpsc::unbounded_channel();
         let inner = Inner {
@@ -248,9 +248,9 @@ impl Client {
         (Self { inner: Arc::new(inner) }, receiver)
     }
 
-    // ----- Keadaan -----
+    // ----- State -----
 
-    /// `initialize` sudah dijawab dan klien belum ditutup.
+    /// `initialize` has been answered and the client has not been closed.
     pub fn is_ready(&self) -> bool {
         !self.is_closed() && lock(&self.inner.state).phase == Phase::Ready
     }
@@ -267,7 +267,7 @@ impl Client {
         lock(&self.inner.state).server_info.clone()
     }
 
-    /// Satuan kolom yang disepakati dengan server.
+    /// The column unit agreed with the server.
     pub fn encoding(&self) -> PositionEncoding {
         lock(&self.inner.state).encoding
     }
@@ -276,18 +276,18 @@ impl Client {
         lock(&self.inner.state).sync
     }
 
-    /// Server mendukung `feature`, lewat kemampuan statis atau pendaftaran dinamis.
+    /// The server supports `feature`, via static capabilities or dynamic registration.
     pub fn supports(&self, feature: Feature) -> bool {
         let state = lock(&self.inner.state);
         state.phase == Phase::Ready && (server_supports(&state.capabilities, feature) || state.registrations.values().any(|method| method == feature.method()))
     }
 
-    /// Karakter yang memicu completion otomatis (mis. `.`).
+    /// Characters that trigger completion automatically (e.g. `.`).
     pub fn completion_trigger_characters(&self) -> Vec<String> {
         lock(&self.inner.state).capabilities.completion_provider.as_ref().and_then(|options| options.trigger_characters.clone()).unwrap_or_default()
     }
 
-    /// Karakter yang memicu dan memicu ulang signature help (mis. `(` dan `,`).
+    /// Characters that trigger and re-trigger signature help (e.g. `(` and `,`).
     pub fn signature_trigger_characters(&self) -> Vec<String> {
         let state = lock(&self.inner.state);
         let Some(options) = state.capabilities.signature_help_provider.as_ref() else { return Vec::new() };
@@ -300,9 +300,9 @@ impl Client {
         characters
     }
 
-    // ----- Pesan masuk -----
+    // ----- Incoming messages -----
 
-    /// Memproses satu pesan dari server (teks JSON tanpa header). Pesan yang rusak diabaikan.
+    /// Processes a single message from the server (JSON text without the header). A broken message is ignored.
     pub fn receive(&self, json: &str) {
         if self.is_closed() {
             return;
@@ -323,7 +323,7 @@ impl Client {
 
     fn on_response(&self, id: &Value, mut message: serde_json::Map<String, Value>) {
         let Some(id) = id.as_i64() else { return };
-        // Jawaban untuk permintaan yang sudah kedaluwarsa atau dibatalkan tidak punya entri lagi.
+        // A response to a request that has expired or been canceled no longer has an entry.
         let Some(pending) = lock(&self.inner.pending).remove(&id) else { return };
         let result = match message.remove("error") {
             Some(error) if !error.is_null() => Err(RpcError::Server {
@@ -384,8 +384,8 @@ impl Client {
                 let folders = self.workspace_folders();
                 inner.respond(id, serde_json::to_value(folders).unwrap_or(Value::Null));
             }
-            // Tidak ada yang perlu dilakukan selain mengakui: progres ditampilkan (bila perlu) dari
-            // notifikasi `$/progress`, dan permintaan penyegaran dijawab pada permintaan berikutnya.
+            // Nothing to do except acknowledge: progress is shown (if needed) from the
+            // `$/progress` notification, and refresh requests are answered on the next request.
             "window/workDoneProgress/create"
             | "window/showMessageRequest"
             | "workspace/semanticTokens/refresh"
@@ -397,8 +397,8 @@ impl Client {
         }
     }
 
-    /// Transport terputus atau server berhenti: semua permintaan yang menunggu gagal dengan
-    /// [`RpcError::Closed`], dan tidak ada lagi pesan yang dikirim atau diterima.
+    /// The transport disconnected or the server stopped: all waiting requests fail with
+    /// [`RpcError::Closed`], and no more messages are sent or received.
     pub fn close(&self) {
         if self.inner.closed.swap(true, Ordering::SeqCst) {
             return;
@@ -410,7 +410,7 @@ impl Client {
         lock(&self.inner.state).documents.clear();
     }
 
-    // ----- Permintaan dan notifikasi -----
+    // ----- Requests and notifications -----
 
     fn start(&self, method: &'static str, params: Value, require_ready: bool) -> Result<(CancelGuard, oneshot::Receiver<Result<Value, RpcError>>), RpcError> {
         if self.is_closed() {
@@ -448,18 +448,18 @@ impl Client {
                     guard.armed = false;
                     serde_json::from_value(result?).map_err(|error| RpcError::Invalid(format!("{}: {error}", R::METHOD)))
                 }
-                // Pengirim hilang tanpa jawaban: klien ditutup.
+                // The sender vanished without an answer: the client was closed.
                 Ok(Err(_)) => {
                     guard.armed = false;
                     Err(RpcError::Closed)
                 }
-                // `guard` dibuang di sini dan mengirim `$/cancelRequest`.
+                // `guard` is dropped here and sends `$/cancelRequest`.
                 Err(_) => Err(RpcError::Timeout { method: R::METHOD.to_string() }),
             }
         }
     }
 
-    /// Mengirim permintaan bertipe dan mengembalikan future jawabannya (lihat catatan modul).
+    /// Sends a typed request and returns the future of its answer (see the module notes).
     pub fn request<R>(&self, params: R::Params) -> impl Future<Output = Result<R::Result, RpcError>> + Send + 'static
     where
         R: Request,
@@ -469,7 +469,7 @@ impl Client {
         self.request_inner::<R>(params, self.inner.config.request_timeout, true)
     }
 
-    /// Seperti [`Client::request`] dengan batas waktu sendiri.
+    /// Like [`Client::request`] with its own timeout.
     pub fn request_with_timeout<R>(&self, params: R::Params, timeout: Duration) -> impl Future<Output = Result<R::Result, RpcError>> + Send + 'static
     where
         R: Request,
@@ -479,7 +479,7 @@ impl Client {
         self.request_inner::<R>(params, timeout, true)
     }
 
-    /// Mengirim notifikasi. Hasil `false` bila klien sudah ditutup.
+    /// Sends a notification. The result is `false` if the client has been closed.
     pub fn notify<N>(&self, params: N::Params) -> bool
     where
         N: Notification,
@@ -493,7 +493,7 @@ impl Client {
         self.inner.send(message)
     }
 
-    // ----- Siklus hidup -----
+    // ----- Lifecycle -----
 
     fn workspace_folders(&self) -> Option<Vec<WorkspaceFolder>> {
         let root = self.inner.config.root.as_ref()?;
@@ -502,7 +502,7 @@ impl Client {
         Some(vec![WorkspaceFolder { uri, name }])
     }
 
-    /// Jabat tangan: `initialize`, menyimpan kemampuan server, lalu `initialized`.
+    /// The handshake: `initialize`, storing the server's capabilities, then `initialized`.
     pub fn initialize(&self) -> impl Future<Output = Result<InitializeResult, RpcError>> + Send + 'static {
         let config = &self.inner.config;
         let folders = self.workspace_folders();
@@ -545,8 +545,8 @@ impl Client {
         }
     }
 
-    /// Penutupan yang rapi: `shutdown`, lalu `exit`. Galat `shutdown` (mis. batas waktu) tidak
-    /// menghalangi `exit`. Setelah ini klien tertutup.
+    /// A clean shutdown: `shutdown`, then `exit`. A `shutdown` error (e.g. a timeout) does not
+    /// prevent `exit`. After this the client is closed.
     pub fn shutdown(&self, timeout: Duration) -> impl Future<Output = ()> + Send + 'static {
         let was_ready = {
             let mut state = lock(&self.inner.state);
@@ -565,7 +565,7 @@ impl Client {
         }
     }
 
-    // ----- Sinkronisasi dokumen -----
+    // ----- Document synchronization -----
 
     fn document_ready(&self) -> Result<(), RpcError> {
         if self.is_closed() {
@@ -577,18 +577,18 @@ impl Client {
         Ok(())
     }
 
-    /// Dokumen ini sedang terbuka di server.
+    /// This document is currently open on the server.
     pub fn is_open(&self, uri: &Uri) -> bool {
         lock(&self.inner.state).documents.contains_key(uri.as_str())
     }
 
-    /// Versi dokumen yang terakhir dikirim ke server; `None` bila tidak terbuka.
+    /// The document version last sent to the server; `None` if it is not open.
     pub fn version(&self, uri: &Uri) -> Option<i32> {
         lock(&self.inner.state).documents.get(uri.as_str()).map(|document| document.version)
     }
 
-    /// `textDocument/didOpen`. Mengembalikan versi dokumen; dokumen yang sudah terbuka tidak
-    /// dibuka lagi (versinya yang sekarang dikembalikan).
+    /// `textDocument/didOpen`. Returns the document version; a document that is already open is not
+    /// opened again (its current version is returned).
     pub fn did_open(&self, uri: &Uri, language_id: &str, text: String) -> Result<i32, RpcError> {
         self.document_ready()?;
         let (version, send) = {
@@ -609,10 +609,10 @@ impl Client {
         Ok(version)
     }
 
-    /// `textDocument/didChange`. `changes` adalah perubahan bertahap (tiap butir mengacu ke
-    /// dokumen setelah butir sebelumnya, posisinya dalam [`Client::encoding`]); `full_text` hanya
-    /// dipanggil bila server meminta sinkronisasi penuh. Mengembalikan versi baru, atau `None`
-    /// bila server tidak menginginkan perubahan atau tidak ada yang berubah.
+    /// `textDocument/didChange`. `changes` are incremental changes (each item refers to the
+    /// document after the previous item, with positions in [`Client::encoding`]); `full_text` is only
+    /// called if the server asks for full synchronization. Returns the new version, or `None`
+    /// if the server does not want changes or nothing changed.
     pub fn did_change(&self, uri: &Uri, changes: Vec<TextDocumentContentChangeEvent>, full_text: impl FnOnce() -> String) -> Result<Option<i32>, RpcError> {
         self.document_ready()?;
         if changes.is_empty() {
@@ -638,7 +638,7 @@ impl Client {
         Ok(Some(version))
     }
 
-    /// `textDocument/didSave`; `text` hanya dipanggil bila server meminta isinya disertakan.
+    /// `textDocument/didSave`; `text` is only called if the server asks for the contents to be included.
     pub fn did_save(&self, uri: &Uri, text: impl FnOnce() -> String) -> Result<(), RpcError> {
         self.document_ready()?;
         let save = {
@@ -657,7 +657,7 @@ impl Client {
         Ok(())
     }
 
-    /// `textDocument/didClose`. Dokumen yang tidak terbuka diabaikan.
+    /// `textDocument/didClose`. A document that is not open is ignored.
     pub fn did_close(&self, uri: &Uri) -> Result<(), RpcError> {
         self.document_ready()?;
         let send = {
@@ -680,7 +680,7 @@ impl std::fmt::Debug for Client {
     }
 }
 
-/// Metode permintaan yang sedang menunggu jawaban, terurut menurut id (untuk diagnosis dan uji).
+/// Request methods currently awaiting an answer, ordered by id (for diagnosis and tests).
 impl Client {
     pub fn pending_methods(&self) -> Vec<&'static str> {
         let pending = lock(&self.inner.pending);

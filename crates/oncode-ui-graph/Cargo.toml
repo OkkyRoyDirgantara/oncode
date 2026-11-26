@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
-description = "Graph commit, detail commit, interactive rebase, reflog, worktree, dan submodule untuk OnCode"
+description = "Commit graph, commit details, interactive rebase, reflog, worktree, and submodule for OnCode"
 
 [dependencies]
 oncode-core = { path = "../oncode-core" }

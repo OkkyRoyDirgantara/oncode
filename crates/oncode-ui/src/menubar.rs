@@ -1,8 +1,8 @@
-//! Menu di bilah judul (File, Edit, View, Go, Git, Terminal, Help) untuk Windows dan Linux; macOS
-//! memakai isi [`MENUS`] yang sama di menu bar sistem (lihat [`crate::app_menu`]). Setiap item menjalankan
-//! command dari registry jendela, jadi label dan pintasannya selalu sama dengan command palette.
-//! Item yang command-nya tidak terdaftar di jendela ini disembunyikan (mis. Git di folder tanpa
-//! repositori); item yang belum bisa dipakai sekarang ditampilkan nonaktif.
+//! Menus in the title bar (File, Edit, View, Go, Git, Terminal, Help) for Windows and Linux; macOS
+//! uses the same [`MENUS`] content in the system menu bar (see [`crate::app_menu`]). Each item runs a
+//! command from the window's registry, so its label and shortcut always match the command palette.
+//! Items whose command is not registered in this window are hidden (e.g. Git in a folder without a
+//! repository); items that cannot be used right now are shown disabled.
 
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::menu::{DropdownMenu as _, PopupMenu, PopupMenuItem};
@@ -13,7 +13,7 @@ use serde_json::Value;
 use crate::commands::{self, Command};
 use crate::keys;
 
-/// Menu dan isinya: id command, `None` = pemisah.
+/// Menus and their content: command ids, `None` = separator.
 pub const MENUS: &[(&str, &[Option<&str>])] = &[
     (
         "File",
@@ -108,7 +108,7 @@ pub const MENUS: &[(&str, &[Option<&str>])] = &[
     ("Help", &[Some("workbench.commandPalette"), Some("keybindings.openJson"), Some("settings.openJson")]),
 ];
 
-/// Command terdaftar dari sebuah menu, dengan pemisah di antara kelompok yang tidak kosong.
+/// The registered commands of a menu, with separators between non-empty groups.
 pub(crate) fn entries(items: &[Option<&str>], window: &Window, cx: &App) -> Vec<Option<Command>> {
     let mut out: Vec<Option<Command>> = Vec::new();
     let mut separator = false;
@@ -148,7 +148,7 @@ fn build(mut menu: PopupMenu, items: &[Option<&str>], window: &Window, cx: &App)
     menu.min_w(px(260.))
 }
 
-/// Deretan tombol menu untuk bilah judul. Menu tanpa satu pun command terdaftar tidak ditampilkan.
+/// The row of menu buttons for the title bar. A menu without a single registered command is not shown.
 pub fn menu_bar(window: &Window, cx: &App) -> impl IntoElement {
     h_flex().id("menu-bar").gap_0p5().children(MENUS.iter().filter(|(_, items)| !entries(items, window, cx).is_empty()).map(|(title, items)| {
         Button::new(SharedString::from(format!("menu-{}", title.to_lowercase())))

@@ -1,5 +1,5 @@
-//! Dialog dan pemberitahuan milik fitur Source Control: masukan teks dengan validasi langsung,
-//! dan toast yang membawa tombol tindak lanjut (mis. "Pull, then push").
+//! Dialogs and notifications of the Source Control feature: text input with live validation,
+//! and toasts that carry follow-up buttons (e.g. "Pull, then push").
 
 use std::cell::Cell;
 use std::rc::Rc;
@@ -20,14 +20,14 @@ use crate::logic::NoticeLevel;
 
 type Validate = Rc<dyn Fn(&str) -> Option<String>>;
 
-/// Dialog masukan satu baris dengan label dan validasi.
+/// A single-line input dialog with a label and validation.
 pub struct InputPrompt {
     pub title: SharedString,
     pub label: SharedString,
     pub value: SharedString,
     pub placeholder: SharedString,
     pub ok: SharedString,
-    /// Nilai kosong diterima (mis. pesan stash opsional).
+    /// An empty value is accepted (e.g. an optional stash message).
     pub allow_empty: bool,
     pub validate: Option<Validate>,
 }
@@ -57,14 +57,14 @@ impl InputPrompt {
         self
     }
 
-    /// Fungsi yang mengembalikan pesan galat untuk nilai yang tidak sah.
+    /// A function that returns an error message for an invalid value.
     pub fn validate(mut self, validate: impl Fn(&str) -> Option<String> + 'static) -> Self {
         self.validate = Some(Rc::new(validate));
         self
     }
 }
 
-/// Isi dialog: label, kolom masukan, dan pesan galat validasi.
+/// Dialog content: the label, the input field, and the validation error message.
 struct PromptBody {
     label: SharedString,
     input: Entity<InputState>,
@@ -75,7 +75,7 @@ struct PromptBody {
 }
 
 impl PromptBody {
-    /// Galat untuk nilai saat ini; `None` bila boleh dikirim.
+    /// The error for the current value; `None` if it can be submitted.
     fn problem(&self, cx: &App) -> Option<SharedString> {
         let value = self.input.read(cx).value();
         if let Some(validate) = &self.validate {
@@ -88,7 +88,7 @@ impl PromptBody {
         None
     }
 
-    /// Memeriksa nilai, menampilkan galatnya, dan mengembalikan nilai bila sah.
+    /// Checks the value, shows its error, and returns the value if valid.
     fn submit(&mut self, cx: &mut Context<Self>) -> Option<String> {
         self.error = self.problem(cx);
         cx.notify();
@@ -108,14 +108,14 @@ impl Render for PromptBody {
     }
 }
 
-/// Membuka dialog masukan. `None` bila dibatalkan. Nilai yang tidak lolos validasi tidak bisa dikirim.
+/// Opens an input dialog. `None` if canceled. A value that fails validation cannot be submitted.
 pub fn prompt_input(options: InputPrompt, window: &mut Window, cx: &mut App) -> Task<Option<String>> {
     let (tx, rx) = oneshot::channel::<Option<String>>();
     let tx = Rc::new(Cell::new(Some(tx)));
     let InputPrompt { title, label, value, placeholder, ok, allow_empty, validate } = options;
     let input = cx.new(|cx| InputState::new(window, cx).placeholder(placeholder).default_value(value));
     let body = cx.new(|cx| {
-        // Galat diperbarui selagi mengetik, tetapi baru muncul setelah ada ketikan pertama.
+        // The error updates while typing, but only appears after the first keystroke.
         let subscription = cx.subscribe(&input, |this: &mut PromptBody, _, event: &InputEvent, cx| {
             if matches!(event, InputEvent::Change) {
                 this.error = this.problem(cx);
@@ -151,10 +151,10 @@ pub fn prompt_input(options: InputPrompt, window: &mut Window, cx: &mut App) -> 
     cx.spawn(async move |_| rx.await.ok().flatten())
 }
 
-/// Tombol tindak lanjut pada sebuah toast.
+/// A follow-up button on a toast.
 #[derive(Clone)]
 pub struct ToastAction {
-    /// Bagian id elemen: tombolnya ber-id `scm-toast-action-<slug>`.
+    /// Part of the element id: the button has the id `scm-toast-action-<slug>`.
     pub slug: SharedString,
     pub label: SharedString,
     pub run: Rc<dyn Fn(&mut Window, &mut App)>,
@@ -166,8 +166,8 @@ impl ToastAction {
     }
 }
 
-/// Menampilkan toast. `key` menjadi id penanda (`scm-toast-<key>`) agar uji bisa menunggunya.
-/// Toast galat dan toast dengan tombol tidak hilang sendiri.
+/// Shows a toast. `key` becomes the marker id (`scm-toast-<key>`) so tests can wait for it.
+/// Error toasts and toasts with buttons do not disappear on their own.
 pub fn toast(level: NoticeLevel, key: &str, message: impl Into<SharedString>, actions: Vec<ToastAction>, window: &mut Window, cx: &mut App) {
     let kind = match level {
         NoticeLevel::Info => NotificationType::Info,

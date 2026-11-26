@@ -1,13 +1,13 @@
-//! Penentuan jalur (lane) graph commit, bertahap mengikuti urutan `git log --topo-order`.
+//! Commit graph lane assignment, done incrementally following the `git log --topo-order` order.
 
 use crate::model::{Commit, Edge, EdgeKind, GraphRow};
 
-/// Jumlah warna jalur yang tersedia di UI.
+/// Number of lane colors available in the UI.
 pub const COLOR_COUNT: u8 = 8;
 
 #[derive(Debug, Clone)]
 struct Lane {
-    /// Commit yang ditunggu jalur ini.
+    /// The commit this lane is waiting for.
     oid: String,
     color: u8,
 }
@@ -39,7 +39,7 @@ impl GraphBuilder {
         }
     }
 
-    /// Memproses commit berikutnya dan menghasilkan baris graph-nya.
+    /// Processes the next commit and produces its graph row.
     pub fn push(&mut self, commit: Commit) -> GraphRow {
         let waiting: Vec<usize> = self
             .lanes
@@ -79,7 +79,7 @@ impl GraphBuilder {
                     (column, color)
                 }
                 None => {
-                    // Bila induk pertama sudah punya jalur lain, kolom commit ini kosong dan dipakai ulang.
+                    // If the first parent already has another lane, this commit's column is empty and is reused.
                     let slot = self.free_slot();
                     let lane_color = if slot == column { color } else { self.take_color() };
                     self.lanes[slot] = Some(Lane { oid: parent.clone(), color: lane_color });
@@ -114,7 +114,7 @@ mod tests {
         }
     }
 
-    /// Menggambar tiap baris sebagai teks ringkas agar mudah dibandingkan.
+    /// Renders each row as compact text so it is easy to compare.
     fn render(commits: &[(&str, &[&str])]) -> String {
         let mut builder = GraphBuilder::new();
         let mut out = String::new();
@@ -149,7 +149,7 @@ mod tests {
 
     #[test]
     fn merge_opens_and_closes_second_lane() {
-        // m menggabungkan f ke b; keduanya bercabang dari a.
+        // m merges f into b; both branch off from a.
         insta::assert_snapshot!(render(&[("m", &["b", "f"]), ("b", &["a"]), ("f", &["a"]), ("a", &[])]), @r"
         m col=0 color=0 [B0>0 B0>1]
         b col=0 color=0 [B0>0 T0>0 |1>1]
@@ -190,7 +190,7 @@ mod tests {
 
     #[test]
     fn freed_slot_is_reused_while_other_lane_continues() {
-        // Jalur 0 tetap berjalan (d→c), jalur 1 selesai lalu dipakai ujung branch baru.
+        // Lane 0 keeps going (d→c), lane 1 finishes and is then used by a new branch tip.
         insta::assert_snapshot!(render(&[("d", &["c"]), ("e", &[]), ("f", &["c"]), ("c", &[])]), @r"
         d col=0 color=0 [B0>0]
         e col=1 color=1 [|0>0]

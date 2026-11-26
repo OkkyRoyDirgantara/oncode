@@ -1,7 +1,7 @@
-//! API perintah, satu modul per domain. Nama fungsi berpola `<domain>_<aksi>`, sama dengan
-//! command IPC di v0.2. Jendela pemanggil dikenali lewat label string (`window`).
+//! Command API, one module per domain. Function names follow the pattern `<domain>_<action>`, same as
+//! the IPC commands in v0.2. The calling window is identified by a string label (`window`).
 //!
-//! Semua fungsi di sini harus dijalankan di runtime tokio milik [`Core`](crate::Core).
+//! All functions here must run on the tokio runtime owned by [`Core`](crate::Core).
 
 use std::sync::Arc;
 
@@ -15,11 +15,11 @@ pub mod lsp;
 pub mod symbols;
 pub mod term;
 
-/// Pengganti `Channel<T>` v0.2: dipanggil untuk tiap kiriman, dari thread mana pun.
+/// Replacement for v0.2's `Channel<T>`: called for each message sent, from any thread.
 pub type Callback<T> = Arc<dyn Fn(T) + Send + Sync>;
 
-/// Program bantu (formatter, Claude Code) tanpa jendela konsol: di Windows aplikasi GUI yang
-/// menjalankan program konsol memunculkan jendela hitam sekilas.
+/// Helper programs (formatter, Claude Code) without a console window: on Windows a GUI app that
+/// runs a console program briefly flashes a black window.
 pub(crate) fn hidden_command(program: &std::path::Path) -> tokio::process::Command {
     #[allow(unused_mut)]
     let mut command = tokio::process::Command::new(program);
@@ -34,7 +34,7 @@ mod tests {
 
     use crate::testing::TestCore;
 
-    /// UI menjalankan fungsi API lewat `Core::spawn`, jadi future-nya harus `Send`.
+    /// The UI runs API functions through `Core::spawn`, so their futures must be `Send`.
     #[tokio::test]
     async fn api_futures_can_be_spawned_on_the_runtime() {
         fn assert_send<T: Send>(value: T) -> T {
@@ -53,7 +53,7 @@ mod tests {
         drop(assert_send(super::ai::ai_commit_message(core, String::new(), String::new(), Arc::new(|_| {}))));
         drop(assert_send(super::forge::forge_pr_checkout(core, String::new(), oncode_forge::ForgeKind::GitHub, String::new(), 1, String::new(), Arc::new(|_| {}))));
 
-        // Pola pemakaian dari UI: future memiliki `Shared` sendiri dan dijalankan di runtime core.
+        // Usage pattern from the UI: the future owns its own `Shared` and runs on the core's runtime.
         let owned = t.core.clone();
         let settings = t.core.spawn(async move { super::app::settings_get(&owned, "w").await }).await.unwrap().unwrap();
         assert_eq!(settings, crate::Settings::default());

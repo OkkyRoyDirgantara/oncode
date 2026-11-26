@@ -1,7 +1,7 @@
-//! Terminal OnCode: pengelola PTY di atas `portable-pty`.
+//! OnCode terminal: a PTY manager on top of `portable-pty`.
 //!
-//! Crate ini tidak bergantung pada Tauri. Lapisan aplikasi membungkus
-//! [`TerminalManager`] dalam command dan meneruskan keluaran lewat channel.
+//! This crate does not depend on Tauri. The application layer wraps
+//! [`TerminalManager`] in commands and forwards output through a channel.
 
 mod error;
 mod manager;

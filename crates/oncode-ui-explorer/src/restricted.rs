@@ -1,5 +1,5 @@
-//! Mode terbatas: folder yang belum dipercaya dibuka tanpa Git, language server, dan pengaturan
-//! proyek. Pemberitahuannya tampil di kepala Explorer dan sebagai item status bar.
+//! Restricted mode: a folder that is not yet trusted is opened without Git, language servers, and project
+//! settings. The notice appears at the top of the Explorer and as a status bar item.
 
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::{h_flex, v_flex, ActiveTheme as _, Icon, Sizable as _};
@@ -10,14 +10,14 @@ use oncode_ui::overlay::{self, Confirm};
 use oncode_ui::Lucide;
 use serde_json::Value;
 
-/// Penjelasan mode terbatas; dipakai banner dan dialog konfirmasi.
+/// The explanation of restricted mode; used by the banner and the confirmation dialog.
 pub const RESTRICTED_MESSAGE: &str = "Git, language servers and project settings are disabled until you trust the authors of the files in this folder.";
 
 fn trust(window: &mut Window, cx: &mut App) {
     oncode_ui::execute("workspace.trust", Value::Null, window, cx);
 }
 
-/// Banner di kepala Explorer.
+/// The banner at the top of the Explorer.
 pub fn banner(cx: &App) -> impl IntoElement {
     let theme = cx.theme();
     v_flex()
@@ -42,7 +42,7 @@ pub fn banner(cx: &App) -> impl IntoElement {
         .child(Button::new("restricted-trust").label("Trust Folder").primary().xsmall().on_click(|_, window, cx| trust(window, cx)))
 }
 
-/// Item status bar "Restricted Mode"; mengekliknya menawarkan untuk memercayai folder.
+/// The "Restricted Mode" status bar item; clicking it offers to trust the folder.
 pub struct RestrictedStatus;
 
 impl Render for RestrictedStatus {

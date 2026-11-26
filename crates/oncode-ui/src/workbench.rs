@@ -1,10 +1,10 @@
-//! Jendela utama: activity bar, sidebar, grup editor bertab, panel bawah, dan status bar.
+//! The main window: activity bar, sidebar, tabbed editor groups, bottom panel, and status bar.
 //!
-//! Fitur mendaftarkan diri lewat [`register_feature`] (per jendela) dan [`register_tab_kind`]
-//! (global). Semua tampilan fitur adalah entitas tersendiri (`AnyView`), sehingga boleh
-//! membaca `Workbench` di `render` mereka. Yang **tidak** boleh: membaca atau memperbarui
-//! entitas `Workbench` dari dalam fungsi yang dipanggil `Workbench` sendiri (pembangun tampilan,
-//! `TabKind::build`, `TabContent::can_close`), karena saat itu entitasnya sedang dipinjam.
+//! Features register themselves through [`register_feature`] (per window) and [`register_tab_kind`]
+//! (global). All feature views are entities of their own (`AnyView`), so they may
+//! read the `Workbench` in their `render`. What they must **not** do: read or update the
+//! `Workbench` entity from inside functions called by the `Workbench` itself (view builders,
+//! `TabKind::build`, `TabContent::can_close`), because the entity is borrowed at that point.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -31,19 +31,19 @@ use crate::overlay;
 use crate::shell::file_tab;
 use crate::Lucide;
 
-/// Konteks sebuah jendela, diberikan ke semua pembangun tampilan. Tidak berubah selama
-/// `Workbench` hidup: membuka folder lain atau mengubah kepercayaan membuat `Workbench` baru.
+/// The context of a window, given to all view builders. It does not change while the
+/// `Workbench` lives: opening another folder or changing trust creates a new `Workbench`.
 #[derive(Clone)]
 pub struct Env {
     pub workbench: WeakEntity<Workbench>,
     pub core: Shared,
-    /// Label jendela untuk API `oncode-core`.
+    /// The window label for the `oncode-core` API.
     pub window: SharedString,
-    /// Folder proyek; `None` bila jendela belum membuka folder.
+    /// The project folder; `None` if the window has not opened a folder.
     pub root: Option<PathBuf>,
-    /// Folder dipercaya: Git, LSP, dan pengaturan proyek aktif.
+    /// The folder is trusted: Git, LSP, and project settings are active.
     pub trusted: bool,
-    /// Akar repositori yang memuat folder ini, bila ada dan folder dipercaya.
+    /// The root of the repository containing this folder, if there is one and the folder is trusted.
     pub repo_root: Option<String>,
 }
 
@@ -57,28 +57,28 @@ impl Env {
     }
 }
 
-/// Isi sebuah tab yang sudah dibangun.
+/// The content of a tab that has been built.
 pub trait TabContent: 'static {
     fn view(&self) -> AnyView;
-    /// Memindahkan fokus keyboard ke isi tab.
+    /// Moves keyboard focus to the tab content.
     fn focus(&self, window: &mut Window, cx: &mut App);
-    /// Tab punya perubahan yang belum disimpan.
+    /// The tab has unsaved changes.
     fn is_dirty(&self, _cx: &App) -> bool {
         false
     }
-    /// Dipanggil sebelum tab ditutup; hasil `false` membatalkan.
+    /// Called before the tab is closed; a result of `false` cancels.
     fn can_close(&self, _window: &mut Window, _cx: &mut App) -> Task<bool> {
         Task::ready(true)
     }
-    /// Memanggil `on_change` saat keadaan yang memengaruhi bilah tab (mis. dirty) berubah.
+    /// Calls `on_change` when state affecting the tab bar (e.g. dirty) changes.
     fn observe(&self, _on_change: Rc<dyn Fn(&mut App)>, _cx: &mut App) -> Option<Subscription> {
         None
     }
-    /// Untuk fitur yang perlu mengenali isi tab miliknya sendiri (`downcast_ref`).
+    /// For features that need to recognize their own tab content (`downcast_ref`).
     fn as_any(&self) -> &dyn std::any::Any;
 }
 
-/// `TabContent` untuk tampilan biasa yang bisa difokus.
+/// A `TabContent` for an ordinary focusable view.
 pub struct ViewTab<V>(pub Entity<V>);
 
 impl<V: Render + Focusable> TabContent for ViewTab<V> {
@@ -96,45 +96,45 @@ impl<V: Render + Focusable> TabContent for ViewTab<V> {
     }
 }
 
-/// Pembangun isi tab untuk satu jenis (`TabData::kind`).
+/// The tab content builder for one kind (`TabData::kind`).
 pub trait TabKind: 'static {
     fn build(&self, tab: &TabData, env: &Env, window: &mut Window, cx: &mut App) -> Box<dyn TabContent>;
     fn icon(&self, _tab: &TabData) -> Option<Lucide> {
         None
     }
-    /// Gambar berwarna (path aset, mis. logo bahasa) sebagai ikon tab; didahulukan dari [`TabKind::icon`].
+    /// A colored image (an asset path, e.g. a language logo) as the tab icon; takes precedence over [`TabKind::icon`].
     fn image(&self, _tab: &TabData) -> Option<SharedString> {
         None
     }
-    /// Tab yang dibuka di grup sebelah oleh "Split Editor". Bawaan: tab yang sama (dua tampilan
-    /// untuk isi yang sama). Jenis yang isinya hanya boleh tampil sekali (mis. terminal) mengembalikan
-    /// tab baru, atau `None` bila tidak bisa dibelah.
+    /// The tab opened in the adjacent group by "Split Editor". Default: the same tab (two views
+    /// of the same content). Kinds whose content may only be shown once (e.g. a terminal) return
+    /// a new tab, or `None` if they cannot be split.
     fn split_copy(&self, tab: &TabData) -> Option<TabData> {
         Some(tab.clone())
     }
 }
 
-/// Tab yang sedang diseret. Fitur lain boleh membuatnya untuk menyeret sesuatu ke area editor
-/// sebagai tab (mis. terminal dari panel), dengan `from: None`; tab yang dijatuhkan dibuka di sana.
+/// A tab being dragged. Other features may create it to drag something into the editor area
+/// as a tab (e.g. a terminal from the panel), with `from: None`; the dropped tab is opened there.
 #[derive(Debug, Clone)]
 pub struct DraggedTab {
     pub tab: TabData,
-    /// Grup asal di area editor; `None` bila asalnya di luar area editor.
+    /// The source group in the editor area; `None` if it came from outside the editor area.
     pub from: Option<u32>,
 }
 
-/// Berkas atau folder yang sedang diseret dari sebuah daftar berkas (mis. Explorer). Berkas yang
-/// dijatuhkan ke area editor dibuka sebagai tab di sana, sama seperti tab yang diseret; folder tidak
-/// diterima. Berkas dari luar aplikasi (seret dari OS) datang sebagai `ExternalPaths` dan diperlakukan sama.
+/// A file or folder being dragged from a file list (e.g. the Explorer). A file
+/// dropped onto the editor area is opened as a tab there, just like a dragged tab; a folder is not
+/// accepted. Files from outside the application (dragged from the OS) arrive as `ExternalPaths` and are treated the same.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DraggedEntry {
-    /// Path absolut.
+    /// Absolute path.
     pub path: String,
     pub is_dir: bool,
 }
 
-/// Benar bila yang sedang diseret boleh dijatuhkan ke area editor: tab, berkas dari daftar berkas, atau
-/// berkas dari OS (jenisnya, folder atau bukan, baru diperiksa saat dijatuhkan).
+/// True if what is being dragged may be dropped onto the editor area: a tab, a file from a file list, or
+/// a file from the OS (its type, folder or not, is only checked on drop).
 fn accepts_drop(value: &dyn std::any::Any) -> bool {
     match value.downcast_ref::<DraggedEntry>() {
         Some(entry) => !entry.is_dir,
@@ -142,7 +142,7 @@ fn accepts_drop(value: &dyn std::any::Any) -> bool {
     }
 }
 
-/// Gambar kecil yang mengikuti penunjuk selama tab diseret.
+/// A small image that follows the pointer while a tab is dragged.
 pub struct TabDragPreview {
     title: SharedString,
     icon: Option<Lucide>,
@@ -174,21 +174,21 @@ impl Render for TabDragPreview {
     }
 }
 
-/// Tempat tab dijatuhkan di sebuah grup.
+/// Where a tab is dropped in a group.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum TabDrop {
-    /// Sebelum tab ke-n di bilah tab.
+    /// Before the n-th tab in the tab bar.
     Before(usize),
-    /// Di ujung bilah tab, atau di tengah isi grup.
+    /// At the end of the tab bar, or in the middle of the group content.
     End,
-    /// Grup baru di sisi grup ini.
+    /// A new group on this group's side.
     Split(SplitSide),
 }
 
 type BuildView = Rc<dyn Fn(&Env, &mut Window, &mut App) -> AnyView>;
 type BadgeFn = Rc<dyn Fn(&App) -> Option<usize>>;
 
-/// Tampilan di sidebar, dipilih lewat activity bar.
+/// A view in the sidebar, selected through the activity bar.
 #[derive(Clone)]
 pub struct SidebarView {
     pub id: SharedString,
@@ -196,7 +196,7 @@ pub struct SidebarView {
     pub icon: Lucide,
     pub order: i32,
     pub build: BuildView,
-    /// Angka kecil pada ikon (mis. jumlah perubahan).
+    /// A small number on the icon (e.g. the number of changes).
     pub badge: Option<BadgeFn>,
 }
 
@@ -211,7 +211,7 @@ impl SidebarView {
     }
 }
 
-/// Tampilan di panel bawah.
+/// A view in the bottom panel.
 #[derive(Clone)]
 pub struct PanelView {
     pub id: SharedString,
@@ -219,7 +219,7 @@ pub struct PanelView {
     pub order: i32,
     pub build: BuildView,
     pub badge: Option<BadgeFn>,
-    /// Aksi di sisi kanan bilah tab panel.
+    /// Actions on the right side of the panel's tab bar.
     pub actions: Option<Rc<dyn Fn(&mut Window, &mut App) -> AnyElement>>,
 }
 
@@ -239,16 +239,16 @@ impl PanelView {
     }
 }
 
-/// Tombol di ujung kanan bilah tab, untuk tab aktif grup itu (mis. "Open Preview" pada Markdown).
+/// A button at the right end of the tab bar, for that group's active tab (e.g. "Open Preview" for Markdown).
 #[derive(Clone)]
 pub struct EditorAction {
     pub id: SharedString,
     pub icon: Lucide,
     pub tooltip: SharedString,
-    /// Command yang dijalankan; grup tombol itu sudah aktif saat command berjalan.
+    /// The command to run; that button's group is already active when the command runs.
     pub command: SharedString,
-    /// Tampil bila mengembalikan true untuk tab aktif grup itu. Menerima pengaturan efektif
-    /// jendela; jangan membaca entitas `Workbench` di sini (dipanggil saat render-nya).
+    /// Shown if it returns true for that group's active tab. Receives the window's effective
+    /// settings; do not read the `Workbench` entity here (it is called during its render).
     pub when: Rc<dyn Fn(&TabData, &Settings) -> bool>,
 }
 
@@ -270,7 +270,7 @@ pub enum StatusAlign {
     Right,
 }
 
-/// Item status bar; berupa tampilan tersendiri agar bisa mengamati state yang dibutuhkannya.
+/// A status bar item; it is a view of its own so it can observe the state it needs.
 #[derive(Clone)]
 pub struct StatusItem {
     pub id: SharedString,
@@ -287,17 +287,17 @@ impl StatusItem {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum WorkbenchEvent {
-    /// Tab aktif (atau grup aktif) berganti.
+    /// The active tab (or active group) changed.
     ActiveTabChanged,
-    /// Daftar tab berubah (buka, tutup, ganti nama).
+    /// The list of tabs changed (open, close, rename).
     TabsChanged,
-    /// Sidebar atau panel bawah ditampilkan, disembunyikan, atau diganti.
+    /// The sidebar or bottom panel was shown, hidden, or switched.
     LayoutChanged,
-    /// Pengaturan efektif jendela ini berubah; baca lewat [`Workbench::settings`].
+    /// This window's effective settings changed; read them via [`Workbench::settings`].
     SettingsChanged,
-    /// Berkas di folder proyek berubah di disk (path absolut). `overflow`: terlalu banyak untuk dirinci.
+    /// Files in the project folder changed on disk (absolute paths). `overflow`: too many to list in detail.
     FsChanged { paths: Vec<String>, overflow: bool },
-    /// Sebuah berkas baru saja disimpan dari editor (path absolut).
+    /// A file was just saved from the editor (absolute path).
     FileSaved(String),
 }
 
@@ -324,13 +324,13 @@ pub(crate) fn install(cx: &mut App) {
     cx.set_global(Windows::default());
 }
 
-/// Mendaftarkan fitur. `setup` dipanggil untuk setiap `Workbench` baru (setiap jendela, dan
-/// setiap kali folder dibuka), saat entitasnya sedang dibuat.
+/// Registers a feature. `setup` is called for every new `Workbench` (every window, and
+/// every time a folder is opened), while its entity is being created.
 pub fn register_feature(cx: &mut App, setup: impl Fn(&mut Workbench, &mut Window, &mut Context<Workbench>) + 'static) {
     cx.global_mut::<Features>().0.push(Rc::new(setup));
 }
 
-/// Mendaftarkan pembangun isi tab untuk sebuah jenis tab.
+/// Registers the tab content builder for a tab kind.
 pub fn register_tab_kind(cx: &mut App, kind: &str, builder: impl TabKind) {
     cx.global_mut::<TabKinds>().0.insert(kind.to_string(), Rc::new(builder));
 }
@@ -356,15 +356,15 @@ pub struct Workbench {
     active_panel: Option<SharedString>,
     panel_visible: bool,
     status_items: Vec<(StatusItem, AnyView)>,
-    /// Ditampilkan di area editor saat tidak ada tab.
+    /// Shown in the editor area when there are no tabs.
     empty_view: Option<AnyView>,
     focus_handle: FocusHandle,
     window_id: gpui_kit::WindowId,
-    /// State per jendela milik fitur (mis. registry buffer), dicari menurut tipenya.
+    /// Per-window state owned by features (e.g. the buffer registry), looked up by its type.
     extensions: HashMap<std::any::TypeId, Box<dyn std::any::Any>>,
-    /// Dipanggil tepat sebelum isi tab dibangun, agar `TabKind` global tahu jendela mana yang membangun.
+    /// Called right before tab content is built, so the global `TabKind` knows which window is building.
     before_build: Vec<Rc<dyn Fn(&mut App)>>,
-    /// Zona jatuh di atas isi grup selama tab diseret: (grup, zona).
+    /// The drop zone over the group content while a tab is dragged: (group, zone).
     drop_zone: Option<(u32, DropZone)>,
 }
 
@@ -377,7 +377,7 @@ impl Focusable for Workbench {
 }
 
 impl Workbench {
-    /// Membuat `Workbench` untuk jendela ini dan menjalankan pendaftaran semua fitur.
+    /// Creates the `Workbench` for this window and runs the registration of all features.
     pub fn new(core: Shared, label: impl Into<SharedString>, workspace: Option<&WorkspaceInfo>, settings: Settings, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let env = Env {
             workbench: cx.weak_entity(),
@@ -431,7 +431,7 @@ impl Workbench {
         this
     }
 
-    /// `Workbench` milik sebuah jendela.
+    /// The `Workbench` of a window.
     pub fn for_window(window: &Window, cx: &App) -> Option<Entity<Workbench>> {
         cx.try_global::<Windows>()?.0.get(&window.window_handle().window_id())?.upgrade()
     }
@@ -444,7 +444,7 @@ impl Workbench {
         &self.model
     }
 
-    /// Pengaturan efektif jendela ini (pengaturan proyek sudah diterapkan bila folder dipercaya).
+    /// This window's effective settings (project settings are already applied if the folder is trusted).
     pub fn settings(&self) -> &Settings {
         &self.settings
     }
@@ -457,12 +457,12 @@ impl Workbench {
         }
     }
 
-    /// Menyiarkan event ke semua pelanggan `Workbench` (dipakai `Shell` dan editor).
+    /// Broadcasts an event to all `Workbench` subscribers (used by `Shell` and the editor).
     pub fn broadcast(&mut self, event: WorkbenchEvent, cx: &mut Context<Self>) {
         cx.emit(event);
     }
 
-    /// Menyimpan state per jendela milik sebuah fitur (biasanya `Entity<..>`), dicari menurut tipenya.
+    /// Stores per-window state owned by a feature (usually an `Entity<..>`), looked up by its type.
     pub fn set_extension<T: 'static>(&mut self, value: T) {
         self.extensions.insert(std::any::TypeId::of::<T>(), Box::new(value));
     }
@@ -471,24 +471,24 @@ impl Workbench {
         self.extensions.get(&std::any::TypeId::of::<T>()).and_then(|value| value.downcast_ref::<T>()).cloned()
     }
 
-    /// Mendaftarkan fungsi yang dipanggil tepat sebelum `TabKind::build`. `TabKind` terdaftar global,
-    /// jadi fitur memakai ini untuk menunjuk state per jendela yang harus dipakai pembangunnya.
+    /// Registers a function called right before `TabKind::build`. `TabKind`s are registered globally,
+    /// so features use this to point at the per-window state their builder must use.
     pub fn on_before_build_tabs(&mut self, f: impl Fn(&mut App) + 'static) {
         self.before_build.push(Rc::new(f));
     }
 
-    /// Isi tab yang sedang aktif, bila sudah dibangun.
+    /// The content of the active tab, if it has been built.
     pub fn active_content(&self) -> Option<&dyn TabContent> {
         let (group, tab) = self.model.active()?;
         self.slots.get(&(group.id, tab.id.clone())).map(|slot| slot.content.as_ref())
     }
 
-    /// Id tampilan sidebar yang terpilih, terlepas dari terlihat atau tidak.
+    /// The id of the selected sidebar view, whether or not it is visible.
     pub fn selected_sidebar(&self) -> Option<&SharedString> {
         self.active_sidebar.as_ref()
     }
 
-    // ----- Pendaftaran -----
+    // ----- Registration -----
 
     pub fn register_command(&mut self, command: Command) {
         self.commands.borrow_mut().register(command);
@@ -499,7 +499,7 @@ impl Workbench {
         self.sidebar_views.push(view);
     }
 
-    /// Menambah tombol aksi editor (lihat [`EditorAction`]); id yang sama menggantikan yang lama.
+    /// Adds an editor action button (see [`EditorAction`]); the same id replaces the old one.
     pub fn register_editor_action(&mut self, action: EditorAction) {
         self.editor_actions.retain(|existing| existing.id != action.id);
         self.editor_actions.push(action);
@@ -516,7 +516,7 @@ impl Workbench {
         self.status_items.push((item, view));
     }
 
-    /// Tampilan area editor saat tidak ada tab terbuka (mis. layar awal).
+    /// The editor area view when no tab is open (e.g. the welcome screen).
     pub fn set_empty_view(&mut self, view: AnyView) {
         self.empty_view = Some(view);
     }
@@ -532,7 +532,7 @@ impl Workbench {
         self.register_command(Command::new("workbench.toggleSidebar", "Toggle Sidebar", with(|this, _, cx| this.toggle_sidebar(cx))).category("View").key("Mod+B"));
         self.register_command(
             Command::new("workbench.toggleSidebarPosition", "Move Sidebar Left/Right", |_, _, cx| {
-                // Disimpan ke pengaturan pengguna; semua jendela mengikuti lewat `SettingsChanged`.
+                // Saved to the user settings; all windows follow via `SettingsChanged`.
                 let core = crate::core(cx);
                 let mut settings = core.user_settings();
                 settings.workbench.sidebar_position = match settings.workbench.sidebar_position {
@@ -586,9 +586,9 @@ impl Workbench {
         );
     }
 
-    // ----- Tab -----
+    // ----- Tabs -----
 
-    /// Membuka tab (atau mengaktifkannya bila sudah ada) dan mengembalikan id-nya.
+    /// Opens a tab (or activates it if it already exists) and returns its id.
     pub fn open_tab(&mut self, tab: TabData, options: OpenOptions, window: &mut Window, cx: &mut Context<Self>) -> String {
         let id = tab.id.clone();
         let background = options.background;
@@ -625,7 +625,7 @@ impl Workbench {
         }
     }
 
-    /// Mengubah tab di semua grup (mis. setelah berkas diganti nama).
+    /// Changes tabs in all groups (e.g. after a file is renamed).
     pub fn update_tabs(&mut self, change: impl FnMut(&TabData) -> Option<TabData>, window: &mut Window, cx: &mut Context<Self>) {
         self.model.update_tabs(change);
         self.sync_slots(window, cx);
@@ -640,7 +640,7 @@ impl Workbench {
         cx.notify();
     }
 
-    /// Menutup tab setelah isinya mengizinkan (kecuali `force`). Hasil `false` berarti dibatalkan.
+    /// Closes tabs once their content allows it (unless `force`). A result of `false` means canceled.
     pub fn close_tabs(&mut self, group: u32, ids: Vec<String>, force: bool, window: &mut Window, cx: &mut Context<Self>) -> Task<bool> {
         cx.spawn_in(window, async move |this, cx| {
             let mut closing: Vec<String> = Vec::new();
@@ -690,7 +690,7 @@ impl Workbench {
         })
     }
 
-    /// Menutup tab yang cocok di semua grup tanpa konfirmasi (mis. berkasnya sudah dihapus).
+    /// Closes matching tabs in all groups without confirmation (e.g. their file was deleted).
     pub fn force_close_where(&mut self, matches: impl Fn(&TabData) -> bool, window: &mut Window, cx: &mut Context<Self>) {
         let targets: Vec<(u32, Vec<String>)> =
             self.model.groups.iter().map(|g| (g.id, g.tabs.iter().filter(|t| matches(t)).map(|t| t.id.clone()).collect::<Vec<_>>())).filter(|(_, ids)| !ids.is_empty()).collect();
@@ -711,15 +711,15 @@ impl Workbench {
         cx.notify();
     }
 
-    /// Ada tab dengan perubahan yang belum disimpan.
+    /// There is a tab with unsaved changes.
     pub fn has_dirty_tabs(&self, cx: &App) -> bool {
         self.slots.values().any(|slot| slot.content.is_dirty(cx))
     }
 
-    // ----- Seret dan jatuhkan -----
+    // ----- Drag and drop -----
 
-    /// Memindahkan tab yang dijatuhkan ke grup `group`. Isi tab yang sudah dibangun ikut pindah
-    /// (tidak dibangun ulang), sehingga keadaannya (mis. posisi gulir) tetap.
+    /// Moves the dropped tab to group `group`. The content of an already built tab moves along
+    /// (it is not rebuilt), so its state (e.g. scroll position) is kept.
     fn drop_tab(&mut self, dragged: &DraggedTab, group: u32, place: TabDrop, window: &mut Window, cx: &mut Context<Self>) {
         self.drop_zone = None;
         let tab = dragged.tab.clone();
@@ -742,9 +742,9 @@ impl Workbench {
         cx.notify();
     }
 
-    /// Membuka berkas yang dijatuhkan ke grup `group`, dari Explorer atau dari OS. Yang pertama dibuka
-    /// di tempat jatuhnya (`place`), sisanya menyusul sebagai tab di grup itu. Folder dilewati. Berkas
-    /// di luar folder proyek ditolak: semua akses berkas dibatasi ke proyek.
+    /// Opens files dropped onto group `group`, from the Explorer or from the OS. The first is opened
+    /// where it was dropped (`place`), the rest follow as tabs in that group. Folders are skipped. Files
+    /// outside the project folder are rejected: all file access is restricted to the project.
     fn drop_files(&mut self, paths: Vec<String>, group: u32, place: TabDrop, window: &mut Window, cx: &mut Context<Self>) {
         self.drop_zone = None;
         let Some(root) = self.env.root.clone() else {
@@ -780,7 +780,7 @@ impl Workbench {
         }
     }
 
-    /// Tempat jatuh di isi grup `group` menurut zona yang sedang disorot: tepi membelah, tengah masuk ke grup.
+    /// The drop place in group `group`'s content by the zone currently highlighted: an edge splits, the center goes into the group.
     fn zone_place(&self, group: u32) -> TabDrop {
         match self.drop_zone.filter(|(g, _)| *g == group).map(|(_, zone)| zone) {
             Some(DropZone::Split(side)) => TabDrop::Split(side),
@@ -788,9 +788,9 @@ impl Workbench {
         }
     }
 
-    /// Membuat `el` menerima tab, berkas dari Explorer, dan berkas dari OS yang dijatuhkan ke grup
-    /// `group`. Tempat jatuhnya ditentukan `place`, yang dipanggil saat dijatuhkan. `tint` mewarnai
-    /// `el` selama ada yang diseret di atasnya; isi grup tidak memakainya karena sudah punya sorotan zona.
+    /// Makes `el` accept tabs, files from the Explorer, and files from the OS dropped onto group
+    /// `group`. The drop place is decided by `place`, which is called on drop. `tint` colors
+    /// `el` while something is dragged over it; the group content does not use it because it already has a zone highlight.
     fn accept_drops<E: InteractiveElement>(&self, el: E, group: u32, tint: bool, place: impl Fn(&Self) -> TabDrop + Clone + 'static, cx: &Context<Self>) -> E {
         let (place_tab, place_entry) = (place.clone(), place.clone());
         let el = el.can_drop(|value, _, _| accepts_drop(value));
@@ -816,8 +816,8 @@ impl Workbench {
             }))
     }
 
-    /// Tab yang mewakili sesuatu yang sedang diseret ke area editor, untuk menghitung zona jatuh;
-    /// `None` bila tidak ada yang bisa dibuka (mis. folder).
+    /// A tab standing in for something being dragged into the editor area, to compute the drop zone;
+    /// `None` if nothing can be opened (e.g. a folder).
     fn drag_stand_in(value: &dyn std::any::Any) -> Option<DraggedTab> {
         if let Some(dragged) = value.downcast_ref::<DraggedTab>() {
             return Some(dragged.clone());
@@ -830,7 +830,7 @@ impl Workbench {
         Some(DraggedTab { tab: file_tab(&path), from: None })
     }
 
-    /// Menghitung zona jatuh selama sesuatu diseret di atas isi grup `group`.
+    /// Computes the drop zone while something is dragged over group `group`'s content.
     fn track_drop_zone(&mut self, group: u32, dragged: Option<DraggedTab>, bounds: Bounds<Pixels>, position: Point<Pixels>, cx: &mut Context<Self>) {
         let zone = if let Some(dragged) = dragged.filter(|_| bounds.contains(&position)) {
             let (horizontal, vertical) = self.model.split_axes(group, &dragged.tab.id, dragged.from);
@@ -848,7 +848,7 @@ impl Workbench {
         }
     }
 
-    /// Menyamakan isi tab yang sudah dibangun dengan model.
+    /// Syncs the content of already built tabs with the model.
     fn sync_slots(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let wanted: Vec<(u32, TabData)> = self.model.groups.iter().flat_map(|g| g.tabs.iter().map(move |t| (g.id, t.clone()))).collect();
         self.slots.retain(|(group, id), _| wanted.iter().any(|(g, t)| g == group && &t.id == id));
@@ -886,7 +886,7 @@ impl Workbench {
         }
     }
 
-    // ----- Sidebar dan panel -----
+    // ----- Sidebar and panel -----
 
     fn sorted_sidebar(&self) -> Vec<SidebarView> {
         let mut views = self.sidebar_views.clone();
@@ -977,9 +977,9 @@ impl Workbench {
         Some(view)
     }
 
-    // ----- Tampilan -----
+    // ----- Views -----
 
-    /// Activity bar dan sidebar berada di kanan jendela.
+    /// The activity bar and sidebar are on the right of the window.
     pub fn sidebar_on_right(&self) -> bool {
         self.settings.workbench.sidebar_position == SidebarPosition::Right
     }
@@ -998,7 +998,7 @@ impl Workbench {
             .py_1()
             .gap_1()
             .bg(theme.sidebar)
-            // Garis pemisah selalu di sisi yang menghadap editor.
+            // The divider line is always on the side facing the editor.
             .map(|el| if on_right { el.border_l_1() } else { el.border_r_1() })
             .border_color(theme.border)
             .children(self.sorted_sidebar().into_iter().map(|view| {
@@ -1055,7 +1055,7 @@ impl Workbench {
         let Some(model_group) = self.model.group(group) else { return div().into_any_element() };
         let active_group = self.model.active_group == group;
         let kinds = &cx.global::<TabKinds>().0;
-        // Tombol aksi untuk tab aktif grup ini, di luar area tab yang bisa digulir.
+        // Action buttons for this group's active tab, outside the scrollable tab area.
         let active_tab = model_group.active.as_deref().and_then(|id| model_group.tabs.iter().find(|tab| tab.id == id));
         let actions: Vec<EditorAction> = active_tab.map(|tab| self.editor_actions.iter().filter(|action| (action.when)(tab, &self.settings)).cloned().collect()).unwrap_or_default();
         let action_bar = h_flex().flex_none().h_full().px_1().gap_0p5().children(actions.into_iter().map(|action| {
@@ -1112,7 +1112,7 @@ impl Workbench {
                             this.close_tabs(group, vec![id.clone()], false, window, cx).detach();
                         })
                     })
-                    // Seret untuk memindah ke posisi lain, ke grup lain, atau ke tepi grup (belah).
+                    // Drag to move to another position, to another group, or to a group edge (split).
                     .on_drag(DraggedTab { tab: tab.clone(), from: Some(group) }, move |dragged, _, _, cx| {
                         cx.stop_propagation();
                         cx.new(|_| TabDragPreview::new(dragged.tab.title.clone(), icon))
@@ -1142,7 +1142,7 @@ impl Workbench {
                             }))
                             .map(|el| {
                                 if dirty {
-                                    // Titik: ada perubahan yang belum disimpan.
+                                    // A dot: there are unsaved changes.
                                     el.child(div().size(px(8.)).rounded_full().bg(theme.foreground))
                                 } else {
                                     el.child(Icon::new(gpui_kit::component::IconName::Close).size(px(12.)))
@@ -1166,7 +1166,7 @@ impl Workbench {
                         }))
                     })
             }))
-            // Ruang kosong setelah tab terakhir: menjatuhkan tab di sini menaruhnya paling akhir.
+            // The empty space after the last tab: dropping a tab here puts it at the very end.
             .child(
                 div()
                     .id(SharedString::from(format!("tabs-end-{group}")))
@@ -1190,7 +1190,7 @@ impl Workbench {
 
     fn render_group(&self, group: u32, cx: &mut Context<Self>) -> AnyElement {
         let content = self.model.group(group).and_then(|g| g.active.clone()).and_then(|id| self.slots.get(&(group, id))).map(|slot| slot.content.view());
-        // Sorotan tempat tab akan jatuh: separuh sisi untuk membelah, seluruhnya untuk masuk ke grup.
+        // Highlight of where the tab will land: half the side for a split, the whole area to go into the group.
         let zone = self.drop_zone.filter(|(g, _)| *g == group && cx.has_active_drag()).map(|(_, zone)| zone);
         let overlay = zone.map(|zone| {
             let base = div().absolute().bg(cx.theme().drop_target);
@@ -1365,8 +1365,8 @@ impl Render for Workbench {
             .bg(theme.background)
             .text_color(theme.foreground)
             .child({
-                // Kiri: activity bar | sidebar | editor. Kanan: editor | sidebar | activity bar.
-                // Id berbeda per sisi agar ukuran yang tersimpan tidak tertukar antar panel.
+                // Left: activity bar | sidebar | editor. Right: editor | sidebar | activity bar.
+                // A different id per side so the saved sizes do not get mixed up between panels.
                 let sidebar_panel = resizable_panel().size(px(280.)).visible(sidebar.is_some()).child(sidebar_el);
                 let main = if on_right {
                     h_resizable("workbench-main-right").child(resizable_panel().child(center)).child(sidebar_panel)
@@ -1385,9 +1385,9 @@ impl Render for Workbench {
     }
 }
 
-/// Melepas pendaftaran jendela saat `Workbench` dilepas.
+/// Releases the window registration when the `Workbench` is released.
 fn release(workbench: &mut Workbench, cx: &mut App) {
-    // `Workbench` pengganti (folder lain di jendela yang sama) mungkin sudah terdaftar; jangan dilepas.
+    // A replacement `Workbench` (another folder in the same window) may already be registered; do not release it.
     commands::detach(workbench.window_id, &workbench.commands, cx);
     if let Some(windows) = cx.try_global::<Windows>() {
         if windows.0.get(&workbench.window_id).is_some_and(|w| w.upgrade().is_none()) {

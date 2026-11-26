@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
-description = "Panel Source Control, commit, branch, remote, stash, dan Git Output untuk OnCode"
+description = "Source Control panel, commit, branch, remote, stash, and Git Output for OnCode"
 
 [dependencies]
 oncode-core = { path = "../oncode-core" }
@@ -12,9 +12,9 @@ oncode-ui = { path = "../oncode-ui" }
 gpui-kit = "=0.10.0"
 serde.workspace = true
 serde_json.workspace = true
-# Saluran progres dari thread backend ke thread utama.
+# Progress channel from the backend thread to the main thread.
 tokio.workspace = true
-# Jam setempat untuk cap waktu Git Output; sudah ada di pohon dependensi lewat gpui-component.
+# Local clock for Git Output timestamps; already in the dependency tree via gpui-component.
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 oncode-git = { path = "../oncode-git" }
 oncode-ui-diff = { path = "../oncode-ui-diff" }
@@ -23,5 +23,5 @@ oncode-ui-diff = { path = "../oncode-ui-diff" }
 oncode-ui = { path = "../oncode-ui", features = ["test-support"] }
 gpui-kit = { version = "=0.10.0", features = ["test-support"] }
 tempfile.workspace = true
-# Claude API tiruan untuk uji "Generate Commit Message".
+# Mock Claude API for the "Generate Commit Message" tests.
 wiremock = "0.6"

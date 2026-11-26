@@ -1,12 +1,12 @@
-//! Pembingkaian protokol dasar LSP: `Content-Length: N\r\n\r\n<N byte JSON>`.
+//! Framing of the LSP base protocol: `Content-Length: N\r\n\r\n<N bytes of JSON>`.
 
-/// Batas ukuran satu blok header. Lebih dari ini dianggap sampah.
+/// Size limit of a single header block. Anything larger is treated as junk.
 const MAX_HEADER_BYTES: usize = 64 * 1024;
-/// Batas ukuran satu isi pesan.
+/// Size limit of a single message body.
 const MAX_BODY_BYTES: usize = 256 * 1024 * 1024;
 const CONTENT_LENGTH: &[u8] = b"content-length";
 
-/// Membingkai satu pesan untuk dikirim ke server.
+/// Frames a single message to be sent to the server.
 pub(crate) fn encode_frame(json: &str) -> Vec<u8> {
     let header = format!("Content-Length: {}\r\n\r\n", json.len());
     let mut frame = Vec::with_capacity(header.len() + json.len());
@@ -15,16 +15,16 @@ pub(crate) fn encode_frame(json: &str) -> Vec<u8> {
     frame
 }
 
-/// Pengurai inkremental protokol dasar LSP: masukkan byte seadanya, terima isi pesan yang sudah lengkap.
+/// Incremental parser of the LSP base protocol: feed in whatever bytes are available, receive the message bodies that are complete.
 ///
-/// Toleran terhadap keluaran yang tidak rapi: header tambahan diabaikan, nama header tidak peka huruf
-/// besar, baris boleh diakhiri `\n` saja, dan blok header yang rusak (tanpa `Content-Length` yang sah,
-/// lebih dari 64 KiB, atau menyatakan isi lebih dari 256 MiB) dibuang lalu pencarian dilanjutkan
-/// ke header berikutnya.
+/// Tolerant of untidy output: extra headers are ignored, header names are case-insensitive,
+/// lines may end in just `\n`, and a broken header block (without a valid `Content-Length`,
+/// larger than 64 KiB, or declaring a body larger than 256 MiB) is discarded and the search
+/// continues with the next header.
 #[derive(Debug, Default)]
 pub struct FrameDecoder {
     buf: Vec<u8>,
-    /// Panjang isi yang sedang ditunggu; `None` berarti sedang mencari header.
+    /// Length of the body being waited for; `None` means a header is being searched for.
     body_len: Option<usize>,
 }
 
@@ -33,8 +33,8 @@ impl FrameDecoder {
         Self::default()
     }
 
-    /// Menambahkan byte yang baru dibaca dan mengembalikan semua isi pesan (teks JSON tanpa header)
-    /// yang kini lengkap, sesuai urutan.
+    /// Adds newly read bytes and returns all message bodies (JSON text without the header)
+    /// that are now complete, in order.
     pub fn push(&mut self, bytes: &[u8]) -> Vec<String> {
         self.buf.extend_from_slice(bytes);
         let mut messages = Vec::new();
@@ -53,12 +53,12 @@ impl FrameDecoder {
                 continue;
             }
             let Some((block_len, consumed)) = find_blank_line(rest) else {
-                // Belum ada akhir header. Header yang sah tidak mungkin dimulai lebih dari
-                // MAX_HEADER_BYTES sebelum akhir buffer, jadi sisanya aman dibuang.
+                // No end of header yet. A valid header cannot start more than
+                // MAX_HEADER_BYTES before the end of the buffer, so the rest is safe to drop.
                 pos += rest.len().saturating_sub(MAX_HEADER_BYTES);
                 break;
             };
-            // Sampah di depan header yang kepanjangan dipotong; header aslinya ada di dekat baris kosong.
+            // Junk in front of an overlong header is cut off; the real header is near the blank line.
             let block = &rest[block_len.saturating_sub(MAX_HEADER_BYTES)..block_len];
             self.body_len = parse_content_length(block).filter(|len| *len <= MAX_BODY_BYTES);
             pos += consumed;
@@ -68,7 +68,7 @@ impl FrameDecoder {
     }
 }
 
-/// Mencari baris kosong penutup header. Mengembalikan `(panjang blok header, jumlah byte termasuk penutup)`.
+/// Finds the blank line that closes the header. Returns `(length of the header block, number of bytes including the terminator)`.
 fn find_blank_line(buf: &[u8]) -> Option<(usize, usize)> {
     let mut from = 0;
     while let Some(offset) = buf[from..].iter().position(|byte| *byte == b'\n') {
@@ -82,9 +82,9 @@ fn find_blank_line(buf: &[u8]) -> Option<(usize, usize)> {
     None
 }
 
-/// Mengambil nilai `Content-Length` dari satu blok header. Baris yang paling dekat dengan
-/// akhir blok diutamakan; bila tidak ada baris yang rapi, dicoba mencari di tengah baris
-/// (mis. sisa isi pesan sebelumnya menempel di depan header).
+/// Extracts the `Content-Length` value from a header block. The line closest to
+/// the end of the block is preferred; if there is no well-formed line, it tries to search in the middle of a line
+/// (e.g. the remainder of the previous message body stuck to the front of the header).
 fn parse_content_length(block: &[u8]) -> Option<usize> {
     let lines = || block.split(|byte| *byte == b'\n').rev();
     lines().find_map(exact_content_length).or_else(|| lines().find_map(embedded_content_length))
@@ -138,25 +138,25 @@ mod tests {
     #[test]
     fn header_split_across_reads() {
         let bytes = frame(r#"{"a":1}"#);
-        // Semua titik potong, termasuk di tengah "Content-Length" dan di tengah "\r\n\r\n".
+        // Every cut point, including in the middle of "Content-Length" and in the middle of "\r\n\r\n".
         for cut in 0..=bytes.len() {
             let mut decoder = FrameDecoder::new();
             let mut out = decoder.push(&bytes[..cut]);
             out.extend(decoder.push(&bytes[cut..]));
-            assert_eq!(out, vec![r#"{"a":1}"#], "potongan di {cut}");
+            assert_eq!(out, vec![r#"{"a":1}"#], "cut at {cut}");
         }
     }
 
     #[test]
     fn byte_at_a_time() {
-        let mut bytes = frame(r#"{"a":"satu"}"#);
-        bytes.extend(frame(r#"{"b":"dua"}"#));
+        let mut bytes = frame(r#"{"a":"one"}"#);
+        bytes.extend(frame(r#"{"b":"two"}"#));
         let mut decoder = FrameDecoder::new();
         let mut out = Vec::new();
         for byte in &bytes {
             out.extend(decoder.push(std::slice::from_ref(byte)));
         }
-        assert_eq!(out, vec![r#"{"a":"satu"}"#, r#"{"b":"dua"}"#]);
+        assert_eq!(out, vec![r#"{"a":"one"}"#, r#"{"b":"two"}"#]);
     }
 
     #[test]
@@ -164,7 +164,7 @@ mod tests {
         let mut bytes = frame("{\"n\":1}");
         bytes.extend(frame("{\"n\":2}"));
         bytes.extend(frame("{\"n\":3}"));
-        // Pesan keempat baru sebagian.
+        // The fourth message is only partial.
         let fourth = frame("{\"n\":4}");
         bytes.extend(&fourth[..fourth.len() - 3]);
 
@@ -178,7 +178,7 @@ mod tests {
         let mut decoder = FrameDecoder::new();
         let body = r#"{"ok":true}"#;
         let bytes = format!(
-            "Content-Type: application/vscode-jsonrpc; charset=utf-8\r\nContent-Length: {}\r\nX-Lain: 1\r\n\r\n{body}",
+            "Content-Type: application/vscode-jsonrpc; charset=utf-8\r\nContent-Length: {}\r\nX-Other: 1\r\n\r\n{body}",
             body.len()
         );
         assert_eq!(decoder.push(bytes.as_bytes()), vec![body]);
@@ -201,14 +201,14 @@ mod tests {
 
     #[test]
     fn multibyte_body_split_across_reads() {
-        let body = r#"{"teks":"héllo – 日本語 🚀"}"#;
+        let body = r#"{"text":"héllo – 日本語 🚀"}"#;
         let bytes = frame(body);
         assert!(body.len() > body.chars().count());
         for cut in 0..=bytes.len() {
             let mut decoder = FrameDecoder::new();
             let mut out = decoder.push(&bytes[..cut]);
             out.extend(decoder.push(&bytes[cut..]));
-            assert_eq!(out, vec![body], "potongan di {cut}");
+            assert_eq!(out, vec![body], "cut at {cut}");
         }
     }
 
@@ -236,31 +236,31 @@ mod tests {
 
     #[test]
     fn malformed_header_block_is_skipped() {
-        // Nilai bukan angka, tanpa Content-Length, dan angka negatif: semuanya dibuang.
-        for bad in ["Content-Length: abc\r\n\r\n", "Content-Type: x\r\n\r\n", "Content-Length: -5\r\n\r\n", "\r\n\r\n", "sampah\n\n"] {
+        // A non-numeric value, no Content-Length, and a negative number: all are discarded.
+        for bad in ["Content-Length: abc\r\n\r\n", "Content-Type: x\r\n\r\n", "Content-Length: -5\r\n\r\n", "\r\n\r\n", "junk\n\n"] {
             let mut decoder = FrameDecoder::new();
             let mut bytes = bad.as_bytes().to_vec();
             bytes.extend(frame("{\"ok\":1}"));
-            assert_eq!(decoder.push(&bytes), vec!["{\"ok\":1}"], "blok rusak {bad:?}");
+            assert_eq!(decoder.push(&bytes), vec!["{\"ok\":1}"], "bad block {bad:?}");
         }
     }
 
     #[test]
     fn junk_before_a_header_is_tolerated() {
-        // Log yang nyasar ke stdout sebelum pesan pertama.
+        // Logs that strayed onto stdout before the first message.
         let mut decoder = FrameDecoder::new();
-        let mut bytes = b"Server mulai...\nmemuat indeks\n".to_vec();
+        let mut bytes = b"Server starting...\nloading index\n".to_vec();
         bytes.extend(frame("{\"a\":1}"));
         assert_eq!(decoder.push(&bytes), vec!["{\"a\":1}"]);
 
-        // Sisa isi pesan rusak menempel di baris header berikutnya.
+        // The remainder of a broken message body stuck to the next header line.
         let mut decoder = FrameDecoder::new();
-        let mut bytes = b"Content-Length: x\r\n\r\n{\"rusak\":true}".to_vec();
+        let mut bytes = b"Content-Length: x\r\n\r\n{\"broken\":true}".to_vec();
         bytes.extend(frame("{\"b\":2}"));
         bytes.extend(frame("{\"c\":3}"));
         assert_eq!(decoder.push(&bytes), vec!["{\"b\":2}", "{\"c\":3}"]);
 
-        // Baris tambahan setelah isi pesan.
+        // An extra line after the message body.
         let mut decoder = FrameDecoder::new();
         assert_eq!(decoder.push(b"Content-Length: 2\r\n\r\n{}\r\nContent-Length: 2\r\n\r\n[]"), vec!["{}", "[]"]);
     }
@@ -268,14 +268,14 @@ mod tests {
     #[test]
     fn oversized_header_is_dropped_without_unbounded_growth() {
         let mut decoder = FrameDecoder::new();
-        // 1 MiB sampah tanpa baris kosong, dikirim sedikit demi sedikit.
+        // 1 MiB of junk without a blank line, sent bit by bit.
         let junk = vec![b'x'; 16 * 1024];
         for _ in 0..64 {
             assert!(decoder.push(&junk).is_empty());
-            assert!(decoder.buf.len() <= MAX_HEADER_BYTES, "buffer tumbuh: {}", decoder.buf.len());
+            assert!(decoder.buf.len() <= MAX_HEADER_BYTES, "buffer grew: {}", decoder.buf.len());
         }
-        // Pesan sah setelahnya tetap terbaca (sampah menempel di depan baris header).
-        assert_eq!(decoder.push(&frame("{\"selamat\":true}")), vec!["{\"selamat\":true}"]);
+        // A valid message afterwards is still read (junk stuck to the front of the header line).
+        assert_eq!(decoder.push(&frame("{\"welcome\":true}")), vec!["{\"welcome\":true}"]);
         assert!(decoder.buf.is_empty());
     }
 
@@ -284,7 +284,7 @@ mod tests {
         let mut decoder = FrameDecoder::new();
         let mut bytes = Vec::new();
         while bytes.len() < 3 * MAX_HEADER_BYTES {
-            bytes.extend_from_slice(b"baris log tanpa arti\n");
+            bytes.extend_from_slice(b"meaningless log line\n");
         }
         bytes.extend(frame("{\"n\":1}"));
         bytes.extend(frame("{\"n\":2}"));
@@ -305,7 +305,7 @@ mod tests {
     #[test]
     fn last_content_length_in_a_block_wins() {
         let mut decoder = FrameDecoder::new();
-        let out = decoder.push(b"log: Content-Length: 99 ditolak\nContent-Length: 2\r\n\r\n{}");
+        let out = decoder.push(b"log: Content-Length: 99 rejected\nContent-Length: 2\r\n\r\n{}");
         assert_eq!(out, vec!["{}"]);
     }
 

@@ -1,5 +1,5 @@
-//! Diagnostics dari semua language server sebuah jendela, per berkas. Dipakai editor, panel
-//! Problems, dan status bar.
+//! Diagnostics from all of a window's language servers, per file. Used by the editor, the
+//! Problems panel, and the status bar.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
@@ -17,12 +17,12 @@ pub enum Severity {
     Hint,
 }
 
-/// Satu diagnostic dalam bentuk yang ditampilkan panel Problems.
+/// A single diagnostic in the form the Problems panel shows.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Problem {
-    /// Baris mulai, berbasis 1.
+    /// Start line, 1-based.
     pub line: u32,
-    /// Kolom mulai berbasis 0, dalam satuan kolom server (lihat [`FileDiagnostics::encoding`]).
+    /// Start column, 0-based, in the server's column units (see [`FileDiagnostics::encoding`]).
     pub column: u32,
     pub end_line: u32,
     pub end_column: u32,
@@ -32,7 +32,7 @@ pub struct Problem {
     pub code: Option<String>,
 }
 
-/// Menurut spesifikasi, tanpa severity klien bebas menafsirkan; dianggap galat seperti v0.2.
+/// Per the spec, without a severity the client is free to interpret it; treated as an error like v0.2.
 pub fn to_severity(severity: Option<DiagnosticSeverity>) -> Severity {
     match severity {
         Some(DiagnosticSeverity::WARNING) => Severity::Warning,
@@ -60,8 +60,8 @@ pub fn convert_diagnostic(item: &lsp_types::Diagnostic) -> Problem {
     }
 }
 
-/// Isi `textDocument/publishDiagnostics` yang dibaca dengan longgar: butir yang bentuknya rusak
-/// dilewati, notifikasi tanpa `uri` atau daftar yang sah diabaikan seluruhnya.
+/// The contents of `textDocument/publishDiagnostics`, read leniently: malformed items are
+/// skipped, and a notification without a valid `uri` or list is ignored entirely.
 pub fn parse_publish(params: &Value) -> Option<(String, Option<i32>, Vec<lsp_types::Diagnostic>)> {
     let uri = params.get("uri")?.as_str()?.to_string();
     let items = params.get("diagnostics")?.as_array()?;
@@ -70,7 +70,7 @@ pub fn parse_publish(params: &Value) -> Option<(String, Option<i32>, Vec<lsp_typ
         .iter()
         .filter_map(|item| {
             let mut item = item.clone();
-            // Bentuk lama `code: { value }` dinormalkan agar tidak menggagalkan butirnya.
+            // The old `code: { value }` shape is normalized so it does not fail the item.
             if let Some(value) = item.get("code").and_then(|code| code.get("value")).cloned() {
                 item["code"] = value;
             }
@@ -83,9 +83,9 @@ pub fn parse_publish(params: &Value) -> Option<(String, Option<i32>, Vec<lsp_typ
 #[derive(Debug, Clone)]
 pub struct FileDiagnostics {
     pub problems: Vec<Problem>,
-    /// Bentuk asli dari server, untuk editor dan konteks `textDocument/codeAction`.
+    /// The original form from the server, for the editor and the `textDocument/codeAction` context.
     pub raw: Vec<lsp_types::Diagnostic>,
-    /// Satuan kolom server yang menerbitkannya.
+    /// The column units of the server that published it.
     pub encoding: PositionEncoding,
     pub version: Option<i32>,
 }
@@ -94,7 +94,7 @@ pub struct FileDiagnostics {
 pub struct ProblemCounts {
     pub errors: usize,
     pub warnings: usize,
-    /// Mencakup `info` dan `hint`.
+    /// Covers `info` and `hint`.
     pub infos: usize,
 }
 
@@ -114,16 +114,16 @@ impl ProblemCounts {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DiagnosticsEvent {
-    /// Diagnostics berkas-berkas ini (path absolut) berganti.
+    /// The diagnostics of these files (absolute paths) changed.
     Changed(Vec<String>),
 }
 
-/// Store diagnostics satu jendela. Path absolut → diagnostics; berkas tanpa diagnostics tidak
-/// punya entri.
+/// A single window's diagnostics store. Absolute path → diagnostics; a file without diagnostics
+/// has no entry.
 #[derive(Default)]
 pub struct Diagnostics {
     files: BTreeMap<String, FileDiagnostics>,
-    /// Server mana yang menerbitkan diagnostics untuk path mana, agar bisa dihapus saat server itu berhenti.
+    /// Which server published diagnostics for which path, so they can be removed when that server stops.
     owners: HashMap<String, BTreeSet<String>>,
     counts: ProblemCounts,
     revision: u64,
@@ -140,12 +140,12 @@ impl Diagnostics {
         self.files.get(path)
     }
 
-    /// Jumlah seluruh masalah, tanpa penyaring.
+    /// Total number of problems, without any filter.
     pub fn counts(&self) -> ProblemCounts {
         self.counts
     }
 
-    /// Bertambah setiap kali isi store berubah.
+    /// Increases every time the store's contents change.
     pub fn revision(&self) -> u64 {
         self.revision
     }
@@ -161,7 +161,7 @@ impl Diagnostics {
         self.revision += 1;
     }
 
-    /// Versi tanpa `Context` dari [`Diagnostics::publish`]; mengembalikan path yang berubah.
+    /// The `Context`-free version of [`Diagnostics::publish`]; returns the path that changed.
     fn publish_inner(&mut self, owner: &str, encoding: PositionEncoding, params: &Value) -> Option<String> {
         let (uri, version, diagnostics) = parse_publish(params)?;
         let path = uri_to_path(&uri);
@@ -179,8 +179,8 @@ impl Diagnostics {
         Some(path)
     }
 
-    /// Mencatat satu notifikasi `publishDiagnostics` dari server `owner`; daftar kosong menghapus
-    /// entri berkasnya. Mengembalikan path berkasnya bila store berubah.
+    /// Records a `publishDiagnostics` notification from server `owner`; an empty list removes the
+    /// file's entry. Returns the file's path if the store changed.
     pub fn publish(&mut self, owner: &str, encoding: PositionEncoding, params: &Value, cx: &mut Context<Self>) -> Option<String> {
         let path = self.publish_inner(owner, encoding, params)?;
         cx.emit(DiagnosticsEvent::Changed(vec![path.clone()]));
@@ -205,8 +205,8 @@ impl Diagnostics {
         paths
     }
 
-    /// Menghapus diagnostics milik satu server (server berhenti), atau semuanya bila `owner`
-    /// tidak diberikan. Mengembalikan path yang entrinya terhapus.
+    /// Removes the diagnostics owned by one server (the server stopped), or all of them if `owner`
+    /// is not given. Returns the paths whose entries were removed.
     pub fn clear(&mut self, owner: Option<&str>, cx: &mut Context<Self>) -> Vec<String> {
         let paths = self.clear_inner(owner);
         if !paths.is_empty() {
@@ -249,7 +249,7 @@ mod tests {
         assert_eq!(to_severity(Some(DiagnosticSeverity::INFORMATION)), Severity::Info);
         assert_eq!(to_severity(Some(DiagnosticSeverity::HINT)), Severity::Hint);
         assert_eq!(to_severity(None), Severity::Error);
-        // Baris berbasis 1, kolom berbasis 0.
+        // Lines are 1-based, columns 0-based.
         assert_eq!(
             one(json!({ "range": range(4, 8, 5, 2), "severity": 2, "message": "unused variable", "source": "rustc", "code": "unused_variables" })),
             Problem {
@@ -298,7 +298,7 @@ mod tests {
         assert!(store.publish_inner("s", ENC, &json!({ "uri": "file:///proj/a.rs", "diagnostics": [] })).is_some());
         assert!(store.files().is_empty());
         assert_eq!(store.counts().total(), 0);
-        // Berkas tanpa entri: store tidak berubah (tidak memicu render ulang).
+        // A file without an entry: the store does not change (does not trigger a re-render).
         let revision = store.revision();
         assert!(revision > before);
         assert!(store.publish_inner("s", ENC, &json!({ "uri": "file:///proj/other.rs", "diagnostics": [] })).is_none());
@@ -328,7 +328,7 @@ mod tests {
         assert!(store.publish_inner("s", ENC, &json!({ "uri": "file:///a", "diagnostics": null })).is_none());
         assert!(store.publish_inner("s", ENC, &json!({ "uri": "file:///a", "diagnostics": [{ "message": "no range" }, null] })).is_none());
         assert!(store.files().is_empty());
-        // Butir yang sah di antara yang rusak tetap dicatat.
+        // A valid item among the malformed ones is still recorded.
         store.publish_inner("s", ENC, &json!({ "uri": "file:///a", "diagnostics": [null, { "range": range(0, 0, 0, 1), "message": "ok" }] }));
         assert_eq!(messages(&store, "/a"), ["ok"]);
     }

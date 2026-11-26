@@ -1,5 +1,5 @@
-//! Warna terminal: palet yang diturunkan dari tema aplikasi dan penerjemahan warna serta atribut
-//! sel (16/256/truecolor, bold, dim, inverse, hidden) menjadi warna siap gambar.
+//! Terminal colors: the palette derived from the application theme, and the translation of cell
+//! colors and attributes (16/256/truecolor, bold, dim, inverse, hidden) into ready-to-draw colors.
 
 use alacritty_terminal::term::cell::{Cell, Flags};
 use alacritty_terminal::term::color::Colors;
@@ -7,17 +7,17 @@ use alacritty_terminal::vte::ansi::{Color, NamedColor, Rgb};
 use gpui_kit::component::Theme;
 use gpui_kit::{Hsla, Rgba};
 
-/// Palet dasar terminal untuk satu tema.
+/// The terminal's base palette for one theme.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Palette {
     pub foreground: Rgb,
     pub background: Rgb,
     pub cursor: Rgb,
-    /// Warna teks di dalam kursor blok.
+    /// The text color inside the block cursor.
     pub cursor_text: Rgb,
-    /// Latar seleksi beserta alfanya.
+    /// The selection background along with its alpha.
     pub selection: (Rgb, f32),
-    /// 16 warna ANSI: 0–7 normal, 8–15 terang.
+    /// The 16 ANSI colors: 0–7 normal, 8–15 bright.
     pub ansi: [Rgb; 16],
 }
 
@@ -35,14 +35,14 @@ pub fn to_hsla(color: Rgb) -> Hsla {
     Hsla::from(Rgba { r: color.r as f32 / 255.0, g: color.g as f32 / 255.0, b: color.b as f32 / 255.0, a: 1.0 })
 }
 
-/// Campuran linear: `amount` 0 = `a`, 1 = `b`.
+/// A linear mix: `amount` 0 = `a`, 1 = `b`.
 pub fn mix(a: Rgb, b: Rgb, amount: f32) -> Rgb {
     let channel = |x: u8, y: u8| (x as f32 + (y as f32 - x as f32) * amount).round().clamp(0.0, 255.0) as u8;
     Rgb { r: channel(a.r, b.r), g: channel(a.g, b.g), b: channel(a.b, b.b) }
 }
 
 impl Palette {
-    /// Palet bawaan versi 0.2 (tema gelap), dipakai bila tema tidak tersedia dan oleh uji.
+    /// The default palette of version 0.2 (dark theme), used when the theme is unavailable and by tests.
     pub const fn fallback() -> Self {
         Self {
             foreground: rgb(0xd9dce3),
@@ -71,10 +71,10 @@ impl Palette {
         }
     }
 
-    /// Palet dari tema aplikasi; berlaku untuk tema gelap maupun terang.
+    /// The palette from the application theme; applies to both dark and light themes.
     ///
-    /// Seperti versi 0.2, "hitam" dan "putih" ANSI mengikuti tema (latar cekung dan teks redup),
-    /// sehingga keduanya tetap terbaca di kedua tema.
+    /// As in version 0.2, ANSI "black" and "white" follow the theme (sunken background and muted text),
+    /// so both stay readable in both themes.
     pub fn from_theme(theme: &Theme) -> Self {
         let background = from_hsla(theme.background);
         let foreground = from_hsla(theme.foreground);
@@ -107,7 +107,7 @@ impl Palette {
         }
     }
 
-    /// Warna untuk indeks 0–255: 16 warna ANSI, kubus 6×6×6, lalu 24 tingkat abu-abu.
+    /// The color for index 0–255: the 16 ANSI colors, the 6×6×6 cube, then 24 gray levels.
     pub fn indexed(&self, index: u8) -> Rgb {
         match index {
             0..=15 => self.ansi[index as usize],
@@ -141,8 +141,8 @@ impl Palette {
         }
     }
 
-    /// Warna akhir untuk sebuah warna sel. `overrides` adalah warna yang diubah program lewat
-    /// OSC 4/10/11 dan didahulukan atas palet.
+    /// The final color for a cell color. `overrides` are the colors changed by the program via
+    /// OSC 4/10/11 and take precedence over the palette.
     pub fn resolve(&self, color: Color, overrides: &Colors) -> Rgb {
         match color {
             Color::Spec(rgb) => rgb,
@@ -152,11 +152,11 @@ impl Palette {
     }
 }
 
-/// Tampilan sebuah sel setelah warna dan atributnya diterjemahkan.
+/// How a cell looks after its colors and attributes have been translated.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct CellStyle {
     pub fg: Rgb,
-    /// `None` bila sama dengan latar bawaan terminal (tidak perlu digambar).
+    /// `None` if it equals the terminal's default background (does not need to be drawn).
     pub bg: Option<Rgb>,
     pub bold: bool,
     pub italic: bool,
@@ -164,11 +164,11 @@ pub struct CellStyle {
     pub strikethrough: bool,
 }
 
-/// Menerjemahkan warna dan atribut sebuah sel.
+/// Translates a cell's colors and attributes.
 ///
-/// - Bold dengan warna ANSI 0–7 digambar dengan varian terangnya (bawaan xterm.js).
-/// - Dim mencampur teks separuh ke arah latarnya.
-/// - Inverse menukar teks dan latar; hidden menyamakan teks dengan latar.
+/// - Bold with ANSI colors 0–7 is drawn with its bright variant (xterm.js default).
+/// - Dim mixes the text halfway toward its background.
+/// - Inverse swaps the text and background; hidden makes the text match the background.
 pub fn cell_style(cell: &Cell, palette: &Palette, overrides: &Colors) -> CellStyle {
     let flags = cell.flags;
     let bold = flags.contains(Flags::BOLD);
@@ -220,7 +220,7 @@ mod tests {
         assert_eq!(plain(Color::Named(NamedColor::BrightCyan)).fg, P.ansi[14]);
         assert_eq!(plain(Color::Indexed(4)).fg, P.ansi[4]);
         assert_eq!(plain(Color::Named(NamedColor::Foreground)).fg, P.foreground);
-        assert_eq!(plain(Color::Named(NamedColor::Foreground)).bg, None, "latar bawaan tidak digambar");
+        assert_eq!(plain(Color::Named(NamedColor::Foreground)).bg, None, "the default background is not drawn");
     }
 
     #[test]

@@ -1,4 +1,4 @@
-//! Graph commit, detail commit, operasi riwayat, interactive rebase, reflog, worktree, dan submodule.
+//! Commit graph, commit details, history operations, interactive rebase, reflog, worktree, and submodule.
 
 pub mod actions;
 pub mod format;
@@ -37,7 +37,7 @@ use store::{CurrentStore, GraphStore, RevealTarget};
 
 pub const SIDEBAR_ID: &str = "graph";
 
-/// Mendaftarkan fitur ini. Dipanggil sekali dari `app/src/main.rs` setelah `oncode_ui::init`.
+/// Registers this feature. Called once from `app/src/main.rs` after `oncode_ui::init`.
 pub fn init(cx: &mut App) {
     oncode_ui::register_tab_kind(cx, "graph", GraphKind);
     oncode_ui::register_tab_kind(cx, "fileHistory", GraphKind);
@@ -46,7 +46,7 @@ pub fn init(cx: &mut App) {
     oncode_ui::register_feature(cx, setup);
 }
 
-/// Store Graph jendela ini; `None` bila folder tidak dipercaya atau bukan repositori.
+/// The Graph store of this window; `None` if the folder is not trusted or is not a repository.
 pub fn graph_store(workbench: &Workbench) -> Option<Entity<GraphStore>> {
     workbench.extension::<Entity<GraphStore>>()
 }
@@ -107,7 +107,7 @@ fn open_tab(store: &Entity<GraphStore>, tab: TabData, window: &mut Window, cx: &
     });
 }
 
-/// Membuka tab Graph sebuah repositori, opsional langsung memilih sebuah commit.
+/// Opens the Graph tab of a repository, optionally selecting a commit right away.
 pub fn open_graph(store: &Entity<GraphStore>, root: &str, reveal: Option<RevealTarget>, window: &mut Window, cx: &mut App) {
     if let Some(target) = reveal {
         let root = root.to_string();
@@ -127,14 +127,14 @@ pub fn open_stash(store: &Entity<GraphStore>, root: &str, name: &str, window: &m
     open_tab(store, tab, window, cx);
 }
 
-/// Membuka riwayat sebuah berkas (path relatif repositori).
+/// Opens the history of a file (a repository-relative path).
 pub fn open_file_history(store: &Entity<GraphStore>, root: &str, path: &str, window: &mut Window, cx: &mut App) {
     let title = format!("History: {}", format::base_name(path));
     let tab = TabData::new("fileHistory", title, json!({ "root": root, "path": path })).with_id(format!("fileHistory:{root}:{path}")).with_description(format!("File history — {path}"));
     open_tab(store, tab, window, cx);
 }
 
-/// Tab Graph yang sedang aktif di jendela ini.
+/// The Graph tab currently active in this window.
 pub(crate) fn active_tab(window: &Window, cx: &App) -> Option<Entity<GraphTab>> {
     let workbench = Workbench::for_window(window, cx)?;
     let content = workbench.read(cx).active_content()?;
@@ -223,7 +223,7 @@ fn file_history_of_active(store: Entity<GraphStore>, root: String, window: &mut 
     }
 }
 
-/// Worktree baru: pilih branch (atau ketik nama branch baru), lalu folder tujuan di samping repositori.
+/// New worktree: pick a branch (or type a new branch name), then the target folder next to the repository.
 fn add_worktree(ctx: Ctx, window: &mut Window, cx: &mut App) {
     let branches: Vec<String> = ctx.store.read(cx).refs(&ctx.root).map(|refs| refs.branches.iter().filter(|b| !b.is_head && b.worktree.is_none()).map(|b| b.name.clone()).collect()).unwrap_or_default();
     window
@@ -305,7 +305,7 @@ fn remove_worktree(ctx: Ctx, window: &mut Window, cx: &mut App) {
         .detach();
 }
 
-/// Sidebar Graph: pintasan ke Graph, Reflog, dan riwayat berkas, serta daftar worktree dan submodule.
+/// Graph sidebar: shortcuts to Graph, Reflog, and file history, plus the list of worktrees and submodules.
 struct GraphSidebar {
     store: Entity<GraphStore>,
     _subscription: Subscription,

@@ -1,4 +1,4 @@
-//! Konversi path berkas <-> URI `file://` untuk LSP, benar untuk path POSIX maupun Windows.
+//! Conversion between file paths and `file://` URIs for LSP, correct for both POSIX and Windows paths.
 
 use std::str::FromStr;
 
@@ -19,8 +19,8 @@ fn is_windows_path(path: &str) -> bool {
     is_drive(path) || is_unc(path)
 }
 
-/// Sama dengan `encodeURIComponent`: huruf, angka, dan `-_.!~*'()` dibiarkan; sisanya
-/// (spasi, `#`, `?`, `%`, non-ASCII, ...) di-escape sebagai byte UTF-8.
+/// Same as `encodeURIComponent`: letters, digits, and `-_.!~*'()` are left alone; the rest
+/// (space, `#`, `?`, `%`, non-ASCII, ...) is escaped as UTF-8 bytes.
 fn encode_segment(segment: &str, out: &mut String) {
     for byte in segment.bytes() {
         if byte.is_ascii_alphanumeric() || b"-_.!~*'()".contains(&byte) {
@@ -54,17 +54,17 @@ pub fn path_to_uri(path: &str) -> String {
         let segments = path[2..].split(['\\', '/']).filter(|part| !part.is_empty());
         return format!("file:///{}/{}", &path[..2], join_encoded(segments));
     }
-    // Di POSIX garis miring terbalik adalah karakter nama berkas biasa.
+    // On POSIX a backslash is an ordinary file name character.
     let joined = join_encoded(path.split('/'));
     format!("file://{}{joined}", if joined.starts_with('/') { "" } else { "/" })
 }
 
-/// URI bertipe `lsp_types` untuk sebuah path; `None` bila hasilnya bukan URI yang sah.
+/// A `lsp_types` typed URI for a path; `None` if the result is not a valid URI.
 pub fn path_to_lsp_uri(path: &str) -> Option<lsp_types::Uri> {
     lsp_types::Uri::from_str(&path_to_uri(path)).ok()
 }
 
-/// Kebalikan `encode_segment`; `None` bila escape-nya rusak atau bukan UTF-8.
+/// The inverse of `encode_segment`; `None` if the escape is broken or not UTF-8.
 fn decode(text: &str) -> Option<String> {
     let bytes = text.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
@@ -82,13 +82,13 @@ fn decode(text: &str) -> Option<String> {
     String::from_utf8(out).ok()
 }
 
-/// Escape yang rusak dipakai apa adanya daripada gagal.
+/// A broken escape is used as-is rather than failing.
 fn decode_lossy(text: &str) -> String {
     decode(text).unwrap_or_else(|| text.to_string())
 }
 
-/// Kebalikan [`path_to_uri`]. Huruf drive Windows dinormalkan menjadi huruf besar (server sering
-/// mengirim `file:///c%3A/...`). URI yang bukan `file:` dikembalikan apa adanya.
+/// The inverse of [`path_to_uri`]. Windows drive letters are normalized to uppercase (servers often
+/// send `file:///c%3A/...`). A URI that is not `file:` is returned as-is.
 pub fn uri_to_path(uri: &str) -> String {
     let Some(prefix) = uri.get(..7) else { return uri.to_string() };
     if !prefix.eq_ignore_ascii_case("file://") {
@@ -99,7 +99,7 @@ pub fn uri_to_path(uri: &str) -> String {
         Some(slash) => (&rest[..slash], &rest[slash..]),
         None => (rest, "/"),
     };
-    // Buang query dan fragment; `#` dan `?` di dalam nama berkas selalu ter-escape.
+    // Drop the query and fragment; `#` and `?` inside a file name are always escaped.
     let raw = raw.split(['?', '#']).next().unwrap_or(raw);
     let decoded = raw.split('/').map(decode_lossy).collect::<Vec<_>>().join("/");
     if !host.is_empty() && !host.eq_ignore_ascii_case("localhost") {
@@ -113,7 +113,7 @@ pub fn uri_to_path(uri: &str) -> String {
     decoded
 }
 
-/// Kunci pembanding path: path Windows tidak peka huruf besar/kecil dan pemisahnya disamakan.
+/// Path comparison key: Windows paths are case-insensitive and their separators are unified.
 pub fn path_key(path: &str) -> String {
     if is_windows_path(path) {
         path.replace('/', "\\").to_lowercase()
@@ -122,7 +122,7 @@ pub fn path_key(path: &str) -> String {
     }
 }
 
-/// Dua URI menunjuk berkas yang sama walau cara escape-nya berbeda.
+/// Two URIs point to the same file even if they are escaped differently.
 pub fn uri_key(uri: &str) -> String {
     path_key(&uri_to_path(uri))
 }
@@ -177,7 +177,7 @@ mod tests {
         for path in ["C:\\x\\y", "C:\\Users\\Dé v\\a#b?.ts", "D:\\a b\\c.go", "\\\\server\\share\\dir\\a b.ts"] {
             assert_eq!(uri_to_path(&path_to_uri(path)), path, "{path}");
         }
-        // Pemisah dan huruf drive dinormalkan.
+        // Separators and the drive letter are normalized.
         assert_eq!(uri_to_path(&path_to_uri("c:/x/y")), "C:\\x\\y");
     }
 

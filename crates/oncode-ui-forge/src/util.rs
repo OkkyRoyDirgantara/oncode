@@ -1,10 +1,10 @@
-//! Utilitas kecil fitur forge: penamaan, waktu relatif, URL aman, dan pesan galat.
+//! Small utilities for the forge feature: naming, relative time, safe URLs, and error messages.
 
 use gpui_kit::App;
 use oncode_core::AppError;
 use oncode_forge::{ForgeHost, ForgeKind, RepoRef};
 
-/// Nama penyedia untuk ditampilkan.
+/// The provider name for display.
 pub fn forge_name(kind: Option<ForgeKind>) -> &'static str {
     match kind {
         Some(ForgeKind::GitHub) => "GitHub",
@@ -13,7 +13,7 @@ pub fn forge_name(kind: Option<ForgeKind>) -> &'static str {
     }
 }
 
-/// GitLab menyebutnya merge request; GitHub (dan host tak dikenal) pull request.
+/// GitLab calls it a merge request; GitHub (and unknown hosts) a pull request.
 pub fn pr_noun(kind: Option<ForgeKind>) -> &'static str {
     if kind == Some(ForgeKind::GitLab) {
         "Merge Request"
@@ -22,7 +22,7 @@ pub fn pr_noun(kind: Option<ForgeKind>) -> &'static str {
     }
 }
 
-/// Bentuk jamak dari [`pr_noun`].
+/// The plural form of [`pr_noun`].
 pub fn pr_noun_plural(kind: Option<ForgeKind>) -> &'static str {
     if kind == Some(ForgeKind::GitLab) {
         "Merge Requests"
@@ -31,7 +31,7 @@ pub fn pr_noun_plural(kind: Option<ForgeKind>) -> &'static str {
     }
 }
 
-/// Singkatan: PR atau MR.
+/// Abbreviation: PR or MR.
 pub fn pr_short(kind: Option<ForgeKind>) -> &'static str {
     if kind == Some(ForgeKind::GitLab) {
         "MR"
@@ -40,18 +40,18 @@ pub fn pr_short(kind: Option<ForgeKind>) -> &'static str {
     }
 }
 
-/// Awalan nomor: `#12` di GitHub, `!12` di GitLab.
+/// Number prefix: `#12` on GitHub, `!12` on GitLab.
 pub fn pr_number(kind: Option<ForgeKind>, number: u32) -> String {
     format!("{}{number}", if kind == Some(ForgeKind::GitLab) { "!" } else { "#" })
 }
 
-/// Nama host dari origin akun (mis. `https://github.com` → `github.com`). Port ikut dipertahankan.
+/// Host name from an account origin (e.g. `https://github.com` → `github.com`). The port is kept.
 pub fn host_name(origin: &str) -> String {
     let without_scheme = origin.split_once("://").map_or(origin, |(_, rest)| rest);
     without_scheme.split('/').next().unwrap_or_default().to_lowercase()
 }
 
-/// Server tujuan login: origin yang diisi pengguna, atau layanan publik penyedia itu bila kosong.
+/// The server to log in to: the origin the user entered, or that provider's public service if empty.
 pub fn forge_host(kind: ForgeKind, host: Option<&str>) -> ForgeHost {
     match host.filter(|h| !h.trim().is_empty()) {
         Some(host) => ForgeHost::new(kind, host),
@@ -60,7 +60,7 @@ pub fn forge_host(kind: ForgeKind, host: Option<&str>) -> ForgeHost {
     }
 }
 
-/// Argumen `host` untuk login: `None` untuk github.com/gitlab.com, selain itu origin lengkap.
+/// The `host` argument for login: `None` for github.com/gitlab.com, otherwise the full origin.
 pub fn login_host_for(kind: ForgeKind, host: Option<&str>) -> Option<String> {
     let host = host.filter(|h| !h.is_empty())?;
     let name = host_name(host);
@@ -70,7 +70,7 @@ pub fn login_host_for(kind: ForgeKind, host: Option<&str>) -> Option<String> {
     Some(if host.contains("://") { host.trim_end_matches('/').to_string() } else { format!("https://{name}") })
 }
 
-/// Panjang awalan `skema://` bila `value` diawali skema URL (`[a-z][a-z0-9+.-]*://`).
+/// Length of the `scheme://` prefix if `value` starts with a URL scheme (`[a-z][a-z0-9+.-]*://`).
 fn scheme_len(value: &str) -> Option<usize> {
     let end = value.find("://")?;
     let scheme = &value[..end];
@@ -79,8 +79,8 @@ fn scheme_len(value: &str) -> Option<usize> {
     (first.is_ascii_alphabetic() && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '.' | '-'))).then_some(end)
 }
 
-/// Menormalkan masukan host self-hosted menjadi origin (dengan path bila instance berada di
-/// subpath). Mengembalikan `None` bila bukan URL http(s) yang sah.
+/// Normalizes self-hosted host input into an origin (with a path if the instance lives under a
+/// subpath). Returns `None` if it is not a valid http(s) URL.
 pub fn normalize_host(input: &str) -> Option<String> {
     let raw = input.trim();
     if raw.is_empty() || raw.chars().any(|c| c.is_whitespace() || c.is_control()) {
@@ -93,7 +93,7 @@ pub fn normalize_host(input: &str) -> Option<String> {
     if scheme != "https" && scheme != "http" {
         return None;
     }
-    // Kredensial di URL tidak pernah diterima; token diminta lewat kolom tersendiri.
+    // Credentials in the URL are never accepted; the token is asked for in a separate field.
     if rest.contains(['?', '#', '@', '\\']) {
         return None;
     }
@@ -125,7 +125,7 @@ pub fn normalize_host(input: &str) -> Option<String> {
         None | Some("") => None,
         Some(port) => Some(port.parse::<u16>().ok()?),
     };
-    // Port bawaan skema tidak ditulis, seperti hasil normalisasi URL di browser.
+    // The scheme's default port is omitted, like browser URL normalization does.
     let port = port.filter(|p| !((scheme == "https" && *p == 443) || (scheme == "http" && *p == 80)));
     let host = host.to_ascii_lowercase();
     let path = path.trim_end_matches('/');
@@ -135,12 +135,12 @@ pub fn normalize_host(input: &str) -> Option<String> {
     })
 }
 
-/// `owner/name` sebuah repositori.
+/// The `owner/name` of a repository.
 pub fn repo_slug(repo: &RepoRef) -> String {
     format!("{}/{}", repo.owner, repo.name)
 }
 
-/// URL http(s) absolut, atau `None` untuk skema lain (`javascript:`, `file:`, relatif, …).
+/// An absolute http(s) URL, or `None` for other schemes (`javascript:`, `file:`, relative, …).
 pub fn safe_external_url(value: &str) -> Option<String> {
     let trimmed = value.trim();
     let end = scheme_len(trimmed)?;
@@ -157,12 +157,12 @@ pub fn safe_external_url(value: &str) -> Option<String> {
     Some(format!("{scheme}://{rest}"))
 }
 
-/// URL gambar yang boleh dimuat: hanya `https:`.
+/// Image URLs that may be loaded: `https:` only.
 pub fn safe_image_url(value: &str) -> Option<String> {
     safe_external_url(value).filter(|url| url.starts_with("https://"))
 }
 
-/// Membuka tautan di browser sistem. Skema selain http(s) diabaikan.
+/// Opens a link in the system browser. Schemes other than http(s) are ignored.
 pub fn open_external(value: &str, cx: &mut App) -> bool {
     match safe_external_url(value) {
         Some(url) => {
@@ -173,7 +173,7 @@ pub fn open_external(value: &str, cx: &mut App) -> bool {
     }
 }
 
-/// Detik sejak epoch Unix saat ini.
+/// Seconds since the Unix epoch, now.
 pub fn now_seconds() -> f64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or(0.0)
 }
@@ -187,7 +187,7 @@ const UNITS: [(f64, f64, &str); 6] = [
     (f64::INFINITY, 86400.0 * 365.0, "year"),
 ];
 
-/// Waktu relatif singkat dari cap waktu Unix (detik), mis. "3 hours ago".
+/// Short relative time from a Unix timestamp (seconds), e.g. "3 hours ago".
 pub fn relative_time(unix_seconds: f64, now_seconds: f64) -> String {
     if !unix_seconds.is_finite() || unix_seconds <= 0.0 {
         return String::new();
@@ -205,7 +205,7 @@ pub fn relative_time(unix_seconds: f64, now_seconds: f64) -> String {
     String::new()
 }
 
-/// Memendekkan teks menjadi paling banyak `max` karakter, dengan elipsis.
+/// Shortens text to at most `max` characters, with an ellipsis.
 pub fn shorten(text: &str, max: usize) -> String {
     if text.chars().count() <= max {
         return text.to_string();
@@ -214,12 +214,12 @@ pub fn shorten(text: &str, max: usize) -> String {
     format!("{}…", head.trim_end())
 }
 
-/// Pesan galat untuk pengguna.
+/// An error message for the user.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ErrorText {
-    /// Kalimat utama (bahasa Inggris, ditulis di sini).
+    /// The main sentence (English, written here).
     pub title: String,
-    /// Pesan asli dari backend/penyedia, bila menambah informasi.
+    /// The original message from the backend/provider, if it adds information.
     pub detail: Option<String>,
 }
 
@@ -228,12 +228,12 @@ impl ErrorText {
         Self { title: title.into(), detail: None }
     }
 
-    /// Detail yang layak ditampilkan (tidak kosong dan berbeda dari judul).
+    /// Detail worth showing (not empty and different from the title).
     pub fn extra(&self) -> Option<&str> {
         self.detail.as_deref().filter(|d| !d.trim().is_empty() && *d != self.title)
     }
 
-    /// Satu teks untuk toast: judul, lalu detail di baris berikutnya.
+    /// One text for a toast: the title, then the detail on the next line.
     pub fn line(&self) -> String {
         match self.extra() {
             Some(detail) => format!("{}\n{detail}", self.title),
@@ -241,7 +241,7 @@ impl ErrorText {
         }
     }
 
-    /// Satu baris: judul dengan detail dalam kurung.
+    /// One line: the title with the detail in parentheses.
     pub fn inline(&self) -> String {
         match self.extra() {
             Some(detail) => format!("{} ({detail})", self.title),
@@ -250,8 +250,8 @@ impl ErrorText {
     }
 }
 
-/// Menerjemahkan kode galat forge menjadi pesan yang bisa ditindaklanjuti. Tidak pernah memuat
-/// token. `host` adalah origin atau nama host akun yang bersangkutan.
+/// Translates a forge error code into an actionable message. Never contains the
+/// token. `host` is the origin or host name of the account concerned.
 pub fn describe_forge_error(error: &AppError, host: Option<&str>) -> ErrorText {
     let host = host.map(host_name).filter(|h| !h.is_empty()).unwrap_or_else(|| "the server".to_string());
     let message = error.message.clone();
@@ -291,7 +291,7 @@ mod tests {
     fn host_name_drops_scheme_and_path() {
         assert_eq!(host_name("https://GitHub.com"), "github.com");
         assert_eq!(host_name("http://127.0.0.1:8080/gitlab"), "127.0.0.1:8080");
-        assert_eq!(host_name("git.contoh.id"), "git.contoh.id");
+        assert_eq!(host_name("git.example.com"), "git.example.com");
     }
 
     #[test]
@@ -300,35 +300,35 @@ mod tests {
         assert_eq!(login_host_for(ForgeKind::GitLab, Some("https://gitlab.com/")), None);
         assert_eq!(login_host_for(ForgeKind::GitHub, None), None);
         assert_eq!(login_host_for(ForgeKind::GitHub, Some("")), None);
-        // github.com sebagai GitLab bukan instance publik GitLab.
+        // github.com as GitLab is not GitLab's public instance.
         assert_eq!(login_host_for(ForgeKind::GitLab, Some("github.com")).as_deref(), Some("https://github.com"));
-        assert_eq!(login_host_for(ForgeKind::GitLab, Some("git.contoh.id")).as_deref(), Some("https://git.contoh.id"));
+        assert_eq!(login_host_for(ForgeKind::GitLab, Some("git.example.com")).as_deref(), Some("https://git.example.com"));
         assert_eq!(login_host_for(ForgeKind::GitLab, Some("http://127.0.0.1:8080/")).as_deref(), Some("http://127.0.0.1:8080"));
     }
 
     #[test]
     fn normalize_host_accepts_http_origins_only() {
-        assert_eq!(normalize_host("git.contoh.id").as_deref(), Some("https://git.contoh.id"));
-        assert_eq!(normalize_host("  https://Git.Contoh.id/  ").as_deref(), Some("https://git.contoh.id"));
+        assert_eq!(normalize_host("git.example.com").as_deref(), Some("https://git.example.com"));
+        assert_eq!(normalize_host("  https://Git.Example.com/  ").as_deref(), Some("https://git.example.com"));
         assert_eq!(normalize_host("http://127.0.0.1:8080").as_deref(), Some("http://127.0.0.1:8080"));
-        assert_eq!(normalize_host("https://contoh.id/gitlab/").as_deref(), Some("https://contoh.id/gitlab"));
-        assert_eq!(normalize_host("https://contoh.id:443").as_deref(), Some("https://contoh.id"));
-        assert_eq!(normalize_host("HTTPS://contoh.id:8443").as_deref(), Some("https://contoh.id:8443"));
+        assert_eq!(normalize_host("https://example.com/gitlab/").as_deref(), Some("https://example.com/gitlab"));
+        assert_eq!(normalize_host("https://example.com:443").as_deref(), Some("https://example.com"));
+        assert_eq!(normalize_host("HTTPS://example.com:8443").as_deref(), Some("https://example.com:8443"));
         assert_eq!(normalize_host("https://[::1]:8443").as_deref(), Some("https://[::1]:8443"));
-        for bad in ["", "   ", "git contoh id", "ftp://contoh.id", "ssh://git@contoh.id", "https://user:pw@contoh.id", "https://contoh.id/?q=1", "https://contoh.id/#x", "https://", "https://:8080", "https://contoh.id:port", "javascript://x"] {
+        for bad in ["", "   ", "git example com", "ftp://example.com", "ssh://git@example.com", "https://user:pw@example.com", "https://example.com/?q=1", "https://example.com/#x", "https://", "https://:8080", "https://example.com:port", "javascript://x"] {
             assert_eq!(normalize_host(bad), None, "{bad:?}");
         }
     }
 
     #[test]
     fn only_absolute_http_urls_are_safe() {
-        assert_eq!(safe_external_url("https://contoh.id/a?b=1#c").as_deref(), Some("https://contoh.id/a?b=1#c"));
-        assert_eq!(safe_external_url("  HTTP://contoh.id  ").as_deref(), Some("http://contoh.id"));
-        for bad in ["", "contoh.id", "/relatif", "//contoh.id", "javascript:alert(1)", "javascript://contoh.id/%0aalert(1)", "data:text/html,x", "file:///etc/passwd", "vbscript:x", "https://", "https:///jalur", "https://contoh.id/a b"] {
+        assert_eq!(safe_external_url("https://example.com/a?b=1#c").as_deref(), Some("https://example.com/a?b=1#c"));
+        assert_eq!(safe_external_url("  HTTP://example.com  ").as_deref(), Some("http://example.com"));
+        for bad in ["", "example.com", "/relative", "//example.com", "javascript:alert(1)", "javascript://example.com/%0aalert(1)", "data:text/html,x", "file:///etc/passwd", "vbscript:x", "https://", "https:///path", "https://example.com/a b"] {
             assert_eq!(safe_external_url(bad), None, "{bad:?}");
         }
-        assert_eq!(safe_image_url("https://contoh.id/a.png").as_deref(), Some("https://contoh.id/a.png"));
-        assert_eq!(safe_image_url("http://contoh.id/a.png"), None);
+        assert_eq!(safe_image_url("https://example.com/a.png").as_deref(), Some("https://example.com/a.png"));
+        assert_eq!(safe_image_url("http://example.com/a.png"), None);
         assert_eq!(safe_image_url("data:image/png;base64,AAAA"), None);
     }
 
@@ -350,18 +350,18 @@ mod tests {
 
     #[test]
     fn shorten_keeps_short_text_and_adds_an_ellipsis() {
-        assert_eq!(shorten("pendek", 40), "pendek");
-        assert_eq!(shorten("satu dua tiga", 9), "satu dua…");
+        assert_eq!(shorten("short", 40), "short");
+        assert_eq!(shorten("one four two", 9), "one four…");
         assert_eq!(shorten("héllo wörld", 6), "héllo…");
     }
 
     #[test]
     fn errors_become_actionable_messages() {
-        let error = |code: &str| AppError::new(code, "pesan asli");
-        let text = describe_forge_error(&error("unauthorized"), Some("https://git.contoh.id"));
-        assert_eq!(text.title, "Sign-in for git.contoh.id is missing or has expired. Sign in again.");
-        assert_eq!(text.detail.as_deref(), Some("pesan asli"));
-        assert_eq!(text.line(), "Sign-in for git.contoh.id is missing or has expired. Sign in again.\npesan asli");
+        let error = |code: &str| AppError::new(code, "original message");
+        let text = describe_forge_error(&error("unauthorized"), Some("https://git.example.com"));
+        assert_eq!(text.title, "Sign-in for git.example.com is missing or has expired. Sign in again.");
+        assert_eq!(text.detail.as_deref(), Some("original message"));
+        assert_eq!(text.line(), "Sign-in for git.example.com is missing or has expired. Sign in again.\noriginal message");
         assert!(describe_forge_error(&error("network"), None).title.starts_with("Could not reach the server."));
         assert!(describe_forge_error(&error("rateLimited"), Some("github.com")).title.contains("rate limit of github.com"));
         assert!(describe_forge_error(&error("keychain"), None).title.contains("keychain"));
@@ -370,10 +370,10 @@ mod tests {
         assert!(describe_forge_error(&error("invalidInput"), None).title.contains("rejected"));
         assert!(describe_forge_error(&error("invalidResponse"), None).title.contains("unexpected answer"));
         assert!(describe_forge_error(&error("unsupported"), None).title.contains("not supported"));
-        // Kode yang tidak dikenal: pesan backend apa adanya, tanpa detail ganda.
+        // An unknown code: the backend message as is, without a duplicate detail.
         let other = describe_forge_error(&error("io"), None);
-        assert_eq!((other.title.as_str(), other.extra()), ("pesan asli", None));
-        assert_eq!(other.inline(), "pesan asli");
-        assert_eq!(text.inline(), "Sign-in for git.contoh.id is missing or has expired. Sign in again. (pesan asli)");
+        assert_eq!((other.title.as_str(), other.extra()), ("original message", None));
+        assert_eq!(other.inline(), "original message");
+        assert_eq!(text.inline(), "Sign-in for git.example.com is missing or has expired. Sign in again. (original message)");
     }
 }

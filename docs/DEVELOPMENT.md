@@ -1,15 +1,15 @@
-# Panduan Pengembangan
+# Development Guide
 
-OnCode adalah aplikasi native: Rust + [GPUI](https://github.com/zed-industries/zed) lewat [`gpui-kit`](https://gpui-kit.com) (komponen `gpui-component`). Rancangannya ada di [RANCANGAN.md](RANCANGAN.md). Versi Tauri (v0.2) tersimpan di tag git `tauri-v0.2`; rancangannya di [arsip/RANCANGAN-v0.2-tauri.md](arsip/RANCANGAN-v0.2-tauri.md).
+OnCode is a native application: Rust + [GPUI](https://github.com/zed-industries/zed) via [`gpui-kit`](https://gpui-kit.com) (the `gpui-component` components). Its design is in [DESIGN.md](DESIGN.md). The Tauri version (v0.2) is kept under the git tag `tauri-v0.2`; its design is in [archive/DESIGN-v0.2-tauri.md](archive/DESIGN-v0.2-tauri.md).
 
-## Prasyarat
+## Prerequisites
 
-| Kebutuhan | Catatan |
+| Requirement | Notes |
 |---|---|
 | Rust (stable, ≥ 1.88) | `rustup` |
-| Git ≥ 2.40 | Dipakai aplikasi saat berjalan dan oleh uji |
-| Compiler C | Untuk grammar tree-sitter |
-| Pustaka sistem GPUI | Lihat di bawah |
+| Git ≥ 2.40 | Used by the app at runtime and by the tests |
+| C compiler | For the tree-sitter grammars |
+| GPUI system libraries | See below |
 
 **Linux (Debian/Ubuntu):**
 
@@ -18,72 +18,72 @@ sudo apt install build-essential pkg-config libwayland-dev libxkbcommon-dev libx
   libxcb1-dev libx11-dev libfontconfig-dev libfreetype-dev libssl-dev libvulkan1
 ```
 
-Saat berjalan diperlukan driver Vulkan. Tanpa GPU, Mesa lavapipe (`mesa-vulkan-drivers`) bisa dipakai: `VK_DRIVER_FILES=/usr/share/vulkan/icd.d/lvp_icd.json`.
+A Vulkan driver is required at runtime. Without a GPU, Mesa lavapipe (`mesa-vulkan-drivers`) can be used: `VK_DRIVER_FILES=/usr/share/vulkan/icd.d/lvp_icd.json`.
 
-**Windows:** Microsoft C++ Build Tools. **macOS:** Xcode beserta Command Line Tools.
+**Windows:** Microsoft C++ Build Tools. **macOS:** Xcode with the Command Line Tools.
 
-### Tanpa akses root (`.dev-sysroot`)
+### Without root access (`.dev-sysroot`)
 
-Bila paket di atas tidak bisa dipasang, paket `-dev` dan compiler C dapat diunduh dengan `apt-get download` lalu diekstrak ke `.dev-sysroot/` di dalam proyek (tidak ikut di-commit). Aktifkan sebelum menjalankan `cargo`:
+If the packages above cannot be installed, the `-dev` packages and the C compiler can be downloaded with `apt-get download` and extracted into `.dev-sysroot/` inside the project (not committed). Activate it before running `cargo`:
 
 ```bash
 source .dev-sysroot/env.sh
 ```
 
-Pustaka yang hanya ada di sysroot (mis. `libxkbcommon-x11.so.0`) harus bisa ditemukan saat aplikasi dijalankan: `LD_LIBRARY_PATH=.dev-sysroot/runlib`.
+Libraries that exist only in the sysroot (e.g. `libxkbcommon-x11.so.0`) must be findable when the app runs: `LD_LIBRARY_PATH=.dev-sysroot/runlib`.
 
-## Perintah sehari-hari
+## Everyday commands
 
-| Tujuan | Perintah |
+| Goal | Command |
 |---|---|
-| Menjalankan | `cargo build -p oncode-helper && cargo run -p oncode -- [folder]` |
-| Uji satu crate | `cargo test -p oncode-ui-scm` |
-| Semua uji | `cargo test --workspace` |
-| Periksa cepat | `cargo check -p oncode` |
-| Paket `.deb` | `cargo install cargo-packager --locked`, lalu `cargo packager --release -f deb` di folder `app/` (hasil di `target/packages/`) |
-| AppImage | `cargo packager --release -f appimage` di `app/`. Di mesin tanpa `libxkbcommon-x11` terpasang, `linuxdeploy` perlu `LD_LIBRARY_PATH` yang memuat pustaka itu |
-| Installer NSIS dari Linux | Perlu `makensis` (paket `nsis`). `cargo packager --release -f nsis --target x86_64-pc-windows-gnu` di `app/`, dengan `CARGO_TARGET_DIR` menunjuk folder build Windows: `--binaries-dir` diabaikan perkakas. Binary Windows-nya harus dibangun dengan `--config "$ONCODE_WIN_PATCH"` (lihat `.dev-sysroot/env-win.sh`) |
-| DMG dari Linux (tidak resmi) | Lihat komentar di `.dev-sysroot/env-mac.sh`: zig + macOS SDK, salinan `gpui-pre-apple` dengan shader saat aplikasi mulai, link dengan `rust-lld`, lalu `.dev-sysroot/mac/make-dmg.sh`. Rilis resmi tetap dibuat di macOS (`release.yml`) |
-| Perintah `oncode` | Installer NSIS menjalankan `oncode-helper install-shell-command` di `preinstall-section` (`app/Cargo.toml`) sebelum berkas disalin, dan `uninstall-shell-command` saat uninstall. Paket `.deb` membawa `app/packaging/linux/oncode` sebagai `/usr/bin/oncode`; berkas itu harus tetap executable di git. Build debug memakai endpoint satu-proses sendiri (`app/src/single_instance.rs`), jadi tidak bertabrakan dengan OnCode terpasang |
-| Rilis | Dorong tag `v*`; `.github/workflows/release.yml` membuat deb/AppImage, NSIS, dan DMG (Apple Silicon dan Intel), lalu mengunggahnya sebagai draf rilis |
+| Run | `cargo build -p oncode-helper && cargo run -p oncode -- [folder]` |
+| Test one crate | `cargo test -p oncode-ui-scm` |
+| All tests | `cargo test --workspace` |
+| Quick check | `cargo check -p oncode` |
+| `.deb` package | `cargo install cargo-packager --locked`, then `cargo packager --release -f deb` in the `app/` folder (output in `target/packages/`) |
+| AppImage | `cargo packager --release -f appimage` in `app/`. On a machine without `libxkbcommon-x11` installed, `linuxdeploy` needs an `LD_LIBRARY_PATH` that includes that library |
+| NSIS installer from Linux | Requires `makensis` (package `nsis`). `cargo packager --release -f nsis --target x86_64-pc-windows-gnu` in `app/`, with `CARGO_TARGET_DIR` pointing at the Windows build folder: the tool ignores `--binaries-dir`. The Windows binary must be built with `--config "$ONCODE_WIN_PATCH"` (see `.dev-sysroot/env-win.sh`) |
+| DMG from Linux (unofficial) | See the comments in `.dev-sysroot/env-mac.sh`: zig + macOS SDK, a copy of `gpui-pre-apple` with shaders at app start, linking with `rust-lld`, then `.dev-sysroot/mac/make-dmg.sh`. Official releases are still built on macOS (`release.yml`) |
+| `oncode` command | The NSIS installer runs `oncode-helper install-shell-command` in `preinstall-section` (`app/Cargo.toml`) before the files are copied, and `uninstall-shell-command` on uninstall. The `.deb` package ships `app/packaging/linux/oncode` as `/usr/bin/oncode`; that file must stay executable in git. Debug builds use their own single-process endpoint (`app/src/single_instance.rs`), so they do not collide with an installed OnCode |
+| Release | Push a `v*` tag; `.github/workflows/release.yml` builds deb/AppImage, NSIS, and DMG (Apple Silicon and Intel), then uploads them as a draft release |
 
-`oncode-helper` harus ada di samping binary `oncode-app` (di `target/debug/`); tanpa itu dialog kredensial dan interactive rebase tidak tersedia.
+`oncode-helper` must sit next to the `oncode-app` binary (in `target/debug/`); without it the credential dialog and interactive rebase are unavailable.
 
-Binary utama sengaja tidak bernama `oncode`: di Windows dengan GPU Intel, nama exe 6 huruf membuat driver memuat cache shader milik Chrome/Edge ke memori aplikasi (± 150 MB). Penjelasan di `app/Cargo.toml`.
+The main binary is deliberately not named `oncode`: on Windows with an Intel GPU, a 6-letter exe name makes the driver load the shader cache of Chrome/Edge into the app's memory (± 150 MB). The explanation is in `app/Cargo.toml`.
 
-Uji LSP memakai language server tiruan (`crates/oncode-lsp/src/mock.rs`, program `mock_lsp_server`); uji membangunnya sendiri bila belum ada. Untuk mencobanya di aplikasi, arahkan `lsp.servers.<bahasa>.command` di `settings.json` ke `target/debug/examples/mock_lsp_server` (kata `ERROR`, `WARN`, `INFO`, `HINT` menghasilkan diagnostics; `def nama` membuat definisi).
+The LSP tests use a mock language server (`crates/oncode-lsp/src/mock.rs`, program `mock_lsp_server`); the tests build it themselves if it does not exist yet. To try it in the app, point `lsp.servers.<language>.command` in `settings.json` to `target/debug/examples/mock_lsp_server` (the words `ERROR`, `WARN`, `INFO`, `HINT` produce diagnostics; `def name` creates a definition).
 
-## Peta crate
+## Crate map
 
-| Crate | Isi |
+| Crate | Contents |
 |---|---|
-| `app` (binary `oncode-app`) | `main`: runtime tokio, `Core`, lalu `init` tiap crate UI |
-| `crates/oncode-core` | State aplikasi tanpa UI dan seluruh API (`oncode_core::api::{app, fs, git, term, lsp, forge}`) |
-| `crates/oncode-git`, `-workspace`, `-terminal`, `-lsp`, `-forge`, `-helper` | Backend; tidak bergantung pada UI |
-| `crates/oncode-ui` | Kerangka UI: `Workbench`, `Shell`, command, keybinding, quick pick, dialog, editor dan buffer, store repositori |
-| `crates/oncode-ui-<fitur>` | Satu fitur per crate: `explorer`, `search`, `diff`, `scm`, `graph`, `terminal`, `lsp`, `forge`, `settings` |
+| `app` (binary `oncode-app`) | `main`: tokio runtime, `Core`, then `init` of each UI crate |
+| `crates/oncode-core` | UI-free application state and the entire API (`oncode_core::api::{app, fs, git, term, lsp, forge}`) |
+| `crates/oncode-git`, `-workspace`, `-terminal`, `-lsp`, `-forge`, `-helper` | Backends; do not depend on the UI |
+| `crates/oncode-ui` | UI framework: `Workbench`, `Shell`, commands, keybindings, quick pick, dialogs, editor and buffers, repository store |
+| `crates/oncode-ui-<feature>` | One feature per crate: `explorer`, `search`, `diff`, `scm`, `graph`, `terminal`, `lsp`, `forge`, `settings` |
 
-Crate fitur hanya bergantung pada `oncode-ui`, `oncode-core`, dan crate backend yang diperlukannya (pengecualian: `scm` dan `graph` memakai `oncode-ui-diff` untuk membuka tab diff).
+Feature crates depend only on `oncode-ui`, `oncode-core`, and the backend crates they need (exception: `scm` and `graph` use `oncode-ui-diff` to open diff tabs).
 
-## Aturan penting
+## Key rules
 
-### 1. Jangan mengarang API GPUI
+### 1. Don't invent GPUI APIs
 
-GPUI dan `gpui-component` masih pra-1.0. Sebelum memakai sebuah method, **cari tanda tangannya di sumber** (`~/.cargo/registry/src/*/gpui-component-0.10.0`, `gpui-base-0.10.0`, `gpui-pre-0.3.12`). Dokumentasi per komponen: `https://gpui-kit.com/component/<nama>.md` (mis. `editor.md`, `diff.md`, `tree.md`, `list.md`, `virtual-list.md`, `menu.md`, `dialog.md`). Impor selalu lewat `gpui_kit::...`, bukan `gpui::...`.
+GPUI and `gpui-component` are still pre-1.0. Before using a method, **look up its signature in the source** (`~/.cargo/registry/src/*/gpui-component-0.10.0`, `gpui-base-0.10.0`, `gpui-pre-0.3.12`). Per-component documentation: `https://gpui-kit.com/component/<name>.md` (e.g. `editor.md`, `diff.md`, `tree.md`, `list.md`, `virtual-list.md`, `menu.md`, `dialog.md`). Always import through `gpui_kit::...`, not `gpui::...`.
 
-### 2. Aturan entitas (peminjaman ganda = panik)
+### 2. Entity rules (double borrow = panic)
 
-Entitas GPUI yang sedang di-`update` tidak boleh dibaca atau di-`update` lagi dari dalam pembaruan itu. Akibatnya:
+A GPUI entity that is being `update`d must not be read or `update`d again from inside that update. Consequences:
 
-- **Pembangun yang dipanggil `Workbench`** (`SidebarView::build`, `PanelView::build`, `StatusItem::build`, `TabKind::build`, `TabContent::can_close`, fungsi `register_feature`) berjalan selagi `Workbench` dipinjam. Di dalamnya **jangan** `workbench.read(cx)` / `workbench.update(cx, ..)`. Pakai data dari `Env`, atau tunda dengan `cx.defer_in(window, ..)` / `window.defer(cx, ..)`.
-- **`render` sebuah tampilan fitur** berjalan di luar pinjaman `Workbench`, jadi boleh `workbench.read(cx)`.
-- **Penangan command** (`Command::new(.., |args, window, cx| ..)`) berjalan di luar pinjaman apa pun dan boleh memperbarui entitas mana saja.
-- Dari dalam `workbench.update(..)`, jalankan command lain dengan `oncode_ui::execute(id, args, window, cx)` (ditunda), bukan `execute_now`.
-- Penangan event (`cx.subscribe`, `cx.observe`) berjalan setelah pembaruan selesai, jadi aman.
+- **Builders called by `Workbench`** (`SidebarView::build`, `PanelView::build`, `StatusItem::build`, `TabKind::build`, `TabContent::can_close`, the `register_feature` functions) run while `Workbench` is borrowed. Inside them, **do not** call `workbench.read(cx)` / `workbench.update(cx, ..)`. Use data from `Env`, or defer with `cx.defer_in(window, ..)` / `window.defer(cx, ..)`.
+- **`render` of a feature view** runs outside the `Workbench` borrow, so `workbench.read(cx)` is fine.
+- **Command handlers** (`Command::new(.., |args, window, cx| ..)`) run outside any borrow and may update any entity.
+- From inside `workbench.update(..)`, run other commands with `oncode_ui::execute(id, args, window, cx)` (deferred), not `execute_now`.
+- Event handlers (`cx.subscribe`, `cx.observe`) run after the update has finished, so they are safe.
 
-### 3. Pekerjaan backend tidak di thread utama
+### 3. Backend work does not run on the main thread
 
-Crate backend memakai tokio; GPUI punya eksekutornya sendiri. Semua panggilan `oncode_core::api::*` dijalankan lewat `oncode_ui::spawn_core`:
+The backend crates use tokio; GPUI has its own executor. All `oncode_core::api::*` calls are run through `oncode_ui::spawn_core`:
 
 ```rust
 let (core, root) = (env.core.clone(), root.clone());
@@ -99,24 +99,24 @@ cx.spawn_in(window, async move |this, cx| {
 .detach();
 ```
 
-Jangan memanggil I/O yang menunggu (berkas, proses, jaringan) langsung dari `render` atau penangan event.
+Do not call blocking I/O (files, processes, network) directly from `render` or event handlers.
 
-### 4. Bahasa
+### 4. Language
 
-Teks UI dan pesan untuk pengguna berbahasa **Inggris**. Komentar kode dan dokumen berbahasa **Indonesia**. Id command sama dengan v0.2 agar `keybindings.json` pengguna tetap berlaku.
+All UI text, user-facing messages, code comments, and documents are written in **English**. Command ids are the same as in v0.2 so that users' `keybindings.json` keeps working.
 
-## Menambah fitur
+## Adding a feature
 
-Setiap crate fitur mengekspor `pub fn init(cx: &mut App)` yang dipanggil dari `app/src/main.rs`.
+Each feature crate exports `pub fn init(cx: &mut App)`, which is called from `app/src/main.rs`.
 
 ```rust
 pub fn init(cx: &mut App) {
-    // Jenis tab (global).
+    // Tab kind (global).
     oncode_ui::register_tab_kind(cx, "graph", GraphKind);
-    // Per jendela: dipanggil untuk setiap `Workbench` baru (juga saat folder dibuka atau dipercaya).
+    // Per window: called for every new `Workbench` (also when a folder is opened or trusted).
     oncode_ui::register_feature(cx, |workbench, window, cx| {
-        let env = workbench.env().clone();          // core, label jendela, root, trusted, repo_root
-        if !env.trusted { return; }                 // mode terbatas: fitur Git/LSP tidak didaftarkan
+        let env = workbench.env().clone();          // core, window label, root, trusted, repo_root
+        if !env.trusted { return; }                 // restricted mode: Git/LSP features are not registered
         workbench.register_sidebar(SidebarView::new("scm", "Source Control", Lucide::GitBranch, 20, |env, window, cx| {
             cx.new(|cx| ScmPanel::new(env.clone(), window, cx)).into()
         }).badge(|cx| /* Option<usize> */ None));
@@ -127,22 +127,22 @@ pub fn init(cx: &mut App) {
 }
 ```
 
-- **Sidebar, panel, status bar:** tampilan adalah entitas tersendiri (`AnyView`) yang mengamati state yang dibutuhkannya. Urutan: `order` kecil lebih dulu. Explorer 10, Search 20, Source Control 30, Graph 40, Pull Requests 50; panel: Terminal 10, Problems 20, Git Output 30.
-- **Tab:** `workbench.open_tab(TabData::new(kind, title, json!({..})), OpenOptions::default(), window, cx)`. Isi tab dibangun `TabKind::build` dan mengimplementasikan `TabContent` (pakai `ViewTab(entity)` untuk tampilan sederhana). Tab bisa diseret (`DraggedTab`); fitur lain boleh menyeret `DraggedTab { from: None, .. }` ke area editor untuk membukanya sebagai tab (dipakai terminal). Jenis tab yang isinya tidak boleh tampil dua kali menimpa `TabKind::split_copy` (terminal: "Split Editor" membuka terminal baru).
-- **State per jendela milik fitur:** `workbench.set_extension(entity)` dan `workbench.extension::<Entity<T>>()`.
-- **Berkas:** `oncode_ui::editor::open_file(workbench, OpenFile::new(path).at(line, column, len), window, cx)`; buffer lewat `oncode_ui::editor::buffers(workbench)`; berkas aktif lewat `active_file(workbench, cx)`.
-- **Repositori:** `oncode_ui::repos(cx)` (snapshot per akar, penanda berkas); berlangganan `ReposEvent`.
-- **Event:** `WorkbenchEvent` (tab, tata letak, pengaturan, `FsChanged`, `FileSaved`) lewat `cx.subscribe_in(&workbench, window, ..)`; event backend lain lewat `oncode_ui::core_bus(cx)` (`CoreEvent`).
-- **Dialog dan toast:** `oncode_ui::overlay::{confirm, choose, prompt_text, toast_*, show_error}`; pilihan dari daftar: `oncode_ui::quick_pick::quick_pick`. Aksi destruktif selalu lewat `confirm(..danger())` yang menyebut apa yang hilang.
-- **Ikon:** `Icon::new(oncode_ui::Lucide::GitBranch)` (seluruh Lucide tersedia).
+- **Sidebar, panel, status bar:** a view is its own entity (`AnyView`) that observes the state it needs. Ordering: a smaller `order` comes first. Explorer 10, Search 20, Source Control 30, Graph 40, Pull Requests 50; panels: Terminal 10, Problems 20, Git Output 30.
+- **Tabs:** `workbench.open_tab(TabData::new(kind, title, json!({..})), OpenOptions::default(), window, cx)`. A tab's content is built by `TabKind::build` and implements `TabContent` (use `ViewTab(entity)` for simple views). Tabs can be dragged (`DraggedTab`); other features may drag a `DraggedTab { from: None, .. }` onto the editor area to open it as a tab (used by the terminal). A tab kind whose content must not appear twice overrides `TabKind::split_copy` (terminal: "Split Editor" opens a new terminal).
+- **Per-window state owned by a feature:** `workbench.set_extension(entity)` and `workbench.extension::<Entity<T>>()`.
+- **Files:** `oncode_ui::editor::open_file(workbench, OpenFile::new(path).at(line, column, len), window, cx)`; buffers via `oncode_ui::editor::buffers(workbench)`; the active file via `active_file(workbench, cx)`.
+- **Repositories:** `oncode_ui::repos(cx)` (a snapshot per root, file markers); subscribe to `ReposEvent`.
+- **Events:** `WorkbenchEvent` (tabs, layout, settings, `FsChanged`, `FileSaved`) via `cx.subscribe_in(&workbench, window, ..)`; other backend events via `oncode_ui::core_bus(cx)` (`CoreEvent`).
+- **Dialogs and toasts:** `oncode_ui::overlay::{confirm, choose, prompt_text, toast_*, show_error}`; choosing from a list: `oncode_ui::quick_pick::quick_pick`. Destructive actions always go through `confirm(..danger())`, which says what will be lost.
+- **Icons:** `Icon::new(oncode_ui::Lucide::GitBranch)` (all of Lucide is available).
 
-## Pengujian
+## Testing
 
-Tiga tingkat, semuanya `cargo test`:
+Three levels, all `cargo test`:
 
-1. **Logika murni** (`#[test]`): penerjemahan pilihan, parser, model. Pisahkan logika dari tampilan agar bisa diuji tanpa jendela.
-2. **Backend** (`#[tokio::test]` di crate backend dan `oncode-core`): terhadap git sungguhan di repositori sementara.
-3. **Tampilan** (`#[gpui_kit::test]`): jendela tanpa layar, masukan disimulasikan, backend sungguhan. Lihat `crates/oncode-ui/tests/editor.rs`.
+1. **Pure logic** (`#[test]`): translating choices, parsers, models. Separate logic from the view so it can be tested without a window.
+2. **Backend** (`#[tokio::test]` in the backend crates and `oncode-core`): against real git in a temporary repository.
+3. **View** (`#[gpui_kit::test]`): a headless window, simulated input, a real backend. See `crates/oncode-ui/tests/editor.rs`.
 
 ```rust
 use gpui_kit::test::TestWindowExt as _;
@@ -152,24 +152,24 @@ use oncode_ui::testing::{git, TestApp};
 #[gpui_kit::test]
 async fn stages_a_file(cx: &mut TestAppContext) {
     let app = TestApp::new(cx);
-    cx.update(|cx| oncode_ui_scm::init(cx));                 // daftarkan fitur yang diuji sebelum membuka jendela
-    let project = app.git_project(&[("a.txt", "satu\n")]);   // repo git sementara, sudah dipercaya
-    std::fs::write(project.join("a.txt"), "dua\n").unwrap();
+    cx.update(|cx| oncode_ui_scm::init(cx));                 // register the feature under test before opening the window
+    let project = app.git_project(&[("a.txt", "one\n")]);    // temporary git repo, already trusted
+    std::fs::write(project.join("a.txt"), "two\n").unwrap();
     let window = app.open(Some(&project), cx).await;
-    window.wait_until(cx, "status git", |_, cx| ..).await;   // menunggu backend (thread tokio sungguhan)
+    window.wait_until(cx, "git status", |_, cx| ..).await;   // waits for the backend (a real tokio thread)
     window.update(cx, |window, cx| { window.render_frame(cx); window.click("scm-stage-a.txt", cx); });
-    window.wait_until(cx, "ter-stage", |_, cx| ..).await;
+    window.wait_until(cx, "staged", |_, cx| ..).await;
     assert_eq!(git(&project, &["diff", "--cached", "--name-only"]).trim(), "a.txt");
 }
 ```
 
-Catatan uji tampilan:
+Notes on view tests:
 
-- Jangan `use gpui_kit::*;` di modul uji (membayangi `#[test]`). Elemen yang diklik perlu `.id("...")`; elemen buatan sendiri yang ingin ditemukan `window.find(..)` perlu `.test_support()` (`gpui_kit::test::TestSupportExt`).
-- `window.input("teks", cx)` mengetik ke elemen yang fokus; `window.press("enter", cx)` menekan tombol bernama; `window.run_command(cx, "id")` menjalankan command.
-- Jangan menunggu dengan `cx.executor().timer(..)` di luar `wait_until`; waktu uji GPUI tidak berjalan sendiri.
-- Periksa hasil akhirnya di luar aplikasi (isi berkas, `git`), bukan hanya state tampilan.
+- Don't `use gpui_kit::*;` in test modules (it shadows `#[test]`). An element that gets clicked needs `.id("...")`; a custom element that `window.find(..)` should locate needs `.test_support()` (`gpui_kit::test::TestSupportExt`).
+- `window.input("text", cx)` types into the focused element; `window.press("enter", cx)` presses a named key; `window.run_command(cx, "id")` runs a command.
+- Don't wait with `cx.executor().timer(..)` outside `wait_until`; GPUI test time does not advance on its own.
+- Check the final result outside the app (file contents, `git`), not just view state.
 
-### Melihat tampilan tanpa layar
+### Seeing the UI headlessly
 
-Build debug menerima `ONCODE_DEV_SCRIPT` (lihat `app/src/dev.rs`): daftar langkah JSON (`wait`, `open`, `command`, `type`, `key`) yang dijalankan setelah jendela terbuka. Dengan `Xvfb` dan lavapipe, hasilnya bisa ditangkap dengan `xwd`. Pakai `XDG_CONFIG_HOME`/`XDG_DATA_HOME` sementara agar pengaturan pengguna tidak tersentuh.
+Debug builds accept `ONCODE_DEV_SCRIPT` (see `app/src/dev.rs`): a JSON list of steps (`wait`, `open`, `command`, `type`, `key`) that runs after the window opens. With `Xvfb` and lavapipe, the result can be captured with `xwd`. Use a temporary `XDG_CONFIG_HOME`/`XDG_DATA_HOME` so the user's settings are not touched.

@@ -1,4 +1,4 @@
-//! Sidebar Pull Requests, tab detail PR/MR, dialog membuat PR, dan clone dari akun.
+//! The Pull Requests sidebar, the PR/MR detail tab, the create-PR dialog, and cloning from an account.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -33,14 +33,14 @@ pub const SIDEBAR_ID: &str = "pullRequests";
 
 enum ListState {
     Loading,
-    /// Folder bukan repositori atau tidak punya remote yang dikenali.
+    /// The folder is not a repository or has no recognized remote.
     NoRemote,
     SignedOut(ForgeContext),
     Ready { context: ForgeContext, items: Vec<PullRequest>, next_page: Option<u32> },
     Failed(String),
 }
 
-/// Sidebar daftar PR/MR repositori jendela ini.
+/// Sidebar list of PRs/MRs of this window's repository.
 pub struct PullRequestsView {
     env: Env,
     filter: PrFilter,
@@ -202,7 +202,7 @@ impl Render for PullRequestsView {
     }
 }
 
-// ----- Tab detail -----
+// ----- Detail tab -----
 
 enum DetailState {
     Loading,
@@ -347,9 +347,9 @@ impl Render for PullRequestTab {
     }
 }
 
-// ----- Membuat PR -----
+// ----- Creating a PR -----
 
-/// Dialog "Create Pull Request" untuk branch aktif.
+/// The "Create Pull Request" dialog for the current branch.
 pub struct CreatePullRequest {
     env: Env,
     context: ForgeContext,
@@ -446,7 +446,7 @@ impl Render for CreatePullRequest {
     }
 }
 
-/// Membuka dialog "Create Pull Request" untuk repositori jendela ini.
+/// Opens the "Create Pull Request" dialog for this window's repository.
 pub fn create_pull_request(window: &mut Window, cx: &mut App) {
     let Some(workbench) = Workbench::for_window(window, cx) else { return };
     let env = workbench.read(cx).env().clone();
@@ -491,7 +491,7 @@ pub fn create_pull_request(window: &mut Window, cx: &mut App) {
 
 // ----- Clone -----
 
-/// Clone: dari URL atau dari daftar repositori akun yang sudah masuk; lalu menawarkan untuk membuka.
+/// Clone: from a URL or from the repository list of a signed-in account; then offers to open it.
 pub fn clone_repository(core: Shared, window: &mut Window, cx: &mut App) {
     window
         .spawn(cx, async move |cx| {

@@ -1,5 +1,5 @@
-//! Menerapkan `WorkspaceEdit` (rename, code action): berkas yang terbuka disunting lewat editornya
-//! sehingga bisa di-undo; berkas yang tertutup ditulis langsung ke disk dengan encoding aslinya.
+//! Applies a `WorkspaceEdit` (rename, code action): open files are edited through their editor so
+//! they can be undone; closed files are written straight to disk with their original encoding.
 
 use std::collections::BTreeMap;
 
@@ -13,7 +13,7 @@ use oncode_workspace::OpenedFile;
 
 use crate::hub::{encoding_for, LspHub};
 
-/// Suntingan per path absolut.
+/// Edits per absolute path.
 pub fn edits_by_path(edit: WorkspaceEdit) -> BTreeMap<String, Vec<TextEdit>> {
     let mut out: BTreeMap<String, Vec<TextEdit>> = BTreeMap::new();
     if let Some(changes) = edit.changes {
@@ -27,7 +27,7 @@ pub fn edits_by_path(edit: WorkspaceEdit) -> BTreeMap<String, Vec<TextEdit>> {
             .into_iter()
             .filter_map(|operation| match operation {
                 DocumentChangeOperation::Edit(edit) => Some(edit),
-                // Membuat/mengganti nama/menghapus berkas tidak didukung (sama dengan v0.2).
+                // Creating/renaming/deleting files is not supported (same as v0.2).
                 DocumentChangeOperation::Op(_) => None,
             })
             .collect(),
@@ -43,7 +43,7 @@ pub fn edits_by_path(edit: WorkspaceEdit) -> BTreeMap<String, Vec<TextEdit>> {
     out
 }
 
-/// Menerapkan suntingan lalu menampilkan ringkasannya. Hasil: jumlah berkas yang berubah.
+/// Applies the edits and then shows a summary. Result: the number of files changed.
 pub fn apply_workspace_edit(hub: WeakEntity<LspHub>, edit: WorkspaceEdit, window: &mut Window, cx: &mut App) -> Task<usize> {
     let per_path = edits_by_path(edit);
     let Some(workbench) = Workbench::for_window(window, cx) else { return Task::ready(0) };
@@ -61,7 +61,7 @@ pub fn apply_workspace_edit(hub: WeakEntity<LspHub>, edit: WorkspaceEdit, window
             Some(state) => {
                 state.update(cx, |state, cx| {
                     if encoding == PositionEncoding::Utf16 {
-                        // Urutan dari belakang agar posisi suntingan berikutnya tetap sah.
+                        // Applied from the back so the positions of the remaining edits stay valid.
                         let mut edits = edits.clone();
                         edits.sort_by(|a, b| b.range.start.cmp(&a.range.start));
                         state.apply_lsp_edits(&edits, window, cx);

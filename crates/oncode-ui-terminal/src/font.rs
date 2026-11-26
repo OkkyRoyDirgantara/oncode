@@ -1,25 +1,25 @@
-//! Font terminal: memilih keluarga font yang terpasang dari pengaturan, dan menghitung ukuran sel.
-//! Murni agar bisa diuji.
+//! Terminal font: picks the installed font family from the settings, and computes the cell size.
+//! Pure so it can be tested.
 
 use oncode_core::Settings;
 
-/// Tinggi baris bawaan, dalam persen ukuran font.
+/// Default line height, as a percentage of the font size.
 pub const DEFAULT_LINE_HEIGHT: u32 = 120;
 
-/// Nama-nama di daftar font (dipisah koma, boleh berkutip), tanpa nama generik.
+/// The names in a font list (comma-separated, may be quoted), without generic names.
 fn names(list: &str) -> impl Iterator<Item = &str> {
     list.split(',')
         .map(|name| name.trim().trim_matches(['"', '\'']).trim())
         .filter(|name| !name.is_empty() && !matches!(name.to_ascii_lowercase().as_str(), "monospace" | "sans-serif" | "serif" | "system-ui"))
 }
 
-/// Font pertama di daftar yang terpasang, dengan penulisan nama seperti yang terpasang.
+/// The first font in the list that is installed, with the name spelled as it is installed.
 pub fn pick_family(list: &str, installed: &[String]) -> Option<String> {
     names(list).find_map(|name| installed.iter().find(|font| font.eq_ignore_ascii_case(name)).cloned())
 }
 
-/// Keluarga font terminal: `terminal.fontFamily`, lalu daftar font editor. `None` berarti tidak
-/// ada yang terpasang; pemanggil memakai font monospace tema.
+/// The terminal font family: `terminal.fontFamily`, then the editor font list. `None` means none
+/// is installed; the caller uses the theme's monospace font.
 pub fn terminal_family(settings: &Settings, installed: &[String]) -> Option<String> {
     settings.terminal.font_family.as_deref().and_then(|list| pick_family(list, installed)).or_else(|| pick_family(&settings.editor.font_family, installed))
 }
@@ -28,19 +28,19 @@ pub fn font_size(settings: &Settings) -> f32 {
     settings.terminal.font_size.unwrap_or(settings.editor.font_size).clamp(8, 40) as f32
 }
 
-/// Tinggi baris sebagai kelipatan ukuran font.
+/// Line height as a multiple of the font size.
 pub fn line_height_factor(settings: &Settings) -> f32 {
     settings.terminal.line_height.unwrap_or(DEFAULT_LINE_HEIGHT).clamp(100, 200) as f32 / 100.
 }
 
-/// Lebar dan tinggi sel, dibulatkan ke piksel perangkat: latar sel-sel bersebelahan lalu
-/// bertemu tepat di batas piksel, tanpa garis tipis di antaranya.
+/// Cell width and height, rounded to device pixels: the backgrounds of adjacent cells then
+/// meet exactly at the pixel boundary, with no thin line between them.
 pub fn cell_size(advance: f32, font_size: f32, factor: f32, scale: f32) -> (f32, f32) {
     let snap = |value: f32| ((value * scale).round() / scale).max(1. / scale);
     (snap(advance), snap(font_size * factor))
 }
 
-/// Ketebalan garis tipis (box drawing, garis bawah, kursor), minimal satu piksel perangkat.
+/// Thickness of thin lines (box drawing, underline, cursor), at least one device pixel.
 pub fn line_thickness(font_size: f32, scale: f32) -> f32 {
     (font_size * 0.07 * scale).round().max(1.) / scale
 }
@@ -68,7 +68,7 @@ mod tests {
         assert_eq!(terminal_family(&settings, &installed()).as_deref(), Some("Menlo"));
         settings.terminal.font_family = Some("JetBrains Mono".into());
         assert_eq!(terminal_family(&settings, &installed()).as_deref(), Some("JetBrains Mono"));
-        // Font terminal yang tidak terpasang tidak membuat terminal jatuh ke font proporsional.
+        // A terminal font that is not installed does not make the terminal fall back to a proportional font.
         settings.terminal.font_family = Some("Not Installed".into());
         assert_eq!(terminal_family(&settings, &installed()).as_deref(), Some("Menlo"));
     }

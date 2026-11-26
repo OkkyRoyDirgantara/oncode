@@ -1,4 +1,4 @@
-//! Panel Source Control: kepala repositori, kotak commit, banner operasi, daftar perubahan, dan stash.
+//! The Source Control panel: the repository header, the commit box, the operation banner, the list of changes, and stashes.
 
 use std::ops::Range;
 use std::sync::Arc;
@@ -31,7 +31,7 @@ use crate::store::{ScmEvent, ScmStore};
 
 const ROW_HEIGHT: f32 = 26.;
 
-/// Isi menu "More actions": (label, id command). `None` = pemisah.
+/// Contents of the "More actions" menu: (label, command id). `None` = separator.
 const HEADER_MENU: &[Option<(&str, &str)>] = &[
     Some(("Pull", "git.pull")),
     Some(("Push", "git.push")),
@@ -58,7 +58,7 @@ pub struct ScmPanel {
     store: Entity<ScmStore>,
     git: Option<Git>,
     message: Entity<TextareaState>,
-    /// Nama branch yang terakhir dipasang di placeholder kotak commit.
+    /// The branch name last set in the commit box placeholder.
     placeholder_for: String,
     amend: bool,
     signoff: bool,
@@ -66,19 +66,19 @@ pub struct ScmPanel {
     view: ViewState,
     rows: Vec<Row>,
     scroll: UniformListScrollHandle,
-    /// Alasan Git tidak tersedia (tidak terpasang atau terlalu lama).
+    /// Why Git is unavailable (not installed or too old).
     git_error: Option<String>,
-    /// "Generate Commit Message" yang sedang berjalan.
+    /// The "Generate Commit Message" that is running.
     generating: Option<Generation>,
     _subscriptions: Vec<Subscription>,
 }
 
-/// Pesan commit yang sedang ditulis Claude.
+/// A commit message that Claude is writing.
 struct Generation {
-    /// Isi kotak commit sebelum dimulai; dikembalikan bila gagal atau dihentikan.
+    /// The commit box content before it started; restored if it fails or is stopped.
     draft: String,
     _task: Task<()>,
-    /// Dijatuhkan untuk membatalkan permintaan HTTP di runtime backend.
+    /// Dropped to cancel the HTTP request on the backend runtime.
     _cancel: oneshot::Sender<()>,
 }
 
@@ -90,7 +90,7 @@ fn icon_button(id: impl Into<SharedString>, icon: Lucide, tooltip: impl Into<Sha
     Button::new(id.into()).ghost().xsmall().icon(Icon::new(icon)).tooltip(tooltip)
 }
 
-/// Item menu yang menjalankan `run` di luar pembaruan entitas mana pun.
+/// A menu item that runs `run` outside of any entity update.
 fn menu_item(label: impl Into<SharedString>, run: impl Fn(&mut Window, &mut App) + 'static) -> PopupMenuItem {
     PopupMenuItem::new(label).on_click(move |_, window, cx| run(window, cx))
 }
@@ -112,7 +112,7 @@ impl ScmPanel {
             }),
             cx.subscribe_in(&message, window, |this: &mut Self, _, event: &InputEvent, window, cx| match event {
                 InputEvent::PressEnter { secondary: true, .. } => this.submit(None, window, cx),
-                // Petunjuk panjang subjek mengikuti ketikan.
+                // The subject length hint follows typing.
                 InputEvent::Change => cx.notify(),
                 _ => {}
             }),
@@ -143,7 +143,7 @@ impl ScmPanel {
             generating: None,
             _subscriptions: subscriptions,
         };
-        // Command `git.commit` bisa datang sebelum panel ini dibangun.
+        // The `git.commit` command can arrive before this panel is built.
         if this.store.update(cx, |store, _| store.take_commit_focus()) {
             cx.defer_in(window, |this, window, cx| this.focus_commit(window, cx));
         }
@@ -156,7 +156,7 @@ impl ScmPanel {
         this
     }
 
-    /// Teks pesan commit saat ini.
+    /// The current commit message text.
     pub fn message(&self, cx: &App) -> String {
         self.message.read(cx).value().to_string()
     }
@@ -180,7 +180,7 @@ impl ScmPanel {
         self.store.read(cx).busy().is_some()
     }
 
-    /// Menjalankan alur aksi pada repositori panel ini.
+    /// Runs an action flow on this panel's repository.
     fn run(&self, window: &mut Window, cx: &mut App, flow: impl AsyncFnOnce(Git, &mut gpui_kit::AsyncWindowContext) + 'static) {
         let Some(git) = self.git.clone() else { return };
         actions::spawn(window, cx, async move |cx| flow(git, cx).await);
@@ -194,7 +194,7 @@ impl ScmPanel {
         let request = CommitRequest { message: self.message(cx), amend: self.amend, signoff: self.signoff, no_verify: self.no_verify, then };
         cx.spawn_in(window, async move |this, cx| {
             if actions::commit(&git, request, cx).await {
-                // Kotak commit dikosongkan setelah commit berhasil.
+                // The commit box is cleared after a successful commit.
                 let _ = this.update_in(cx, |this, window, cx| {
                     this.message.update(cx, |state, cx| state.set_value("", window, cx));
                     this.amend = false;
@@ -205,14 +205,14 @@ impl ScmPanel {
         .detach();
     }
 
-    /// `true` selagi Claude menulis pesan commit.
+    /// `true` while Claude is writing the commit message.
     pub fn is_generating(&self) -> bool {
         self.generating.is_some()
     }
 
-    /// "Generate Commit Message": Claude menulis pesan dari perubahan yang di-stage, dan teksnya
-    /// mengalir ke kotak commit. Isi kotak yang sudah diketik menjadi awal pesan. Dipanggil lagi
-    /// selagi berjalan berarti berhenti.
+    /// "Generate Commit Message": Claude writes a message from the staged changes, and the text
+    /// streams into the commit box. What was already typed in the box becomes the start of the message. Calling it again
+    /// while it runs means stop.
     pub fn generate_message(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.generating.is_some() {
             self.stop_generating(window, cx);
@@ -233,12 +233,12 @@ impl ScmPanel {
             });
             tokio::select! {
                 result = api::ai::ai_commit_message(&core, root, prompt_draft, on_text) => Some(result),
-                // Pengirimnya dijatuhkan saat dihentikan: permintaan HTTP ikut dibatalkan.
+                // The sender is dropped when stopped: the HTTP request is canceled too.
                 _ = cancel_rx => None,
             }
         });
         let task = cx.spawn_in(window, async move |this, cx| {
-            // Saluran tertutup saat permintaan selesai atau dibatalkan.
+            // The channel closes when the request finishes or is canceled.
             let mut text = String::new();
             while let Some(first) = text_rx.recv().await {
                 text.push_str(&first);
@@ -278,10 +278,10 @@ impl ScmPanel {
             }
             Some(Err(error)) => error,
         };
-        // Gagal: kotak commit kembali seperti sebelum dimulai.
+        // Failed: the commit box goes back to how it was before it started.
         self.message.update(cx, |state, cx| state.set_value(generation.draft, window, cx));
         match error.code.as_str() {
-            // Belum ada key, atau key ditolak: minta key yang sesuai lalu coba sekali lagi.
+            // No key yet, or the key was rejected: ask for the matching key, then try once more.
             "noApiKey" | "unauthorized" | "customUnauthorized" => {
                 let kind = if error.code == "customUnauthorized" { crate::ai::KeyKind::Custom } else { crate::ai::KeyKind::Anthropic };
                 let reason = (error.code != "noApiKey").then(|| error.message.clone());
@@ -304,7 +304,7 @@ impl ScmPanel {
         if !amend || !self.message(cx).trim().is_empty() {
             return;
         }
-        // Amend dengan kotak kosong: isi dengan pesan commit terakhir.
+        // Amend with an empty box: fill it with the last commit message.
         let (core, root) = (git.core.clone(), git.root.clone());
         let task = spawn_core(cx, async move { api::git::git_last_message(&core, root).await });
         cx.spawn_in(window, async move |this, cx| {
@@ -323,7 +323,7 @@ impl ScmPanel {
         cx.notify();
     }
 
-    /// Membuka atau menutup daftar berkas sebuah stash; berkasnya dimuat saat pertama dibuka.
+    /// Opens or closes the file list of a stash; its files are loaded the first time it is opened.
     fn toggle_stash(&mut self, stash: &Stash, cx: &mut Context<Self>) {
         if self.view.expanded.remove(&stash.oid).is_some() {
             cx.notify();
@@ -350,7 +350,7 @@ impl ScmPanel {
         .detach();
     }
 
-    // ----- Tampilan -----
+    // ----- Rendering -----
 
     fn render_empty(&self, cx: &mut Context<Self>) -> AnyElement {
         let theme = cx.theme();
@@ -657,7 +657,7 @@ impl ScmPanel {
             .into_any_element()
     }
 
-    /// Kerangka baris berkas: nama, folder redup, tombol aksi (muncul saat disorot), dan huruf status.
+    /// The skeleton of a file row: the name, a dimmed folder, action buttons (shown on hover), and the status letter.
     #[allow(clippy::too_many_arguments)]
     fn file_row(
         &self,
@@ -698,7 +698,7 @@ impl ScmPanel {
             .child(div().flex_none().w(px(14.)).text_center().text_xs().font_weight(gpui_kit::FontWeight::SEMIBOLD).text_color(letter_color).child(letter))
     }
 
-    /// Item menu konteks yang sama untuk semua baris berkas.
+    /// The same context menu items for all file rows.
     fn common_menu(menu: PopupMenu, git: &Git, path: &str, deleted: bool) -> PopupMenu {
         let (open_git, open_path) = (git.clone(), path.to_string());
         let (history_root, history_path) = (git.root.clone(), path.to_string());
@@ -729,7 +729,7 @@ impl ScmPanel {
         self.file_row(format!("scm-conflict-{path}"), &path, tooltip, "!", cx.theme().danger, false, 22., vec![resolve], cx)
             .on_click(move |_, window, cx| click(window, cx))
             .context_menu(move |menu, _, _| {
-                // `None` = tandai selesai dengan isi berkas saat ini.
+                // `None` = mark as resolved with the current file content.
                 let resolve = |side: Option<ConflictSide>| {
                     let (git, path) = (git.clone(), path.clone());
                     move |window: &mut Window, cx: &mut App| {
@@ -754,7 +754,7 @@ impl ScmPanel {
         let Some(git) = self.git.clone() else { return div().into_any_element() };
         let path = change.path.clone();
         let deleted = change.kind == ChangeKind::Deleted;
-        // Rename di-unstage bersama path lamanya.
+        // A rename is unstaged together with its old path.
         let paths: Vec<String> = std::iter::once(path.clone()).chain(change.orig_path.clone()).collect();
         let unstage = {
             let paths = paths.clone();
@@ -794,7 +794,7 @@ impl ScmPanel {
         let untracked = change.untracked;
         let deleted = change.kind == ChangeKind::Deleted;
         let discard_label = if untracked { "Delete (move to trash)…" } else { "Discard changes…" };
-        // Berkas untracked dibuang ke tempat sampah; yang terlacak dikembalikan ke isi index.
+        // Untracked files are moved to the trash; tracked ones are restored to the index content.
         let discard_flow = move |git: Git, path: String, window: &mut Window, cx: &mut App| {
             actions::spawn(window, cx, async move |cx| {
                 let (tracked, untracked) = if untracked { (Vec::new(), vec![path]) } else { (vec![path], Vec::new()) };
@@ -952,7 +952,7 @@ impl ScmPanel {
     }
 }
 
-/// Warna huruf status, seperti penanda Git di explorer.
+/// The status letter color, like the Git markers in the explorer.
 fn kind_color(kind: ChangeKind, untracked: bool, cx: &App) -> gpui_kit::Hsla {
     let theme = cx.theme();
     if untracked {

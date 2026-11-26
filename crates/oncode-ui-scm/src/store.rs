@@ -1,5 +1,5 @@
-//! State Source Control per jendela: ref, daftar stash, dan indikator sibuk. Snapshot
-//! repositori sendiri tinggal di `oncode_ui::repos`; store ini hanya menambah yang tidak ada di sana.
+//! Source Control state per window: refs, the stash list, and the busy indicator. The repository
+//! snapshot itself lives in `oncode_ui::repos`; this store only adds what is not there.
 
 use std::time::{Duration, Instant};
 
@@ -8,13 +8,13 @@ use oncode_core::api;
 use oncode_git::{Head, Refs, RepoSnapshot, Stash};
 use oncode_ui::{repos, spawn_core, Env, ReposEvent, Workbench};
 
-/// Operasi Git yang sedang berjalan untuk repositori jendela ini.
+/// The Git operation currently running for this window's repository.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Busy {
     pub label: SharedString,
-    /// 0–100, atau `None` bila tidak diketahui.
+    /// 0–100, or `None` if unknown.
     pub percent: Option<u8>,
-    /// Untuk membatalkan lewat `api::app::app_cancel`.
+    /// For canceling through `api::app::app_cancel`.
     pub operation_id: Option<String>,
 }
 
@@ -23,7 +23,7 @@ impl Busy {
         Self { label: label.into(), percent: None, operation_id: None }
     }
 
-    /// Teks untuk panel dan status bar, mis. "Fetch: Receiving objects 40%".
+    /// Text for the panel and status bar, e.g. "Fetch: Receiving objects 40%".
     pub fn text(&self) -> String {
         match self.percent {
             Some(percent) => format!("{} {percent}%", self.label),
@@ -34,9 +34,9 @@ impl Busy {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ScmEvent {
-    /// Command `git.commit`: pindahkan fokus ke kotak pesan commit.
+    /// The `git.commit` command: move focus to the commit message box.
     FocusCommit,
-    /// Command `git.generateCommitMessage`: tulis pesan commit dengan Claude.
+    /// The `git.generateCommitMessage` command: write the commit message with Claude.
     GenerateMessage,
 }
 
@@ -46,14 +46,14 @@ pub struct ScmStore {
     refs: Option<Refs>,
     stashes: Vec<Stash>,
     busy: Option<Busy>,
-    /// HEAD, oid HEAD, dan jumlah stash dari snapshot terakhir; perubahan di sini memuat ulang ref.
+    /// HEAD, HEAD oid, and stash count from the last snapshot; a change here reloads the refs.
     seen: Option<(Head, Option<String>, u32)>,
     reloading: bool,
     reload_again: bool,
-    /// Fokus ke kotak commit diminta sebelum panelnya dibangun.
+    /// Focus on the commit box was requested before its panel was built.
     pending_focus: bool,
     pending_generate: bool,
-    /// Panel Source Control jendela ini, bila sudah dibangun.
+    /// This window's Source Control panel, if already built.
     panel: Option<WeakEntity<crate::view::ScmPanel>>,
     _auto_fetch: Task<()>,
     _subscriptions: Vec<Subscription>,
@@ -61,10 +61,10 @@ pub struct ScmStore {
 
 impl EventEmitter<ScmEvent> for ScmStore {}
 
-/// Selang pemeriksaan fetch otomatis; fetch sendiri mengikuti `git.autoFetchMinutes`.
+/// Interval of the auto-fetch check; the fetch itself follows `git.autoFetchMinutes`.
 const AUTO_FETCH_TICK: Duration = Duration::from_secs(30);
 
-/// Syarat fetch otomatis: diaktifkan, jendela aktif, tidak ada operasi berjalan, ada remote, dan selangnya sudah lewat.
+/// Auto-fetch conditions: enabled, window active, no operation running, a remote exists, and the interval has passed.
 pub fn should_auto_fetch(minutes: u32, since_last: Duration, window_active: bool, busy: bool, has_remote: bool, operation_in_progress: bool) -> bool {
     minutes > 0 && window_active && !busy && has_remote && !operation_in_progress && since_last >= Duration::from_secs(u64::from(minutes) * 60)
 }
@@ -91,7 +91,7 @@ impl ScmStore {
                     last = Instant::now();
                     let core = this.env.core.clone();
                     let id = format!("auto-fetch-{}", core.next_id());
-                    // Galat diabaikan agar tidak mengganggu.
+                    // Errors are ignored so they do not get in the way.
                     Some(spawn_core(cx, async move { api::git::git_fetch(&core, root, None, id, std::sync::Arc::new(|_| {})).await }))
                 }) else {
                     return;
@@ -116,7 +116,7 @@ impl ScmStore {
             _auto_fetch: auto_fetch,
             _subscriptions: vec![subscription],
         };
-        // Snapshot bisa saja sudah ada (jendela kedua untuk repositori yang sama).
+        // A snapshot may already exist (a second window for the same repository).
         if this.snapshot(cx).is_some() {
             this.on_snapshot(cx);
         }
@@ -127,7 +127,7 @@ impl ScmStore {
         &self.env
     }
 
-    /// Akar repositori jendela ini.
+    /// The root of this window's repository.
     pub fn root(&self) -> Option<&str> {
         self.root.as_deref()
     }
@@ -160,7 +160,7 @@ impl ScmStore {
         }
     }
 
-    /// Memperbarui progres operasi yang sedang berjalan, bila masih operasi yang sama.
+    /// Updates the progress of the running operation, if it is still the same operation.
     pub fn set_progress(&mut self, operation_id: &str, label: SharedString, percent: Option<u8>, cx: &mut Context<Self>) {
         if let Some(busy) = &mut self.busy {
             if busy.operation_id.as_deref() == Some(operation_id) {
@@ -176,7 +176,7 @@ impl ScmStore {
         cx.emit(ScmEvent::FocusCommit);
     }
 
-    /// Mengambil permintaan fokus yang belum dilayani.
+    /// Takes a focus request that has not been served yet.
     pub fn take_commit_focus(&mut self) -> bool {
         std::mem::take(&mut self.pending_focus)
     }
@@ -186,7 +186,7 @@ impl ScmStore {
         cx.emit(ScmEvent::GenerateMessage);
     }
 
-    /// Mengambil permintaan "Generate Commit Message" yang belum dilayani (panel belum dibangun).
+    /// Takes a "Generate Commit Message" request that has not been served yet (the panel is not built yet).
     pub fn take_generate_request(&mut self) -> bool {
         std::mem::take(&mut self.pending_generate)
     }
@@ -195,14 +195,14 @@ impl ScmStore {
         self.panel = Some(panel);
     }
 
-    /// Panel Source Control jendela ini, bila sudah dibangun dan masih ada.
+    /// This window's Source Control panel, if built and still alive.
     pub fn panel(&self) -> Option<Entity<crate::view::ScmPanel>> {
         self.panel.as_ref()?.upgrade()
     }
 
     fn on_snapshot(&mut self, cx: &mut Context<Self>) {
         let Some(snapshot) = self.snapshot(cx) else { return };
-        // Jumlah stash dan HEAD ikut menentukan daftar yang ditampilkan.
+        // The stash count and HEAD also determine the list that is shown.
         let seen = (snapshot.head.clone(), snapshot.head_oid.clone(), snapshot.stash_count);
         if self.seen.as_ref() != Some(&seen) {
             self.seen = Some(seen);
@@ -211,7 +211,7 @@ impl ScmStore {
         cx.notify();
     }
 
-    /// Memuat ulang ref dan stash. Permintaan yang datang selagi memuat digabung menjadi satu muatan berikutnya.
+    /// Reloads refs and stashes. Requests that arrive while loading are merged into one next load.
     pub fn reload_refs(&mut self, cx: &mut Context<Self>) {
         let Some(root) = self.root.clone() else { return };
         if self.reloading {
@@ -245,7 +245,7 @@ impl ScmStore {
     }
 }
 
-/// Store Source Control milik sebuah jendela; `None` bila folder tidak dipercaya.
+/// A window's Source Control store; `None` if the folder is not trusted.
 pub fn store(workbench: &Workbench) -> Option<Entity<ScmStore>> {
     workbench.extension::<Entity<ScmStore>>()
 }
@@ -258,12 +258,12 @@ mod tests {
     fn auto_fetch_needs_every_condition() {
         let five = Duration::from_secs(300);
         assert!(should_auto_fetch(5, five, true, false, true, false));
-        assert!(!should_auto_fetch(0, five, true, false, true, false), "0 menit = tidak pernah");
-        assert!(!should_auto_fetch(5, Duration::from_secs(299), true, false, true, false), "selang belum lewat");
-        assert!(!should_auto_fetch(5, five, false, false, true, false), "jendela tidak aktif");
-        assert!(!should_auto_fetch(5, five, true, true, true, false), "operasi lain berjalan");
-        assert!(!should_auto_fetch(5, five, true, false, false, false), "tanpa remote");
-        assert!(!should_auto_fetch(5, five, true, false, true, true), "merge/rebase sedang berhenti");
+        assert!(!should_auto_fetch(0, five, true, false, true, false), "0 minutes = never");
+        assert!(!should_auto_fetch(5, Duration::from_secs(299), true, false, true, false), "interval has not passed");
+        assert!(!should_auto_fetch(5, five, false, false, true, false), "window is not active");
+        assert!(!should_auto_fetch(5, five, true, true, true, false), "another operation is running");
+        assert!(!should_auto_fetch(5, five, true, false, false, false), "no remote");
+        assert!(!should_auto_fetch(5, five, true, false, true, true), "a merge/rebase is stopped");
     }
 
     #[test]

@@ -1,8 +1,8 @@
-//! Jembatan language server ke editor: satu server per bahasa per jendela, sinkronisasi dokumen,
-//! penyedia completion/hover/definisi/code action untuk `EditorState`, dan diagnostics.
+//! The bridge from language servers to the editor: one server per language per window, document
+//! sync, completion/hover/definition/code action providers for `EditorState`, and diagnostics.
 //!
-//! Klien JSON-RPC (`oncode_lsp::Client`) aman dipakai dari thread mana pun; semua permintaan
-//! dijalankan di runtime backend lewat `spawn_core`, hasilnya diteruskan ke thread utama.
+//! The JSON-RPC client (`oncode_lsp::Client`) is safe to use from any thread; all requests run on
+//! the backend runtime via `spawn_core`, and the results are forwarded to the main thread.
 
 use std::collections::{HashMap, HashSet};
 use std::ops::Range;
@@ -30,19 +30,19 @@ use tokio::sync::mpsc;
 
 use crate::diagnostics::Diagnostics;
 
-/// Batas percobaan menyalakan ulang server yang mati sendiri.
+/// Limit on attempts to restart a server that died on its own.
 const MAX_RESTARTS: u32 = 3;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ServerStatus {
     Starting,
     Running,
-    /// Server tidak terpasang atau gagal dimulai; pesan untuk pengguna.
+    /// The server is not installed or failed to start; the message is for the user.
     Failed(String),
     Stopped,
 }
 
-/// Pesan dari thread transport ke thread utama.
+/// A message from the transport thread to the main thread.
 enum Incoming {
     Notification { method: String, params: Value },
     Exited { code: Option<i32>, stderr_tail: String },
@@ -56,10 +56,10 @@ impl ClientHandler for Handler {
     }
 }
 
-/// Satu dokumen yang sudah dibuka di server.
+/// A single document that is already open on the server.
 struct OpenDoc {
     uri: lsp_types::Uri,
-    /// Isi terakhir yang dikirim ke server.
+    /// The last content sent to the server.
     sent: String,
     _subscriptions: Vec<Subscription>,
 }
@@ -71,7 +71,7 @@ pub struct Server {
     id: Option<u32>,
     restarts: u32,
     docs: HashMap<String, OpenDoc>,
-    /// Buffer yang menunggu server siap.
+    /// Buffers waiting for the server to be ready.
     waiting: Vec<WeakEntity<Buffer>>,
     _tasks: Vec<Task<()>>,
 }
@@ -91,14 +91,14 @@ pub enum HubEvent {
     StatusChanged(String),
 }
 
-/// Semua language server satu jendela.
+/// All of a single window's language servers.
 pub struct LspHub {
     env: Env,
     servers: HashMap<String, Server>,
     diagnostics: Entity<Diagnostics>,
-    /// Bahasa yang sudah diberi tahu "server tidak terpasang", agar tidak diulang.
+    /// Languages that have already been told "server is not installed", so it is not repeated.
     warned: HashSet<String>,
-    /// State editor per path, untuk menampilkan diagnostics dan menerapkan suntingan.
+    /// Editor state per path, to show diagnostics and apply edits.
     editors: HashMap<String, Vec<WeakEntity<EditorState>>>,
     _subscriptions: Vec<Subscription>,
 }
@@ -135,7 +135,7 @@ impl LspHub {
         self.servers.values()
     }
 
-    /// Server untuk berkas ini, bila sudah berjalan.
+    /// The server for this file, if it is already running.
     pub fn server_for_path(&self, path: &str) -> Option<&Server> {
         self.servers.get(language_for_path(path).lsp).filter(|server| server.status == ServerStatus::Running)
     }
@@ -144,7 +144,7 @@ impl LspHub {
         self.env.trusted && self.env.core.effective_settings(&self.env.window).lsp.enabled
     }
 
-    /// Menghubungkan sebuah editor berkas: memasang penyedia dan membuka dokumennya di server.
+    /// Connects a file editor: installs the providers and opens its document on the server.
     fn attach(&mut self, buffer: Entity<Buffer>, state: Entity<EditorState>, window: &mut Window, cx: &mut Context<Self>) {
         if !self.enabled() {
             return;
@@ -165,9 +165,9 @@ impl LspHub {
             lsp.hover_provider = Some(provider.clone());
             lsp.definition_provider = Some(provider.clone());
             lsp.code_action_providers = vec![provider.clone()];
-            // Definisi di berkas lain dibuka di tab editor.
-            // Definisi di berkas yang sama ditangani editor itu sendiri; berkas lain dibuka sesudahnya
-            // (editor sedang diperbarui saat handler ini dipanggil).
+            // A definition in another file is opened in an editor tab.
+            // A definition in the same file is handled by that editor itself; another file is opened afterwards
+            // (the editor is being updated while this handler is called).
             lsp.show_document = Some(oncode_ui::editor::show_document_handler(workbench.clone(), open_path.clone()));
             cx.notify();
         });
@@ -197,7 +197,7 @@ impl LspHub {
             return;
         };
         if !ready {
-            // Dibuka saat isi sudah dimuat.
+            // Opened once the content has loaded.
             let language = language.to_string();
             let subscription = cx.subscribe_in(&buffer, window, move |this: &mut Self, buffer, event: &BufferEvent, window, cx| {
                 if matches!(event, BufferEvent::Loaded) {
@@ -230,7 +230,7 @@ impl LspHub {
         server.docs.insert(path, OpenDoc { uri, sent: text, _subscriptions: subscriptions });
     }
 
-    /// Mengirim isi terbaru sebuah buffer bila berbeda dari yang terakhir dikirim.
+    /// Sends a buffer's latest content if it differs from what was last sent.
     fn sync(&mut self, language: &str, buffer: &Entity<Buffer>, cx: &App) {
         let path = buffer.read(cx).path().to_string();
         let Some(text) = buffer.read(cx).text(cx).map(|rope| rope.to_string()) else { return };
@@ -244,7 +244,7 @@ impl LspHub {
         if doc.sent == text {
             return;
         }
-        // Seluruh isi dikirim sebagai satu perubahan: selalu sah, juga untuk server bertahap.
+        // The whole content is sent as a single change: always valid, also for incremental servers.
         let change = TextDocumentContentChangeEvent { range: None, range_length: None, text: text.clone() };
         let full = text.clone();
         if client.did_change(&doc.uri, vec![change], move || full).is_ok() {
@@ -271,12 +271,12 @@ impl LspHub {
         }
     }
 
-    /// Memastikan isi yang dikirim ke server sama dengan isi editor sebelum sebuah permintaan.
+    /// Makes sure the content sent to the server equals the editor's content before a request.
     fn ensure_synced(&mut self, language: &str, path: &str, text: &Rope) {
         self.sync_text(language, path, text.to_string());
     }
 
-    // ----- Siklus hidup server -----
+    // ----- Server lifecycle -----
 
     fn start(&mut self, language: &str, window: &mut Window, cx: &mut Context<Self>) {
         let (incoming_tx, mut incoming_rx) = mpsc::unbounded_channel::<Incoming>();
@@ -295,7 +295,7 @@ impl LspHub {
                 }
             });
             let id = lsp_api::lsp_start(&core, &label, language_key, on_event).await?;
-            // Penulis tunggal: pesan keluar dikirim berurutan.
+            // A single writer: outgoing messages are sent in order.
             let writer_core = core.clone();
             tokio::spawn(async move {
                 while let Some(json) = outgoing.recv().await {
@@ -405,7 +405,7 @@ impl LspHub {
         }
     }
 
-    /// Server berhenti sendiri: diagnostics-nya dihapus, lalu dinyalakan ulang dengan jeda (terbatas).
+    /// The server stopped on its own: its diagnostics are removed, then it is restarted with a delay (limited).
     fn exited(&mut self, language: &str, code: Option<i32>, stderr_tail: String, window: &mut Window, cx: &mut Context<Self>) {
         self.diagnostics.update(cx, |diagnostics, cx| diagnostics.clear(Some(language), cx));
         let Some(server) = self.servers.get_mut(language) else { return };
@@ -431,7 +431,7 @@ impl LspHub {
             cx.background_executor().timer(delay).await;
             let _ = this.update_in(cx, |this, window, cx| {
                 this.start(&language, window, cx);
-                // Dokumen yang tadi terbuka dibuka lagi begitu server siap.
+                // The documents that were open are reopened as soon as the server is ready.
                 let buffers = Workbench::for_window(window, cx).and_then(|w| oncode_ui::editor::buffers(w.read(cx)));
                 if let (Some(buffers), Some(server)) = (buffers, this.servers.get_mut(&language)) {
                     for path in &reopen {
@@ -445,7 +445,7 @@ impl LspHub {
         .detach();
     }
 
-    /// Menghentikan lalu menyalakan ulang server sebuah bahasa (command "Restart Language Server").
+    /// Stops and then restarts a language's server (the "Restart Language Server" command).
     pub fn restart(&mut self, language: &str, window: &mut Window, cx: &mut Context<Self>) {
         let reopen: Vec<String> = self.servers.get(language).map(|server| server.docs.keys().cloned().collect()).unwrap_or_default();
         self.stop(language, cx);
@@ -479,7 +479,7 @@ impl LspHub {
         self.diagnostics.update(cx, |diagnostics, cx| diagnostics.clear(Some(language), cx));
     }
 
-    /// Menampilkan diagnostics sebuah berkas di semua editornya.
+    /// Shows a file's diagnostics in all of its editors.
     fn show_diagnostics(&mut self, path: &str, cx: &mut Context<Self>) {
         let Some(states) = self.editors.get_mut(path) else { return };
         states.retain(|state| state.upgrade().is_some());
@@ -505,8 +505,8 @@ impl LspHub {
         for state in states.iter().filter_map(WeakEntity::upgrade) {
             let items = items.clone();
             state.update(cx, |state, cx| {
-                // Kumpulan diagnostics menyimpan salinan teksnya sendiri untuk mengubah posisi
-                // menjadi offset; salinan itu disamakan dulu dengan isi editor saat ini.
+                // The diagnostics set keeps its own copy of the text to convert positions
+                // into offsets; that copy is first synced with the editor's current content.
                 let text = state.text().clone();
                 let mut items = items;
                 items.sort_by(|a, b| (a.range.start.line, a.range.start.character).cmp(&(b.range.start.line, b.range.start.character)));
@@ -519,7 +519,7 @@ impl LspHub {
         }
     }
 
-    /// Klien dan posisi kursor untuk permintaan pada sebuah dokumen.
+    /// The client and cursor position for a request on a document.
     pub(crate) fn request_context(&mut self, language: &str, path: &str, text: &Rope, offset: usize) -> Option<(Arc<Client>, Position)> {
         self.ensure_synced(language, path, text);
         let server = self.servers.get(language)?;
@@ -529,7 +529,7 @@ impl LspHub {
     }
 }
 
-/// Penyedia untuk satu editor berkas.
+/// A provider for a single file editor.
 struct Provider {
     hub: WeakEntity<LspHub>,
     language: String,
@@ -586,7 +586,7 @@ impl HoverProvider for Provider {
 
 impl DefinitionProvider for Provider {
     fn definitions(&self, text: &Rope, offset: usize, window: &mut Window, cx: &mut App) -> Task<GpuiResult<Vec<LocationLink>>> {
-        // Tanpa server yang berjalan, atau bila server tidak menemukan apa-apa: pencarian di proyek.
+        // Without a running server, or if the server finds nothing: search the project.
         let env = oncode_ui::Workbench::for_window(window, cx).map(|workbench| workbench.read(cx).env().clone());
         let Some((client, position)) = self.context(text, offset, Feature::Definition, cx) else {
             return match env {
@@ -611,7 +611,7 @@ impl DefinitionProvider for Provider {
     }
 }
 
-/// Semua bentuk jawaban `textDocument/definition` dijadikan `LocationLink`.
+/// Every form of `textDocument/definition` answer is turned into a `LocationLink`.
 pub fn definition_links(response: Option<GotoDefinitionResponse>) -> Vec<LocationLink> {
     match response {
         None => Vec::new(),
@@ -679,7 +679,7 @@ impl Drop for Provider {
     }
 }
 
-/// Encoding posisi server untuk sebuah berkas (UTF-16 bila tidak ada server).
+/// The server's position encoding for a file (UTF-16 if there is no server).
 pub fn encoding_for(hub: &LspHub, path: &str) -> PositionEncoding {
     hub.server_for_path(path).map(Server::encoding).unwrap_or(PositionEncoding::Utf16)
 }

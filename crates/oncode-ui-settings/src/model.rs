@@ -1,6 +1,6 @@
-//! Definisi kolom halaman pengaturan: label, penjelasan, cara membaca/menulis nilainya, dan
-//! validasi. Formulir dirender dari daftar ini, sehingga pencarian, penanda "ditimpa proyek",
-//! dan pengujian memakai satu sumber. Logika murni: tidak bergantung pada GPUI.
+//! Field definitions for the settings page: label, description, how to read/write the value, and
+//! validation. The form is rendered from this list, so search, the "overridden by project" marker,
+//! and tests share a single source. Pure logic: does not depend on GPUI.
 
 use oncode_core::settings::{AiProvider, ApiFormat, AutoSave, SidebarPosition, StartupView, Theme};
 use oncode_core::Settings;
@@ -18,7 +18,7 @@ pub enum SectionId {
     Accounts,
     Ai,
     Extensions,
-    /// Tanpa kolom: hanya tombol untuk membuka `keybindings.json`.
+    /// No fields: only a button to open `keybindings.json`.
     Keyboard,
 }
 
@@ -38,7 +38,7 @@ impl SectionId {
         }
     }
 
-    /// Nama pendek untuk id elemen.
+    /// Short name for element ids.
     pub fn key(self) -> &'static str {
         match self {
             SectionId::Editor => "editor",
@@ -55,7 +55,7 @@ impl SectionId {
     }
 }
 
-/// Urutan bagian di halaman.
+/// Order of the sections on the page.
 pub const SECTIONS: [SectionId; 10] = [
     SectionId::Editor,
     SectionId::Files,
@@ -73,7 +73,7 @@ pub struct TextSpec {
     pub placeholder: &'static str,
     pub monospace: bool,
     pub get: fn(&Settings) -> String,
-    /// Mengembalikan pesan galat, atau `None` bila sah.
+    /// Returns an error message, or `None` if valid.
     pub validate: fn(&str) -> Option<&'static str>,
     pub set: fn(&mut Settings, &str),
 }
@@ -81,12 +81,12 @@ pub struct TextSpec {
 pub struct NumberSpec {
     pub min: u32,
     pub max: u32,
-    /// Boleh dikosongkan (nilai `None`).
+    /// May be left empty (value `None`).
     pub optional: bool,
     pub placeholder: &'static str,
     pub unit: &'static str,
     pub get: fn(&Settings) -> Option<u32>,
-    /// `None` pada kolom yang tidak opsional membiarkan nilai apa adanya.
+    /// `None` on a non-optional field leaves the value as it is.
     pub set: fn(&mut Settings, Option<u32>),
 }
 
@@ -97,7 +97,7 @@ pub struct CheckboxSpec {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ChoiceOption {
-    /// Nilai seperti di `settings.json`, mis. `ffOnly`.
+    /// Value as in `settings.json`, e.g. `ffOnly`.
     pub value: &'static str,
     pub label: &'static str,
 }
@@ -105,7 +105,7 @@ pub struct ChoiceOption {
 pub struct SelectSpec {
     pub options: &'static [ChoiceOption],
     pub get: fn(&Settings) -> &'static str,
-    /// Nilai yang tidak dikenal diabaikan.
+    /// Unknown values are ignored.
     pub set: fn(&mut Settings, &str),
 }
 
@@ -117,17 +117,17 @@ pub enum FieldKind {
 }
 
 pub struct Field {
-    /// Kunci bertitik seperti di `settings.json`, mis. `editor.fontSize`.
+    /// Dotted key as in `settings.json`, e.g. `editor.fontSize`.
     pub id: &'static str,
     pub section: SectionId,
     pub label: &'static str,
     pub description: &'static str,
-    /// Kata tambahan untuk pencarian.
+    /// Extra words for search.
     pub keywords: &'static str,
     pub kind: FieldKind,
 }
 
-/// Nilai sebuah kolom, untuk dibandingkan dan dipindahkan antar-`Settings`.
+/// The value of a field, for comparing and moving between `Settings`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FieldValue {
     Text(String),
@@ -146,7 +146,7 @@ impl Field {
         }
     }
 
-    /// Menulis `value` ke `settings`; nilai berjenis lain diabaikan.
+    /// Writes `value` to `settings`; a value of another kind is ignored.
     pub fn apply(&self, settings: &mut Settings, value: &FieldValue) {
         match (&self.kind, value) {
             (FieldKind::Text(spec), FieldValue::Text(text)) => (spec.set)(settings, text),
@@ -158,7 +158,7 @@ impl Field {
     }
 }
 
-/// Teks kosong atau hanya spasi disimpan sebagai `None`.
+/// Empty or whitespace-only text is stored as `None`.
 fn nullable(text: &str) -> Option<String> {
     let trimmed = text.trim();
     (!trimmed.is_empty()).then(|| trimmed.to_string())
@@ -206,7 +206,7 @@ fn validate_client_id(text: &str) -> Option<&'static str> {
     None
 }
 
-/// Daftar font yang boleh dikosongkan (kosong = ikut font editor).
+/// A font list that may be left empty (empty = follow the editor font).
 fn validate_optional_font_family(text: &str) -> Option<&'static str> {
     if text.trim().is_empty() {
         return None;
@@ -737,7 +737,7 @@ pub fn field_by_id(id: &str) -> Option<&'static Field> {
     FIELDS.iter().find(|field| field.id == id)
 }
 
-/// Mengurai isian angka: nilai yang sah, atau pesan galat.
+/// Parses a number input: a valid value, or an error message.
 pub fn parse_number(spec: &NumberSpec, text: &str) -> Result<Option<u32>, String> {
     let raw = text.trim();
     if raw.is_empty() {
@@ -746,14 +746,14 @@ pub fn parse_number(spec: &NumberSpec, text: &str) -> Result<Option<u32>, String
     if !raw.chars().all(|c| c.is_ascii_digit()) {
         return Err("Enter a whole number".to_string());
     }
-    // Deretan digit yang terlalu panjang untuk `u32` pasti di luar rentang.
+    // A run of digits too long for `u32` is necessarily out of range.
     match raw.parse::<u32>() {
         Ok(value) if (spec.min..=spec.max).contains(&value) => Ok(Some(value)),
         _ => Err(format!("Enter a value from {} to {}", spec.min, spec.max)),
     }
 }
 
-/// Nilai kolom teks atau angka sebagai teks, untuk kotak isian. Jenis lain menghasilkan teks kosong.
+/// The value of a text or number field as text, for the input box. Other kinds yield empty text.
 pub fn field_text(field: &Field, settings: &Settings) -> String {
     match &field.kind {
         FieldKind::Text(spec) => (spec.get)(settings),
@@ -762,17 +762,17 @@ pub fn field_text(field: &Field, settings: &Settings) -> String {
     }
 }
 
-/// Mengembalikan satu kolom ke nilai bawaannya.
+/// Resets a single field to its default value.
 pub fn apply_default(field: &Field, settings: &mut Settings, defaults: &Settings) {
     field.apply(settings, &field.value(defaults));
 }
 
-/// Nilai kolom ini berbeda dari nilai bawaan.
+/// This field's value differs from the default.
 pub fn differs_from_default(field: &Field, settings: &Settings, defaults: &Settings) -> bool {
     field.value(settings) != field.value(defaults)
 }
 
-/// Nilai bawaan sebuah kolom sebagai teks untuk tooltip.
+/// A field's default value as text for the tooltip.
 pub fn default_label(field: &Field, defaults: &Settings) -> String {
     match &field.kind {
         FieldKind::Checkbox(spec) => if (spec.get)(defaults) { "on" } else { "off" }.to_string(),
@@ -792,7 +792,7 @@ pub fn default_label(field: &Field, defaults: &Settings) -> String {
     }
 }
 
-/// Jumlah hal yang berbeda dari bawaan: kolom formulir ditambah penimpaan language server.
+/// Number of things that differ from the defaults: form fields plus language server overrides.
 pub fn count_non_default(settings: &Settings, defaults: &Settings) -> usize {
     let fields = FIELDS.iter().filter(|field| differs_from_default(field, settings, defaults)).count();
     let languages: std::collections::BTreeSet<&String> = settings.lsp.servers.keys().chain(defaults.lsp.servers.keys()).collect();
@@ -802,15 +802,15 @@ pub fn count_non_default(settings: &Settings, defaults: &Settings) -> usize {
 
 #[derive(Clone, Copy)]
 pub struct OverrideContext<'a> {
-    /// Folder proyek dipercaya (pengaturan proyek hanya berlaku di folder yang dipercaya).
+    /// The project folder is trusted (project settings only apply in a trusted folder).
     pub trusted: bool,
-    /// Pengaturan pengguna yang tersimpan.
+    /// The saved user settings.
     pub user: &'a Settings,
-    /// Pengaturan efektif jendela ini (pengguna + proyek).
+    /// The effective settings of this window (user + project).
     pub effective: Option<&'a Settings>,
 }
 
-/// Kolom ini sedang ditimpa oleh `.oncode/settings.json` proyek.
+/// This field is currently overridden by the project's `.oncode/settings.json`.
 pub fn is_overridden(field: &Field, context: OverrideContext) -> bool {
     match context.effective {
         Some(effective) if context.trusted => field.value(context.user) != field.value(effective),
@@ -818,7 +818,7 @@ pub fn is_overridden(field: &Field, context: OverrideContext) -> bool {
     }
 }
 
-/// Server untuk bahasa ini ditimpa oleh pengaturan proyek.
+/// The server for this language is overridden by the project settings.
 pub fn is_server_overridden(language: &str, context: OverrideContext) -> bool {
     match context.effective {
         Some(effective) if context.trusted => context.user.lsp.servers.get(language) != effective.lsp.servers.get(language),
@@ -826,7 +826,7 @@ pub fn is_server_overridden(language: &str, context: OverrideContext) -> bool {
     }
 }
 
-/// Kueri pencarian cocok bila setiap katanya muncul di salah satu teks.
+/// A search query matches if each of its words appears in one of the texts.
 pub fn matches_query(query: &str, texts: &[&str]) -> bool {
     let query = query.to_lowercase();
     let mut words = query.split_whitespace().peekable();
@@ -845,7 +845,7 @@ pub fn field_matches(field: &Field, query: &str) -> bool {
     matches_query(query, &[field.label, field.description, field.id, field.section.title(), field.keywords, &options])
 }
 
-/// Memecah baris argumen seperti shell sederhana: spasi memisah, kutip tunggal/ganda mengelompokkan.
+/// Splits an argument line like a simple shell: whitespace separates, single/double quotes group.
 pub fn split_args(text: &str) -> Result<Vec<String>, String> {
     let mut args = Vec::new();
     let mut current = String::new();
@@ -889,7 +889,7 @@ pub fn split_args(text: &str) -> Result<Vec<String>, String> {
     Ok(args)
 }
 
-/// Kebalikan [`split_args`]: argumen yang memuat spasi atau kutip dibungkus kutip ganda.
+/// The inverse of [`split_args`]: arguments containing whitespace or quotes are wrapped in double quotes.
 pub fn join_args(args: &[String]) -> String {
     args.iter()
         .map(|arg| {
@@ -912,7 +912,7 @@ pub fn join_args(args: &[String]) -> String {
         .join(" ")
 }
 
-/// Menetapkan atau menghapus (`spec = None`) penimpaan server untuk satu bahasa.
+/// Sets or removes (`spec = None`) the server override for a language.
 pub fn set_server_override(settings: &mut Settings, language: &str, spec: Option<ServerSpec>) {
     match spec {
         Some(spec) => {
@@ -924,7 +924,7 @@ pub fn set_server_override(settings: &mut Settings, language: &str, spec: Option
     }
 }
 
-/// Perintah lengkap sebuah server seperti ditampilkan di tabel.
+/// A server's full command as shown in the table.
 pub fn command_line(command: &str, args: &[String]) -> String {
     let joined = join_args(args);
     if joined.is_empty() {
@@ -943,20 +943,20 @@ mod tests {
     }
 
     fn field(id: &str) -> &'static Field {
-        field_by_id(id).unwrap_or_else(|| panic!("kolom tidak dikenal: {id}"))
+        field_by_id(id).unwrap_or_else(|| panic!("unknown field: {id}"))
     }
 
     fn number(id: &str) -> &'static NumberSpec {
         match &field(id).kind {
             FieldKind::Number(spec) => spec,
-            _ => panic!("{id} bukan kolom angka"),
+            _ => panic!("{id} is not a number field"),
         }
     }
 
     fn text(id: &str) -> &'static TextSpec {
         match &field(id).kind {
             FieldKind::Text(spec) => spec,
-            _ => panic!("{id} bukan kolom teks"),
+            _ => panic!("{id} is not a text field"),
         }
     }
 
@@ -1017,13 +1017,13 @@ mod tests {
         assert_eq!(unique.len(), FIELDS.len());
     }
 
-    /// Id kolom menunjuk ke jalur yang sama di `settings.json`, dan `set` hanya mengubah jalur itu.
+    /// A field id points to the same path in `settings.json`, and `set` changes only that path.
     #[test]
     fn field_ids_point_at_the_same_path_in_settings_json() {
         for f in &FIELDS {
             let before = defaults();
             let current = json_at(&before, f.id);
-            // `get` membaca jalur yang sama (null ditampilkan sebagai teks kosong pada kolom teks).
+            // `get` reads the same path (null is shown as empty text in text fields).
             let shown = match f.value(&before) {
                 FieldValue::Text(text) if text.is_empty() => serde_json::Value::Null,
                 FieldValue::Text(text) => text.into(),
@@ -1040,8 +1040,8 @@ mod tests {
                 FieldKind::Number(spec) => (spec.set)(&mut after, Some(spec.min + 1)),
                 FieldKind::Text(spec) => (spec.set)(&mut after, "changed-value"),
             }
-            assert_ne!(json_at(&after, f.id), current, "{} tidak berubah", f.id);
-            // Hanya jalur itu yang berubah.
+            assert_ne!(json_at(&after, f.id), current, "{} did not change", f.id);
+            // Only that path changed.
             let (group, key) = f.id.split_once('.').unwrap();
             let mut expected = serde_json::to_value(&before).unwrap();
             expected[group][key] = json_at(&after, f.id);
@@ -1063,7 +1063,7 @@ mod tests {
         assert_eq!(values("ai.provider"), ["auto=Automatic", "claudeCode=Claude Code CLI", "api=Anthropic API", "custom=Custom endpoint"]);
         assert_eq!(values("ai.customFormat"), ["openai=OpenAI-compatible", "anthropic=Anthropic Messages"]);
 
-        // Setiap opsi tersimpan dengan ejaan yang sama seperti serde di backend, dan terbaca kembali.
+        // Every option is stored with the same spelling as serde in the backend, and reads back.
         for f in &FIELDS {
             let FieldKind::Select(spec) = &f.kind else { continue };
             for option in spec.options {
@@ -1073,8 +1073,8 @@ mod tests {
                 assert_eq!((spec.get)(&settings), option.value, "{}", f.id);
             }
             let mut settings = defaults();
-            (spec.set)(&mut settings, "tidak-dikenal");
-            assert_eq!(settings, defaults(), "{}: nilai tak dikenal diabaikan", f.id);
+            (spec.set)(&mut settings, "unknown");
+            assert_eq!(settings, defaults(), "{}: unknown value is ignored", f.id);
         }
     }
 
@@ -1084,7 +1084,7 @@ mod tests {
             let spec = text(id);
             let read = |input: &str| {
                 let mut settings = defaults();
-                (spec.set)(&mut settings, "sebelumnya");
+                (spec.set)(&mut settings, "previous");
                 (spec.set)(&mut settings, input);
                 json_at(&settings, id)
             };
@@ -1150,7 +1150,7 @@ mod tests {
             ("terminal.fontSize", "200", "from 8 to 40"),
         ];
         for (id, input, message) in cases {
-            let error = parse_number(number(id), input).expect_err(&format!("{id} = {input:?} harus ditolak"));
+            let error = parse_number(number(id), input).expect_err(&format!("{id} = {input:?} must be rejected"));
             assert!(error.contains(message), "{id} = {input:?}: {error}");
         }
     }
@@ -1160,7 +1160,7 @@ mod tests {
         assert_eq!(parse_number(number("terminal.fontSize"), ""), Ok(None));
         assert_eq!(parse_number(number("terminal.fontSize"), "  "), Ok(None));
         assert_eq!(parse_number(number("terminal.fontSize"), "12"), Ok(Some(12)));
-        // Kolom wajib mengabaikan `None` alih-alih menulis nilai kosong.
+        // A required field ignores `None` instead of writing an empty value.
         let mut settings = defaults();
         (number("editor.fontSize").set)(&mut settings, None);
         assert_eq!(settings, defaults());
@@ -1180,7 +1180,7 @@ mod tests {
         assert!(is_overridden(field("editor.tabSize"), OverrideContext { trusted: true, user: &user, effective: Some(&effective) }));
         assert!(!is_overridden(field("editor.fontSize"), OverrideContext { trusted: true, user: &user, effective: Some(&effective) }));
         assert!(!is_overridden(field("editor.tabSize"), OverrideContext { trusted: false, user: &user, effective: Some(&effective) }));
-        // Tanpa pengaturan efektif (belum ada jendela) tidak ada penanda.
+        // Without effective settings (no window yet) there is no marker.
         assert!(!is_overridden(field("editor.tabSize"), OverrideContext { trusted: true, user: &user, effective: None }));
 
         let mut same = defaults();
@@ -1199,7 +1199,7 @@ mod tests {
         assert!(is_server_overridden("rust", trusted));
         assert!(!is_server_overridden("go", trusted));
         assert!(!is_server_overridden("rust", OverrideContext { trusted: false, ..trusted }));
-        // `args: []` dan args yang tidak ditulis di berkas dianggap sama.
+        // `args: []` and args not written in the file are considered the same.
         let mut user = defaults();
         set_server_override(&mut user, "rust", serde_json::from_str(r#"{ "command": "ra-custom" }"#).ok());
         assert!(!is_server_overridden("rust", OverrideContext { trusted: true, user: &user, effective: Some(&effective) }));
@@ -1277,13 +1277,13 @@ mod tests {
             apply_default(f, &mut current, &defaults);
             assert!(!differs_from_default(f, &current, &defaults), "{}", f.id);
         }
-        // Yang tersisa hanya penimpaan server, yang bukan kolom formulir.
+        // All that remains is the server overrides, which are not form fields.
         let mut expected = defaults.clone();
         expected.lsp = changed.lsp.clone();
         assert_eq!(current, expected);
     }
 
-    /// `apply_default` mengikuti nilai bawaan yang diberikan, bukan konstanta di modul ini.
+    /// `apply_default` follows the defaults it is given, not constants in this module.
     #[test]
     fn apply_default_follows_the_given_defaults() {
         let mut other = defaults();

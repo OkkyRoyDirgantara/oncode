@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
-description = "Tampilan diff dengan staging per hunk/baris, editor konflik, penanda perubahan, dan blame untuk OnCode"
+description = "Diff view with per-hunk/line staging, conflict editor, change markers, and blame for OnCode"
 
 [dependencies]
 oncode-core = { path = "../oncode-core" }
@@ -13,7 +13,7 @@ gpui-kit = "=0.10.0"
 serde.workspace = true
 serde_json.workspace = true
 oncode-git = { path = "../oncode-git" }
-# Sudah ada di Cargo.lock (dipakai dependensi lain); dipakai untuk diff baris.
+# Already in Cargo.lock (used by other dependencies); used for line diffs.
 similar = "2"
 
 [dev-dependencies]

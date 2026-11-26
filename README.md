@@ -1,81 +1,81 @@
 # OnCode
 
-Editor kode desktop **native** yang lebih sederhana daripada Visual Studio Code, dengan **Git client lengkap** sebagai fitur utama. Ditulis dalam Rust dan digambar langsung lewat GPU dengan [GPUI](https://github.com/zed-industries/zed) (kerangka UI milik editor Zed), tanpa WebView dan tanpa JavaScript.
+A **native** desktop code editor that is simpler than Visual Studio Code, with a **full-featured Git client** as its main feature. Written in Rust and drawn directly on the GPU with [GPUI](https://github.com/zed-industries/zed) (the UI framework behind the Zed editor), with no WebView and no JavaScript.
 
-Rancangan lengkap ada di [docs/RANCANGAN.md](docs/RANCANGAN.md); panduan pengembangan di [docs/PENGEMBANGAN.md](docs/PENGEMBANGAN.md).
+The full design is in [docs/DESIGN.md](docs/DESIGN.md); the development guide is in [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
 
-> Versi sebelumnya (v0.2) dibangun dengan Tauri + React. Kodenya tersimpan di tag git `tauri-v0.2` dan rancangannya di [docs/arsip/RANCANGAN-v0.2-tauri.md](docs/arsip/RANCANGAN-v0.2-tauri.md).
+> The previous version (v0.2) was built with Tauri + React. Its code is kept under the git tag `tauri-v0.2` and its design in [docs/archive/DESIGN-v0.2-tauri.md](docs/archive/DESIGN-v0.2-tauri.md).
 
-## Fitur
+## Features
 
 **Source control**
 
-- Status perubahan, stage / unstage / discard per berkas, **per hunk, dan per baris**
-- Commit (amend, sign-off), branch, merge, fetch / pull / push dengan dialog kredensial di dalam aplikasi
-- Graph riwayat commit dengan pencarian, detail commit, dan perbandingan dua commit
-- **Interactive rebase** visual (pick, reword, edit, squash, fixup, drop, ubah urutan)
-- **Editor konflik tiga panel** (Current | Result | Incoming)
-- Stash, tag, cherry-pick, revert, reset, blame, riwayat berkas, reflog
-- **Inline blame** seperti GitLens: penulis, waktu, dan pesan commit baris kursor tampil samar di ujung baris itu (bisa dimatikan lewat Git → Toggle Inline Blame atau Settings → Editor)
-- Worktree dan submodule
-- Semua perintah Git yang dijalankan tercatat di panel **Git Output**
-- **Generate commit message** dengan AI (opsional): menulis pesan dari perubahan yang di-stage, mengikuti gaya commit repositori. Provider (Settings → AI): Claude Code CLI (login Claude Code, termasuk langganan Claude; tanpa API key), Anthropic API, atau endpoint kustom (OpenAI-compatible seperti OpenAI, OpenRouter, Groq, Ollama, LM Studio, atau gateway berformat Anthropic). Diff yang di-stage dikirim hanya saat tombolnya ditekan
+- Change status, stage / unstage / discard per file, **per hunk, and per line**
+- Commit (amend, sign-off), branch, merge, fetch / pull / push with an in-app credential dialog
+- Commit history graph with search, commit details, and comparison of two commits
+- Visual **interactive rebase** (pick, reword, edit, squash, fixup, drop, reorder)
+- **Three-pane conflict editor** (Current | Result | Incoming)
+- Stash, tag, cherry-pick, revert, reset, blame, file history, reflog
+- **Inline blame** like GitLens: the author, time, and commit message of the cursor line appear faintly at the end of that line (can be turned off via Git → Toggle Inline Blame or Settings → Editor)
+- Worktrees and submodules
+- Every Git command that is run is recorded in the **Git Output** panel
+- **Generate commit message** with AI (optional): writes a message from the staged changes, following the repository's commit style. Providers (Settings → AI): Claude Code CLI (Claude Code login, including a Claude subscription; no API key), Anthropic API, or a custom endpoint (OpenAI-compatible such as OpenAI, OpenRouter, Groq, Ollama, LM Studio, or an Anthropic-format gateway). The staged diff is sent only when the button is pressed
 
-**Editor dan workspace**
+**Editor and workspace**
 
-- Explorer dengan penanda status Git, tab dan split editor (tab bisa diseret untuk mengubah urutan, pindah grup, atau dijatuhkan di tepi grup untuk membelah ke kiri/kanan/atas/bawah), seret-lepas di Explorer (seret berkas atau folder ke folder lain untuk memindahkannya, ke latar kosong untuk memindahkannya ke akar proyek, atau ke area editor untuk membuka berkas sebagai tab atau membelah grup; berkas dari file manager OS yang dijatuhkan ke Explorer disalin ke folder di bawah penunjuk, dan yang dijatuhkan ke area editor dibuka), quick open (`Ctrl+P`), command palette (`Ctrl+Shift+P`), menu File/Edit/View/Go/Git/Terminal/Help di bilah judul
-- Berkas baru tanpa judul (`Ctrl+N`, disimpan lewat Save As), pindah baris (`Ctrl+↑/↓` atau `Alt+↑/↓`)
-- Highlight sintaks (tree-sitter) termasuk Kotlin, Dart/Flutter, C#, PHP, Lua, Swift, GraphQL; cari/ganti, multi-kursor, lipat kode
-- Pencarian dan penggantian teks di seluruh proyek (menghormati `.gitignore`)
-- Deteksi encoding dan akhir baris, deteksi perubahan dari luar, pemulihan tab saat folder dibuka lagi
-- Perintah **`oncode .`** di terminal, seperti `code .` di VS Code: membuka folder saat ini. Bila OnCode sudah berjalan, folder dibuka di proses yang sama (jendela baru, atau jendela yang sudah membuka folder itu difokuskan), jadi tidak ada proses kedua yang memakan memori. Dipasang otomatis oleh installer Windows (`bin\oncode.cmd` + PATH pengguna) dan paket `.deb` (`/usr/bin/oncode`); di macOS, AppImage, atau build sendiri pakai command palette → **Shell Command: Install 'oncode' Command in PATH**
-- Terminal terintegrasi, bisa lebih dari satu sesi: split berdampingan di panel (`Cmd+\` di macOS, `Ctrl+Shift+5` di Linux/Windows), terminal sebagai tab di area editor (bisa di samping kode), dan seret-lepas terminal antara daftar panel dan area editor. Digambar per sel: kolom tetap lurus, garis kotak dan prompt powerline menyambung, tanpa ligatur; font dan tinggi baris terminal bisa diatur di Settings → Terminal
-- LSP: completion, hover, diagnostics, go to definition, references, rename, format (language server dipasang sendiri)
+- Explorer with Git status markers, editor tabs and splits (tabs can be dragged to reorder, move between groups, or be dropped on a group's edge to split left/right/up/down), drag and drop in the Explorer (drag a file or folder onto another folder to move it, onto the empty background to move it to the project root, or onto the editor area to open the file as a tab or split the group; files dropped from the OS file manager onto the Explorer are copied into the folder under the pointer, and those dropped onto the editor area are opened), quick open (`Ctrl+P`), command palette (`Ctrl+Shift+P`), and File/Edit/View/Go/Git/Terminal/Help menus in the title bar
+- New untitled file (`Ctrl+N`, saved via Save As), move line (`Ctrl+↑/↓` or `Alt+↑/↓`)
+- Syntax highlighting (tree-sitter) including Kotlin, Dart/Flutter, C#, PHP, Lua, Swift, GraphQL; find/replace, multi-cursor, code folding
+- Search and replace across the whole project (respects `.gitignore`)
+- Encoding and line-ending detection, detection of external changes, tab restoration when a folder is reopened
+- The **`oncode .`** command in the terminal, like `code .` in VS Code: opens the current folder. If OnCode is already running, the folder is opened in the same process (a new window, or the window that already has that folder open is focused), so no second process eats memory. Installed automatically by the Windows installer (`bin\oncode.cmd` + user PATH) and the `.deb` package (`/usr/bin/oncode`); on macOS, AppImage, or a self-built binary, use the command palette → **Shell Command: Install 'oncode' Command in PATH**
+- Integrated terminal with multiple sessions: side-by-side splits in the panel (`Cmd+\` on macOS, `Ctrl+Shift+5` on Linux/Windows), terminals as tabs in the editor area (can sit next to code), and drag and drop of terminals between the panel list and the editor area. Drawn per cell: columns stay straight, box-drawing lines and powerline prompts connect seamlessly, no ligatures; the terminal font and line height can be set in Settings → Terminal
+- LSP: completion, hover, diagnostics, go to definition, references, rename, format (language servers are installed by you)
 
-**Extensions** (bawaan, masing-masing bisa dimatikan di Settings → Extensions)
+**Extensions** (built in, each can be turned off in Settings → Extensions)
 
-- **Markdown Preview** (`Ctrl+Shift+V`): pratinjau langsung di samping editor
-- **Formatters** (`Shift+Alt+F`, opsional Format on Save): Prettier, rustfmt, gofmt, Ruff/Black, dart format, ktlint, sql-formatter, clang-format, dan lainnya bila terpasang; selain itu format dari language server
-- **Extra languages**: highlight untuk bahasa tambahan
-- **Go to Definition tanpa language server**: `Ctrl+klik`/`F12` mencari definisi di seluruh proyek
-- GitHub dan GitLab: login, clone dari akun, daftar / detail / checkout / buat pull request
+- **Markdown Preview** (`Ctrl+Shift+V`): live preview next to the editor
+- **Formatters** (`Shift+Alt+F`, optional Format on Save): Prettier, rustfmt, gofmt, Ruff/Black, dart format, ktlint, sql-formatter, clang-format, and others when installed; otherwise formatting comes from the language server
+- **Extra languages**: highlighting for additional languages
+- **Go to Definition without a language server**: `Ctrl+click`/`F12` searches for definitions across the whole project
+- GitHub and GitLab: login, clone from your account, list / view / check out / create pull requests
 
-**Yang sengaja tidak ada:** marketplace ekstensi, debugger, remote development, notebook, sinkronisasi pengaturan, asisten AI di editor.
+**Deliberately not included:** an extension marketplace, debugger, remote development, notebooks, settings sync, an AI assistant in the editor.
 
-## Menjalankan
+## Running
 
-Prasyarat: Rust (stable), Git 2.40+, compiler C, dan pustaka sistem GPUI (lihat [docs/PENGEMBANGAN.md](docs/PENGEMBANGAN.md#prasyarat)). Saat berjalan diperlukan GPU dengan Vulkan (Linux), DirectX 11 (Windows), atau Metal (macOS).
-
-```bash
-cargo build -p oncode-helper        # binary pendamping untuk dialog kredensial dan interactive rebase
-cargo run -p oncode                 # mode pengembangan
-cargo run -p oncode -- /path/proyek # langsung membuka sebuah folder
-```
-
-Untuk mencoba `oncode .` dari build sendiri: jalankan aplikasinya, lalu command palette → **Shell Command: Install 'oncode' Command in PATH** (memakai `oncode-helper`, jadi bangun keduanya). Di Windows, buka terminal baru setelahnya.
-
-## Pengujian
+Prerequisites: Rust (stable), Git 2.40+, a C compiler, and the GPUI system libraries (see [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md#prerequisites)). At runtime a GPU with Vulkan (Linux), DirectX 11 (Windows), or Metal (macOS) is required.
 
 ```bash
-cargo test --workspace  # backend (terhadap git sungguhan), logika UI, dan uji tampilan tanpa layar
+cargo build -p oncode-helper        # companion binary for the credential dialog and interactive rebase
+cargo run -p oncode                 # development mode
+cargo run -p oncode -- /path/project # open a folder directly
 ```
 
-## Struktur
+To try `oncode .` from a self-built binary: run the app, then command palette → **Shell Command: Install 'oncode' Command in PATH** (it uses `oncode-helper`, so build both). On Windows, open a new terminal afterwards.
+
+## Testing
+
+```bash
+cargo test --workspace  # backend (against real git), UI logic, and headless view tests
+```
+
+## Structure
 
 ```
-app/            Binary `oncode-app`: titik masuk
+app/            The `oncode-app` binary: entry point
 crates/
-  oncode-core/      State aplikasi tanpa UI dan seluruh API
-  oncode-ui/        Kerangka UI: jendela, tab, command, keybinding, editor
-  oncode-ui-*/      Satu fitur per crate: explorer, search, diff, scm, graph, terminal, lsp, forge, settings
+  oncode-core/      UI-free application state and the entire API
+  oncode-ui/        UI framework: window, tabs, commands, keybindings, editor
+  oncode-ui-*/      One feature per crate: explorer, search, diff, scm, graph, terminal, lsp, forge, settings
   oncode-git/ oncode-workspace/ oncode-terminal/ oncode-lsp/ oncode-forge/ oncode-helper/   Backend
-docs/           Rancangan dan panduan pengembangan
+docs/           Design and development guide
 ```
 
-## Keamanan
+## Security
 
-Folder yang baru pertama kali dibuka berjalan dalam **mode terbatas**: Git, language server, dan pengaturan proyek dinonaktifkan sampai Anda memercayai folder itu, karena repositori yang tidak dikenal dapat menjalankan kode lewat konfigurasi Git atau language server. Token akun disimpan hanya di keychain sistem operasi.
+A folder opened for the first time runs in **restricted mode**: Git, language servers, and project settings are disabled until you trust the folder, because an unknown repository can run code through its Git or language server configuration. Account tokens are stored only in the operating system's keychain.
 
-## Lisensi
+## License
 
 MIT

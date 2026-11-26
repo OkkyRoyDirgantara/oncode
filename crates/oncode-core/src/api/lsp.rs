@@ -1,4 +1,4 @@
-//! Language server: backend hanya mengelola proses dan meneruskan pesan JSON-RPC apa adanya.
+//! Language server: the backend only manages the process and forwards JSON-RPC messages as is.
 
 use oncode_lsp::ServerSpec;
 use serde::Serialize;
@@ -15,7 +15,7 @@ pub struct LspServerInfo {
     pub command: String,
     pub args: Vec<String>,
     pub installed: bool,
-    /// Petunjuk singkat cara memasang server bila belum ada.
+    /// A short hint on how to install the server if it is not there yet.
     pub install_hint: String,
 }
 
@@ -27,7 +27,7 @@ pub enum LspEvent {
     Exit { code: Option<i32>, stderr_tail: String },
 }
 
-/// Server untuk sebuah bahasa: pengaturan pengguna lebih diutamakan daripada daftar bawaan.
+/// The server for a language: the user's settings take precedence over the default list.
 fn server_for(settings: &Settings, language: &str) -> Option<(ServerSpec, String)> {
     let default = oncode_lsp::default_servers().into_iter().find(|d| d.language == language);
     match settings.lsp.servers.get(language) {
@@ -59,7 +59,7 @@ pub async fn lsp_servers(core: &Shared, window: &str) -> AppResult<Vec<LspServer
         .collect())
 }
 
-/// Memulai language server untuk `language` di folder proyek. Hanya pada folder yang dipercaya.
+/// Starts the language server for `language` in the project folder. Only for trusted folders.
 pub async fn lsp_start(core: &Shared, window: &str, language: String, on_event: Callback<LspEvent>) -> AppResult<u32> {
     if !core.workspace_trusted(window) {
         return Err(AppError::untrusted());
@@ -114,16 +114,16 @@ mod tests {
     #[tokio::test]
     async fn start_requires_a_trusted_folder_enabled_lsp_and_a_known_language() {
         let t = TestCore::new();
-        let project = t.project("proyek");
+        let project = t.project("project");
         let path = project.to_string_lossy().into_owned();
         workspace_open(&t.core, "w1", path.clone()).await.unwrap();
         assert_eq!(lsp_start(&t.core, "w1", "rust".into(), noop()).await.unwrap_err().code, "untrusted");
-        // Jendela tanpa folder juga dianggap tidak dipercaya.
-        assert_eq!(lsp_start(&t.core, "lain", "rust".into(), noop()).await.unwrap_err().code, "untrusted");
+        // A window without a folder is also considered untrusted.
+        assert_eq!(lsp_start(&t.core, "other", "rust".into(), noop()).await.unwrap_err().code, "untrusted");
 
         t.core.store.set_trusted(&path, true);
         workspace_open(&t.core, "w1", path.clone()).await.unwrap();
-        assert_eq!(lsp_start(&t.core, "w1", "bahasa-tak-dikenal".into(), noop()).await.unwrap_err().code, "notFound");
+        assert_eq!(lsp_start(&t.core, "w1", "unknown-language".into(), noop()).await.unwrap_err().code, "notFound");
 
         let mut settings = t.core.user_settings();
         settings.lsp.enabled = false;
@@ -135,34 +135,34 @@ mod tests {
     async fn user_servers_override_and_extend_the_defaults() {
         let t = TestCore::new();
         let mut settings = t.core.user_settings();
-        settings.lsp.servers.insert("rust".into(), ServerSpec { command: "ra-uji-tidak-terpasang".into(), args: vec!["--stdio".into()], env: Vec::new() });
-        settings.lsp.servers.insert("bahasa-uji".into(), ServerSpec { command: "server-uji-tidak-terpasang".into(), ..Default::default() });
+        settings.lsp.servers.insert("rust".into(), ServerSpec { command: "ra-test-not-installed".into(), args: vec!["--stdio".into()], env: Vec::new() });
+        settings.lsp.servers.insert("test-language".into(), ServerSpec { command: "test-server-not-installed".into(), ..Default::default() });
         t.core.set_user_settings(settings).unwrap();
 
         let servers = lsp_servers(&t.core, "w1").await.unwrap();
         let rust = servers.iter().find(|s| s.language == "rust").unwrap();
-        assert_eq!((rust.command.as_str(), rust.args.as_slice(), rust.installed), ("ra-uji-tidak-terpasang", &["--stdio".to_string()][..], false));
-        assert!(!rust.install_hint.is_empty(), "petunjuk pemasangan tetap dari daftar bawaan");
-        let custom = servers.iter().find(|s| s.language == "bahasa-uji").unwrap();
-        assert_eq!((custom.command.as_str(), custom.install_hint.as_str()), ("server-uji-tidak-terpasang", ""));
+        assert_eq!((rust.command.as_str(), rust.args.as_slice(), rust.installed), ("ra-test-not-installed", &["--stdio".to_string()][..], false));
+        assert!(!rust.install_hint.is_empty(), "the install hint still comes from the default list");
+        let custom = servers.iter().find(|s| s.language == "test-language").unwrap();
+        assert_eq!((custom.command.as_str(), custom.install_hint.as_str()), ("test-server-not-installed", ""));
         assert!(servers.len() > oncode_lsp::default_servers().len());
     }
 
     #[cfg(unix)]
     async fn next(rx: &mut tokio::sync::mpsc::UnboundedReceiver<LspEvent>) -> LspEvent {
-        tokio::time::timeout(std::time::Duration::from_secs(20), rx.recv()).await.expect("server tidak menjawab").expect("kanal tertutup")
+        tokio::time::timeout(std::time::Duration::from_secs(20), rx.recv()).await.expect("the server did not answer").expect("channel closed")
     }
 
-    /// `cat` memantulkan setiap pesan berbingkai apa adanya, jadi cukup sebagai server tiruan.
+    /// `cat` echoes every framed message as is, so it is enough as a mock server.
     #[cfg(unix)]
     #[tokio::test]
     async fn messages_round_trip_through_a_running_server() {
         let t = TestCore::new();
-        let project = t.project("proyek");
+        let project = t.project("project");
         let path = project.to_string_lossy().into_owned();
         t.core.store.set_trusted(&path, true);
         let mut settings = t.core.user_settings();
-        settings.lsp.servers.insert("gema".into(), ServerSpec { command: "cat".into(), ..Default::default() });
+        settings.lsp.servers.insert("echo".into(), ServerSpec { command: "cat".into(), ..Default::default() });
         t.core.set_user_settings(settings).unwrap();
         workspace_open(&t.core, "w1", path).await.unwrap();
 
@@ -170,7 +170,7 @@ mod tests {
         let id = lsp_start(
             &t.core,
             "w1",
-            "gema".into(),
+            "echo".into(),
             Arc::new(move |event| {
                 let _ = tx.send(event);
             }),
@@ -179,7 +179,7 @@ mod tests {
         .unwrap();
         assert_eq!(t.core.with_workspace("w1", |ws| ws.servers.clone()).unwrap(), vec![id]);
 
-        let json = r#"{"jsonrpc":"2.0","id":1,"method":"uji"}"#;
+        let json = r#"{"jsonrpc":"2.0","id":1,"method":"test"}"#;
         lsp_send(&t.core, id, json.into()).await.unwrap();
         assert!(matches!(next(&mut rx).await, LspEvent::Message { json: echoed } if echoed == json));
 

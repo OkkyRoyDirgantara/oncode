@@ -1,14 +1,14 @@
-//! Struktur data yang dikirim ke UI. Semua field memakai camelCase di sisi TypeScript.
+//! Data structures sent to the UI. All fields use camelCase on the TypeScript side.
 
 use serde::{Deserialize, Serialize};
 
-/// Detik sejak epoch Unix. `f64` agar aman diekspor sebagai `number` di TypeScript.
+/// Seconds since the Unix epoch. `f64` so it can be safely exported as a `number` in TypeScript.
 pub type Timestamp = f64;
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RepoSnapshot {
-    /// Path akar worktree.
+    /// Root path of the worktree.
     pub root: String,
     pub head: Head,
     pub head_oid: Option<String>,
@@ -26,7 +26,7 @@ pub struct RepoSnapshot {
 pub enum Head {
     Branch { name: String },
     Detached { oid: String },
-    /// Repo baru tanpa commit.
+    /// A new repo with no commits.
     Unborn { name: String },
 }
 
@@ -36,7 +36,7 @@ pub struct Upstream {
     pub name: String,
     pub ahead: u32,
     pub behind: u32,
-    /// `false` bila upstream dikonfigurasi tetapi ref-nya sudah tidak ada.
+    /// `false` if the upstream is configured but its ref no longer exists.
     pub exists: bool,
 }
 
@@ -136,11 +136,11 @@ pub struct Commit {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum EdgeKind {
-    /// Dari jalur di tepi atas baris menuju titik commit.
+    /// From the lane at the top edge of the row to the commit dot.
     Top,
-    /// Dari titik commit menuju jalur di tepi bawah baris.
+    /// From the commit dot to the lane at the bottom edge of the row.
     Bottom,
-    /// Jalur yang hanya lewat, dari atas ke bawah.
+    /// A lane that only passes through, from top to bottom.
     Through,
 }
 
@@ -166,21 +166,21 @@ pub struct GraphRow {
 #[serde(rename_all = "camelCase")]
 pub struct LogPage {
     pub rows: Vec<GraphRow>,
-    /// `true` bila tidak ada commit lagi.
+    /// `true` if there are no more commits.
     pub done: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct LogQuery {
-    /// Kosong = HEAD. Diabaikan bila `all` bernilai true.
+    /// Empty = HEAD. Ignored if `all` is true.
     pub revs: Vec<String>,
     pub all: bool,
     pub grep: Option<String>,
     pub author: Option<String>,
     pub since: Option<String>,
     pub until: Option<String>,
-    /// Batasi ke riwayat satu berkas (dengan `--follow`).
+    /// Limit to the history of a single file (with `--follow`).
     pub path: Option<String>,
 }
 
@@ -194,14 +194,14 @@ pub struct CommitFile {
     pub deletions: Option<u32>,
 }
 
-/// Perubahan yang di-stage, sebagai teks untuk menulis pesan commit.
+/// Staged changes, as text for writing a commit message.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StagedDiff {
-    /// Keluaran `git diff --cached --stat`; kosong bila tidak ada yang di-stage.
+    /// Output of `git diff --cached --stat`; empty if nothing is staged.
     pub stat: String,
     pub patch: String,
-    /// `patch` dipotong karena terlalu panjang.
+    /// `patch` was truncated because it was too long.
     pub truncated: bool,
 }
 
@@ -223,7 +223,7 @@ pub struct Branch {
     pub ahead: u32,
     pub behind: u32,
     pub upstream_gone: bool,
-    /// Path worktree lain yang sedang memakai branch ini.
+    /// Path of another worktree that is currently using this branch.
     pub worktree: Option<String>,
     pub subject: String,
     pub time: Timestamp,
@@ -232,7 +232,7 @@ pub struct Branch {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RemoteBranch {
-    /// Nama lengkap, mis. `origin/main`.
+    /// Full name, e.g. `origin/main`.
     pub name: String,
     pub remote: String,
     pub oid: String,
@@ -242,7 +242,7 @@ pub struct RemoteBranch {
 #[serde(rename_all = "camelCase")]
 pub struct Tag {
     pub name: String,
-    /// Commit yang ditunjuk (sudah di-peel untuk annotated tag).
+    /// The commit pointed to (already peeled for annotated tags).
     pub oid: String,
     pub annotated: bool,
     pub message: String,
@@ -269,7 +269,7 @@ pub struct Refs {
 #[serde(rename_all = "camelCase")]
 pub struct Stash {
     pub index: u32,
-    /// Nama ref, mis. `stash@{0}`.
+    /// Ref name, e.g. `stash@{0}`.
     pub name: String,
     pub oid: String,
     pub message: String,
@@ -294,7 +294,7 @@ pub struct Worktree {
 pub enum SubmoduleStatus {
     Uninitialized,
     UpToDate,
-    /// Commit yang di-checkout berbeda dari yang dicatat superproject.
+    /// The checked-out commit differs from the one recorded by the superproject.
     Modified,
     Conflict,
 }
@@ -312,7 +312,7 @@ pub struct Submodule {
 #[serde(rename_all = "camelCase")]
 pub struct ReflogEntry {
     pub oid: String,
-    /// Mis. `HEAD@{3}`.
+    /// E.g. `HEAD@{3}`.
     pub selector: String,
     pub message: String,
     pub time: Timestamp,
@@ -322,28 +322,28 @@ pub struct ReflogEntry {
 #[serde(rename_all = "camelCase")]
 pub struct BlameRange {
     pub oid: String,
-    /// Baris pertama (mulai dari 1) pada berkas saat ini.
+    /// First line (1-based) in the current file.
     pub start_line: u32,
     pub line_count: u32,
     pub author: String,
     pub author_email: String,
     pub time: Timestamp,
     pub summary: String,
-    /// `true` untuk baris yang belum di-commit.
+    /// `true` for lines that are not committed yet.
     pub uncommitted: bool,
 }
 
-/// Satu sisi tampilan diff.
+/// One side of the diff view.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DiffSide {
-    /// `None` bila sisi ini tidak ada (berkas baru/terhapus) atau biner/terlalu besar.
+    /// `None` if this side does not exist (new/deleted file) or is binary/too large.
     pub text: Option<String>,
     pub exists: bool,
     pub binary: bool,
     pub too_large: bool,
     pub size: u32,
-    /// Sidik isi; dikirim balik saat staging parsial untuk mendeteksi diff yang sudah usang.
+    /// Content fingerprint; sent back during partial staging to detect a stale diff.
     pub fingerprint: String,
     pub label: String,
 }
@@ -357,7 +357,7 @@ pub struct DiffContents {
     pub b: DiffSide,
 }
 
-/// Sumber diff yang diminta UI.
+/// The diff source requested by the UI.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum DiffSource {
@@ -365,16 +365,16 @@ pub enum DiffSource {
     Worktree,
     /// HEAD → index.
     Staged,
-    /// Induk pertama → commit (atau `parent` bila diisi).
+    /// First parent → commit (or `parent` if given).
     Commit { oid: String, parent: Option<String> },
-    /// Dua revisi sembarang.
+    /// Any two revisions.
     Range { from: String, to: String },
-    /// Isi sebuah stash terhadap induknya.
+    /// The contents of a stash against its parent.
     Stash { name: String },
 }
 
-/// Satu operasi sambung-potong baris: ganti `A[a_from..a_to)` dengan `B[b_from..b_to)`.
-/// Nomor baris mulai dari 0, batas akhir eksklusif.
+/// A single line splice operation: replace `A[a_from..a_to)` with `B[b_from..b_to)`.
+/// Line numbers are 0-based, and the end bound is exclusive.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SpliceOp {
@@ -387,11 +387,11 @@ pub struct SpliceOp {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum SpliceTarget {
-    /// A = index, B = worktree; perubahan terpilih masuk ke index.
+    /// A = index, B = worktree; the selected changes go into the index.
     Stage,
-    /// A = HEAD, B = index; perubahan terpilih dikeluarkan dari index.
+    /// A = HEAD, B = index; the selected changes are removed from the index.
     Unstage,
-    /// A = index, B = worktree; perubahan terpilih dibuang dari worktree.
+    /// A = index, B = worktree; the selected changes are discarded from the worktree.
     Discard,
 }
 
@@ -434,7 +434,7 @@ pub enum PullStrategy {
 #[serde(rename_all = "camelCase", default)]
 pub struct PushOptions {
     pub remote: Option<String>,
-    /// Branch lokal; kosong = branch aktif.
+    /// Local branch; empty = the active branch.
     pub branch: Option<String>,
     pub set_upstream: bool,
     pub force_with_lease: bool,
@@ -486,9 +486,9 @@ pub struct RebaseTodoItem {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RebasePlan {
-    /// Commit dari yang tertua ke yang terbaru.
+    /// Commits from oldest to newest.
     pub items: Vec<RebaseTodoItem>,
-    /// Jumlah commit dalam rencana yang sudah ada di remote (perlu force push).
+    /// Number of commits in the plan that already exist on the remote (requires a force push).
     pub published: u32,
 }
 
@@ -500,11 +500,11 @@ pub enum OperationAction {
     Abort,
 }
 
-/// Satu segmen hasil penggabungan tiga arah untuk editor konflik.
+/// One segment of a three-way merge result for the conflict editor.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum MergeSegment {
-    /// Sudah tergabung tanpa konflik.
+    /// Already merged without conflict.
     Resolved { text: String },
     Conflict { current: String, base: String, incoming: String },
 }
@@ -533,7 +533,7 @@ pub enum ConflictSide {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Progress {
-    /// Mis. "Receiving objects".
+    /// E.g. "Receiving objects".
     pub phase: String,
     pub percent: Option<u8>,
     pub text: String,

@@ -1,5 +1,5 @@
-// Menyematkan ikon aplikasi ke oncode-app.exe. Target diperiksa saat build script berjalan
-// (bukan lewat cfg) agar kompilasi silang dari Linux ke Windows ikut mendapat ikon.
+// Embeds the application icon into oncode-app.exe. The target is checked while the build script runs
+// (not via cfg) so that cross-compiling from Linux to Windows also gets the icon.
 fn main() {
     println!("cargo:rerun-if-changed=icons/oncode.rc");
     println!("cargo:rerun-if-changed=icons/icon.ico");

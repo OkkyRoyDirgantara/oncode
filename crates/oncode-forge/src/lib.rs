@@ -1,12 +1,12 @@
-//! Integrasi GitHub dan GitLab untuk OnCode.
+//! GitHub and GitLab integration for OnCode.
 //!
-//! - [`mod@provider`]: satu trait ([`ForgeProvider`]) untuk kedua penyedia.
-//! - [`auth`]: login OAuth device flow dan pembaruan token.
-//! - [`store`]: penyimpanan token di keychain OS ([`KeychainStore`]) atau memori.
-//! - [`model`]: tipe yang dikirim ke UI, dan [`parse_remote_url`].
+//! - [`mod@provider`]: one trait ([`ForgeProvider`]) for both providers.
+//! - [`auth`]: OAuth device flow login and token refresh.
+//! - [`store`]: token storage in the OS keychain ([`KeychainStore`]) or in memory.
+//! - [`model`]: types sent to the UI, and [`parse_remote_url`].
 //!
-//! Crate ini tidak bergantung pada Tauri. Token tidak pernah muncul di keluaran `Debug`,
-//! pesan galat, maupun log.
+//! This crate does not depend on Tauri. Tokens never appear in `Debug` output,
+//! error messages, or logs.
 
 pub mod auth;
 pub mod error;

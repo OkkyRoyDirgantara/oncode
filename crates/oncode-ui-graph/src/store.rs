@@ -1,5 +1,5 @@
-//! State per jendela milik fitur Graph: ref, stash, worktree, dan submodule tiap repositori,
-//! permintaan "tampilkan commit ini di Graph", dan penanda operasi yang sedang berjalan.
+//! Per-window state of the Graph feature: the refs, stashes, worktrees, and submodules of each repository,
+//! "show this commit in Graph" requests, and the indicator of the running operation.
 
 use std::collections::HashMap;
 
@@ -8,19 +8,19 @@ use oncode_core::api::git;
 use oncode_git::{Refs, RepoSnapshot, Stash, Submodule, Worktree};
 use oncode_ui::{repos, spawn_core, Env, ReposEvent};
 
-/// Permintaan menampilkan sebuah commit di tab Graph (dari sidebar, reflog, riwayat berkas).
+/// A request to show a commit in the Graph tab (from the sidebar, reflog, file history).
 #[derive(Debug, Clone, PartialEq)]
 pub struct RevealTarget {
     pub oid: String,
-    /// Nama yang disebut di pesan, mis. nama branch atau hash pendek.
+    /// The name mentioned in messages, e.g. a branch name or a short hash.
     pub label: String,
-    /// Muat halaman berikutnya sampai commit ditemukan. Bila false, commit hanya dipilih.
+    /// Load the next pages until the commit is found. If false, the commit is only selected.
     pub hunt: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct RepoData {
-    /// `None` sampai pemuatan pertama selesai.
+    /// `None` until the first load finishes.
     pub refs: Option<Refs>,
     pub stashes: Vec<Stash>,
     pub worktrees: Vec<Worktree>,
@@ -29,17 +29,17 @@ pub struct RepoData {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum StoreEvent {
-    /// Data ref repositori ini selesai dimuat ulang.
+    /// The ref data of this repository finished reloading.
     Loaded(String),
-    /// Branch, tag, HEAD, atau stash berubah: daftar commit perlu dimuat ulang.
+    /// A branch, tag, HEAD, or stash changed: the commit list needs to be reloaded.
     RefsChanged(String),
-    /// Ada permintaan `RevealTarget` baru untuk repositori ini; ambil dengan `take_reveal`.
+    /// There is a new `RevealTarget` request for this repository; take it with `take_reveal`.
     RevealRequested(String),
-    /// Penanda operasi berjalan berubah.
+    /// The running-operation indicator changed.
     BusyChanged(String),
 }
 
-/// Yang menentukan perlu tidaknya memuat ulang ref saat snapshot berganti.
+/// What decides whether refs need reloading when the snapshot changes.
 #[derive(Clone, PartialEq)]
 struct HeadKey {
     head: oncode_git::Head,
@@ -53,16 +53,16 @@ impl HeadKey {
     }
 }
 
-/// Operasi Git yang sedang berjalan pada sebuah repositori.
+/// A Git operation currently running on a repository.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Busy {
     pub label: SharedString,
-    /// Untuk membatalkan lewat `api::app::app_cancel`.
+    /// For canceling through `api::app::app_cancel`.
     pub operation_id: Option<String>,
 }
 
 struct Loading {
-    /// Ada perubahan lagi selagi memuat: muat sekali lagi setelah selesai.
+    /// Another change arrived while loading: load once more when finished.
     again: bool,
     _task: Task<()>,
 }
@@ -79,7 +79,7 @@ pub struct GraphStore {
 
 impl EventEmitter<StoreEvent> for GraphStore {}
 
-/// Store jendela yang sedang membangun tab; diisi lewat `Workbench::on_before_build_tabs`.
+/// The store of the window that is currently building tabs; set through `Workbench::on_before_build_tabs`.
 pub(crate) struct CurrentStore(pub Entity<GraphStore>);
 
 impl Global for CurrentStore {}
@@ -88,7 +88,7 @@ impl GraphStore {
     pub fn new(env: Env, cx: &mut Context<Self>) -> Self {
         let subscription = cx.subscribe(&repos(cx), |this: &mut Self, repos, event: &ReposEvent, cx| match event {
             ReposEvent::Changed(root) => {
-                // Jumlah stash dan HEAD ikut menentukan daftar yang ditampilkan.
+                // The stash count and HEAD also determine the list that is shown.
                 let key = repos.read(cx).snapshot(root).map(HeadKey::of);
                 let changed = key.is_some() && this.heads.get(root) != key.as_ref();
                 if let Some(key) = key {
@@ -124,12 +124,12 @@ impl GraphStore {
         &self.env
     }
 
-    /// Akar repositori folder proyek jendela ini.
+    /// The repository root of this window's project folder.
     pub fn default_root(&self) -> Option<&str> {
         self.env.repo_root.as_deref()
     }
 
-    /// Semua repositori yang dikenal store ini (akar proyek dan submodule yang dibuka).
+    /// All repositories known to this store (the project root and opened submodules).
     pub fn roots(&self) -> Vec<String> {
         let mut roots: Vec<String> = self.repos.keys().cloned().collect();
         roots.sort();
@@ -148,12 +148,12 @@ impl GraphStore {
         self.repos.get(root).map(|data| data.stashes.as_slice()).unwrap_or_default()
     }
 
-    /// Remote pertama repositori (tujuan bawaan untuk tag).
+    /// The repository's first remote (the default destination for tags).
     pub fn first_remote(&self, root: &str) -> Option<String> {
         self.refs(root).and_then(|refs| refs.remotes.first()).map(|remote| remote.name.clone())
     }
 
-    /// Mulai melacak sebuah repositori dan memuat datanya bila belum.
+    /// Starts tracking a repository and loads its data if not loaded yet.
     pub fn ensure(&mut self, root: &str, cx: &mut Context<Self>) {
         if !self.repos.contains_key(root) {
             self.repos.insert(root.to_string(), RepoData::default());
@@ -169,7 +169,7 @@ impl GraphStore {
         cx.emit(StoreEvent::RefsChanged(root.to_string()));
     }
 
-    /// Memuat ulang ref, stash, worktree, dan submodule. Permintaan yang datang selagi memuat digabung.
+    /// Reloads refs, stashes, worktrees, and submodules. Requests that arrive while loading are merged.
     pub fn reload(&mut self, root: &str, cx: &mut Context<Self>) {
         if let Some(loading) = self.loading.get_mut(root) {
             loading.again = true;
@@ -189,7 +189,7 @@ impl GraphStore {
             let _ = this.update(cx, |this, cx| {
                 let again = this.loading.remove(&root_key).is_some_and(|l| l.again);
                 if let Some(data) = this.repos.get_mut(&root_key) {
-                    // Bila pemuatan ref gagal, ref lama dipertahankan.
+                    // If loading the refs fails, the old refs are kept.
                     if refs.is_some() {
                         data.refs = refs;
                     } else if data.refs.is_none() {
@@ -209,9 +209,9 @@ impl GraphStore {
         self.loading.insert(root.to_string(), Loading { again: false, _task: task });
     }
 
-    // ----- Permintaan reveal -----
+    // ----- Reveal requests -----
 
-    /// Menitipkan permintaan; tab Graph untuk `root` mengambilnya saat siap.
+    /// Leaves a request; the Graph tab for `root` picks it up when ready.
     pub fn request_reveal(&mut self, root: &str, target: RevealTarget, cx: &mut Context<Self>) {
         self.reveals.insert(root.to_string(), target);
         cx.emit(StoreEvent::RevealRequested(root.to_string()));
@@ -225,7 +225,7 @@ impl GraphStore {
         self.reveals.get(root)
     }
 
-    // ----- Operasi berjalan -----
+    // ----- Running operations -----
 
     pub fn busy(&self, root: &str) -> Option<&Busy> {
         self.busy.get(root)
@@ -241,12 +241,12 @@ impl GraphStore {
     }
 }
 
-/// Snapshot repositori dari store global `oncode_ui::repos`.
+/// A repository snapshot from the global `oncode_ui::repos` store.
 pub fn snapshot(root: &str, cx: &App) -> Option<RepoSnapshot> {
     repos(cx).read(cx).snapshot(root).cloned()
 }
 
-/// Nama pendek untuk HEAD saat ini.
+/// A short name for the current HEAD.
 pub fn head_label(snapshot: Option<&RepoSnapshot>) -> String {
     match snapshot.map(|s| &s.head) {
         Some(oncode_git::Head::Branch { name }) | Some(oncode_git::Head::Unborn { name }) => name.clone(),
@@ -255,7 +255,7 @@ pub fn head_label(snapshot: Option<&RepoSnapshot>) -> String {
     }
 }
 
-/// Jumlah berkas yang berubah (tiap path dihitung sekali).
+/// The number of changed files (each path is counted once).
 pub fn change_count(snapshot: Option<&RepoSnapshot>) -> usize {
     let Some(snapshot) = snapshot else { return 0 };
     let mut paths: std::collections::HashSet<&str> = std::collections::HashSet::new();

@@ -1,4 +1,4 @@
-//! Aplikasi, workspace, pengaturan, dan sesi.
+//! App, workspace, settings, and sessions.
 
 use std::path::{Path, PathBuf};
 
@@ -14,14 +14,14 @@ use crate::state::Shared;
 #[serde(rename_all = "camelCase")]
 pub struct AppInfo {
     pub version: String,
-    /// `linux`, `windows`, atau `macos`.
+    /// `linux`, `windows`, or `macos`.
     pub platform: String,
     pub git: Option<GitInfo>,
-    /// Alasan fitur Git tidak tersedia (git tidak ada atau terlalu lama).
+    /// Why Git features are unavailable (git is missing or too old).
     pub git_error: Option<String>,
     pub recent: Vec<String>,
     pub settings_path: String,
-    /// Berkas penimpaan pintasan keyboard milik pengguna.
+    /// The user's keyboard shortcut override file.
     pub keybindings_path: String,
     pub home_dir: Option<String>,
 }
@@ -31,9 +31,9 @@ pub struct AppInfo {
 pub struct WorkspaceInfo {
     pub root: String,
     pub name: String,
-    /// `false` = mode terbatas: Git, LSP, dan pengaturan proyek dinonaktifkan.
+    /// `false` = restricted mode: Git, LSP, and project settings are disabled.
     pub trusted: bool,
-    /// Akar repositori yang memuat folder ini, bila ada dan folder dipercaya.
+    /// Root of the repository containing this folder, if any and the folder is trusted.
     pub repo_root: Option<String>,
     pub settings: Settings,
 }
@@ -74,7 +74,7 @@ async fn workspace_info(core: &Shared, label: &str) -> AppResult<WorkspaceInfo> 
     })
 }
 
-/// Membuka folder di jendela ini. Judul jendela (`<name> — OnCode`) diatur lapisan UI dari `name`.
+/// Opens a folder in this window. The window title (`<name> — OnCode`) is set by the UI layer from `name`.
 pub async fn workspace_open(core: &Shared, window: &str, path: String) -> AppResult<WorkspaceInfo> {
     let root = std::fs::canonicalize(&path).map_err(|e| AppError::new("notFound", format!("Cannot open folder: {e}")))?;
     if !root.is_dir() {
@@ -84,7 +84,7 @@ pub async fn workspace_open(core: &Shared, window: &str, path: String) -> AppRes
     let shared = core.clone();
     let build_root = root.clone();
     let build_label = window.to_string();
-    // Membangun indeks berkas bisa lama pada proyek besar; jangan menahan thread async.
+    // Building the file index can take a while on a large project; don't hold up the async thread.
     core.runtime()
         .spawn_blocking(move || shared.set_workspace(&build_label, build_root))
         .await
@@ -93,7 +93,7 @@ pub async fn workspace_open(core: &Shared, window: &str, path: String) -> AppRes
     workspace_info(core, window).await
 }
 
-/// Windows: `canonicalize` menghasilkan path `\\?\C:\...` yang tidak dipahami banyak program.
+/// Windows: `canonicalize` produces a `\\?\C:\...` path that many programs do not understand.
 fn strip_verbatim(path: PathBuf) -> PathBuf {
     let text = path.to_string_lossy();
     match text.strip_prefix(r"\\?\") {
@@ -102,29 +102,29 @@ fn strip_verbatim(path: PathBuf) -> PathBuf {
     }
 }
 
-/// Memercayai (atau berhenti memercayai) folder jendela ini, lalu memuat ulang workspace.
+/// Trusts (or stops trusting) this window's folder, then reloads the workspace.
 pub async fn workspace_set_trusted(core: &Shared, window: &str, trusted: bool) -> AppResult<WorkspaceInfo> {
     let root = core.workspace_root(window)?;
     core.store.set_trusted(&root.to_string_lossy(), trusted);
     workspace_open(core, window, root.to_string_lossy().into_owned()).await
 }
 
-/// Menutup folder jendela ini; juga dipanggil UI saat jendelanya ditutup.
+/// Closes this window's folder; also called by the UI when the window is closed.
 pub async fn workspace_close(core: &Shared, window: &str) -> AppResult<()> {
     core.close_workspace(window);
     Ok(())
 }
 
-/// Menandai folder sebagai dipercaya tanpa membukanya (dipakai setelah clone/init dari aplikasi).
+/// Marks a folder as trusted without opening it (used after clone/init from the app).
 pub async fn workspace_trust_path(core: &Shared, path: String) -> AppResult<()> {
     let root = std::fs::canonicalize(&path).map(strip_verbatim).unwrap_or_else(|_| PathBuf::from(&path));
     core.store.set_trusted(&root.to_string_lossy(), true);
     Ok(())
 }
 
-/// Folder yang diminta lewat baris perintah: argumen pertama yang merupakan direktori.
-/// `args[0]` adalah nama program; dipakai saat aplikasi dijalankan dan saat instance kedua
-/// meneruskan argumennya.
+/// The folder requested on the command line: the first argument that is a directory.
+/// `args[0]` is the program name; used when the app starts and when a second instance
+/// forwards its arguments.
 pub fn folder_argument(args: &[String], cwd: &str) -> Option<String> {
     args.iter().skip(1).filter(|a| !a.starts_with('-')).find_map(|arg| {
         let path = Path::new(arg);
@@ -133,9 +133,9 @@ pub fn folder_argument(args: &[String], cwd: &str) -> Option<String> {
     })
 }
 
-/// Memasang (`install`) atau melepas perintah `oncode` di terminal, mengembalikan pesan untuk
-/// pengguna. Dikerjakan `oncode-helper` karena installer Windows memakai langkah yang sama sebelum
-/// aplikasinya sendiri tersalin.
+/// Installs (`install`) or removes the `oncode` command in the terminal, returning a message for
+/// the user. Done by `oncode-helper` because the Windows installer uses the same step before the
+/// app itself has been copied.
 pub async fn shell_command_set(install: bool) -> AppResult<String> {
     let helper = crate::state::helper_path().ok_or_else(|| {
         AppError::new("notFound", "oncode-helper was not found next to the application. Reinstall OnCode or run `cargo build -p oncode-helper` when building from source.")
@@ -159,13 +159,13 @@ pub async fn recent_remove(core: &Shared, path: String) -> AppResult<()> {
     Ok(())
 }
 
-/// Membatalkan operasi panjang (clone, fetch, push, pencarian) berdasarkan id-nya.
+/// Cancels a long operation (clone, fetch, push, search) by its id.
 pub async fn app_cancel(core: &Shared, operation_id: String) -> AppResult<()> {
     core.cancel_operation(&operation_id);
     Ok(())
 }
 
-/// Jawaban pengguna atas [`CoreEvent::Prompt`]; `None` berarti dibatalkan.
+/// The user's answer to a [`CoreEvent::Prompt`]; `None` means canceled.
 pub async fn prompt_respond(core: &Shared, id: String, value: Option<String>) -> AppResult<()> {
     core.respond_prompt(&id, value);
     Ok(())
@@ -175,26 +175,26 @@ pub async fn settings_get(core: &Shared, window: &str) -> AppResult<Settings> {
     Ok(core.effective_settings(window))
 }
 
-/// Pengaturan tingkat pengguna (tanpa penimpaan proyek), untuk halaman pengaturan.
+/// User-level settings (without project overrides), for the settings page.
 pub async fn settings_get_user(core: &Shared) -> AppResult<Settings> {
     Ok(core.user_settings())
 }
 
-/// Menyimpan pengaturan pengguna lalu menyiarkan [`CoreEvent::SettingsChanged`] satu kali;
-/// tiap jendela mengambil pengaturan efektifnya sendiri lewat [`settings_get`].
+/// Saves the user's settings and then broadcasts [`CoreEvent::SettingsChanged`] once;
+/// each window fetches its own effective settings through [`settings_get`].
 pub async fn settings_set(core: &Shared, settings: Settings) -> AppResult<()> {
     core.set_user_settings(settings)?;
     core.emit(CoreEvent::SettingsChanged { settings: core.user_settings() });
     Ok(())
 }
 
-/// Nilai bawaan semua pengaturan (untuk "Reset to defaults").
+/// Default values of all settings (for "Reset to defaults").
 pub async fn settings_defaults() -> AppResult<Settings> {
     Ok(Settings::default())
 }
 
-/// Isi `keybindings.json` pengguna: objek JSON `{ "<id command>": "<pintasan>" | ["..."] }`.
-/// Berkas yang belum ada menghasilkan `{}`.
+/// Contents of the user's `keybindings.json`: a JSON object `{ "<command id>": "<shortcut>" | ["..."] }`.
+/// A file that does not exist yet yields `{}`.
 pub async fn keybindings_get(core: &Shared) -> AppResult<String> {
     match std::fs::read_to_string(core.keybindings_path()) {
         Ok(text) => Ok(text),
@@ -203,7 +203,7 @@ pub async fn keybindings_get(core: &Shared) -> AppResult<String> {
     }
 }
 
-/// Membuat `keybindings.json` (bila belum ada) agar bisa dibuka di editor, dan mengembalikan path-nya.
+/// Creates `keybindings.json` (if it does not exist yet) so it can be opened in the editor, and returns its path.
 pub async fn keybindings_ensure(core: &Shared) -> AppResult<String> {
     let path = core.keybindings_path();
     if !path.exists() {
@@ -215,7 +215,7 @@ pub async fn keybindings_ensure(core: &Shared) -> AppResult<String> {
     Ok(path.to_string_lossy().into_owned())
 }
 
-/// Sesi tersimpan (tab terbuka, tata letak) untuk sebuah proyek, sebagai JSON milik lapisan UI.
+/// The saved session (open tabs, layout) for a project, as JSON owned by the UI layer.
 pub async fn session_get(core: &Shared, root: String) -> AppResult<Option<String>> {
     Ok(core.store.session(&root))
 }
@@ -235,7 +235,7 @@ mod tests {
 
     #[test]
     fn strips_windows_verbatim_prefix() {
-        assert_eq!(strip_verbatim(PathBuf::from(r"\\?\C:\kode")), PathBuf::from(r"C:\kode"));
+        assert_eq!(strip_verbatim(PathBuf::from(r"\\?\C:\code")), PathBuf::from(r"C:\code"));
         assert_eq!(strip_verbatim(PathBuf::from(r"\\?\UNC\server\share")), PathBuf::from(r"\\?\UNC\server\share"));
         assert_eq!(strip_verbatim(PathBuf::from("/home/a")), PathBuf::from("/home/a"));
     }
@@ -243,10 +243,10 @@ mod tests {
     #[test]
     fn picks_first_directory_argument() {
         let dir = tempfile::tempdir().unwrap();
-        let sub = dir.path().join("proyek");
+        let sub = dir.path().join("project");
         std::fs::create_dir(&sub).unwrap();
         let cwd = dir.path().to_string_lossy().into_owned();
-        let args = vec!["oncode".to_string(), "--flag".to_string(), "tidak-ada".to_string(), "proyek".to_string()];
+        let args = vec!["oncode".to_string(), "--flag".to_string(), "does-not-exist".to_string(), "project".to_string()];
         assert_eq!(folder_argument(&args, &cwd), Some(sub.to_string_lossy().into_owned()));
         assert_eq!(folder_argument(&["oncode".to_string()], &cwd), None);
     }
@@ -254,18 +254,18 @@ mod tests {
     #[tokio::test]
     async fn opening_a_folder_reports_trust_and_records_it_as_recent() {
         let t = TestCore::new();
-        let project = t.project("proyek");
+        let project = t.project("project");
         git(&project, &["init", "-q", "-b", "main"]);
         let path = project.to_string_lossy().into_owned();
 
-        // Mode terbatas: repositori tidak dibuka walaupun folder berisi `.git`.
+        // Restricted mode: the repository is not opened even though the folder contains `.git`.
         let info = workspace_open(&t.core, "w1", path.clone()).await.unwrap();
-        assert_eq!((info.root.as_str(), info.name.as_str(), info.trusted, info.repo_root.as_deref()), (path.as_str(), "proyek", false, None));
+        assert_eq!((info.root.as_str(), info.name.as_str(), info.trusted, info.repo_root.as_deref()), (path.as_str(), "project", false, None));
         assert_eq!(app_info(&t.core).await.unwrap().recent, vec![path.clone()]);
 
         let info = workspace_set_trusted(&t.core, "w1", true).await.unwrap();
         assert!(info.trusted);
-        // Root repositori berasal dari Git (`C:/...` di Windows); dibandingkan sebagai path.
+        // The repository root comes from Git (`C:/...` on Windows); compared as paths.
         assert_eq!(info.repo_root.as_deref().map(std::path::Path::new), Some(project.as_path()));
 
         let info = workspace_set_trusted(&t.core, "w1", false).await.unwrap();
@@ -276,7 +276,7 @@ mod tests {
 
         recent_remove(&t.core, path).await.unwrap();
         assert!(app_info(&t.core).await.unwrap().recent.is_empty());
-        assert_eq!(workspace_open(&t.core, "w1", t.dir.path().join("tidak-ada").to_string_lossy().into_owned()).await.unwrap_err().code, "notFound");
+        assert_eq!(workspace_open(&t.core, "w1", t.dir.path().join("does-not-exist").to_string_lossy().into_owned()).await.unwrap_err().code, "notFound");
     }
 
     #[tokio::test]
@@ -285,7 +285,7 @@ mod tests {
         let info = app_info(&t.core).await.unwrap();
         assert_eq!(info.version, env!("CARGO_PKG_VERSION"));
         assert_eq!(info.platform, std::env::consts::OS);
-        assert!(info.git.is_some(), "git tersedia di mesin uji: {:?}", info.git_error);
+        assert!(info.git.is_some(), "git is available on the test machine: {:?}", info.git_error);
         assert_eq!(Path::new(&info.settings_path), t.dir.path().join("app/config/settings.json"));
         assert_eq!(Path::new(&info.keybindings_path), t.dir.path().join("app/config/keybindings.json"));
     }
@@ -293,7 +293,7 @@ mod tests {
     #[tokio::test]
     async fn trust_path_marks_a_folder_without_opening_it() {
         let t = TestCore::new();
-        let project = t.project("klon");
+        let project = t.project("clone");
         workspace_trust_path(&t.core, project.to_string_lossy().into_owned()).await.unwrap();
         assert!(t.core.store.is_trusted(&project));
         assert!(t.core.workspace_root("w1").is_err());
@@ -314,7 +314,7 @@ mod tests {
         .await;
         assert_eq!(broadcast, settings);
         assert_eq!(settings_get(&t.core, "w1").await.unwrap(), settings);
-        assert_eq!(Settings::load(t.core.settings_path()), settings, "format settings.json di disk tetap sama");
+        assert_eq!(Settings::load(t.core.settings_path()), settings, "the settings.json format on disk stays the same");
     }
 
     #[tokio::test]
@@ -325,7 +325,7 @@ mod tests {
         assert_eq!(Path::new(&path), t.core.keybindings_path());
         let text = keybindings_get(&t.core).await.unwrap();
         assert!(text.starts_with("// User keyboard shortcuts.") && text.ends_with("{}\n"));
-        // Berkas yang sudah ada tidak ditimpa.
+        // An existing file is not overwritten.
         std::fs::write(&path, r#"{ "file.save": "Mod+S" }"#).unwrap();
         keybindings_ensure(&t.core).await.unwrap();
         assert_eq!(keybindings_get(&t.core).await.unwrap(), r#"{ "file.save": "Mod+S" }"#);
@@ -347,7 +347,7 @@ mod tests {
         let token = t.core.begin_operation("op");
         app_cancel(&t.core, "op".into()).await.unwrap();
         assert!(token.is_cancelled());
-        // Id permintaan yang tidak dikenal bukan galat.
-        prompt_respond(&t.core, "tidak-ada".into(), None).await.unwrap();
+        // An unknown request id is not an error.
+        prompt_respond(&t.core, "does-not-exist".into(), None).await.unwrap();
     }
 }

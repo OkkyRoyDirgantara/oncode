@@ -4,14 +4,14 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
-description = "Klien Claude API untuk OnCode: menulis pesan commit dari diff yang di-stage"
+description = "Claude API client for OnCode: writes commit messages from the staged diff"
 
 [dependencies]
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
-# Sama dengan oncode-forge: TLS lewat rustls, proxy sistem dihormati. Stream dibaca dengan
-# `Response::chunk()`, jadi fitur `stream` tidak diperlukan.
+# Same as oncode-forge: TLS through rustls, the system proxy is honored. The stream is read with
+# `Response::chunk()`, so the `stream` feature is not needed.
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "http2", "json", "system-proxy"] }
 
 [dev-dependencies]

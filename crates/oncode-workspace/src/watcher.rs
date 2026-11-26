@@ -1,4 +1,4 @@
-//! Pemantau perubahan berkas di working tree dan di direktori Git.
+//! A watcher for file changes in the working tree and in Git directories.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -14,50 +14,50 @@ use crate::error::{Result, WsError};
 use crate::fs::{absolute, is_temp_name};
 use crate::gitignore::{read_common_dir, IgnoreRules};
 
-/// Masa tenang sebelum perubahan yang terkumpul dikirim.
+/// Quiet period before the collected changes are sent.
 const QUIET: Duration = Duration::from_millis(250);
-/// Batas tunggu sejak perubahan pertama, agar aliran perubahan yang terus-menerus tetap terkirim.
+/// Wait limit since the first change, so a continuous stream of changes is still delivered.
 const MAX_WAIT: Duration = Duration::from_secs(1);
-/// Di atas jumlah path ini, satu kiriman diganti dengan `overflow: true`.
+/// Above this number of paths, a delivery is replaced with `overflow: true`.
 const MAX_PATHS: usize = 1000;
 
-/// Entri tingkat atas direktori Git yang tidak pernah dilaporkan.
+/// Top-level Git directory entries that are never reported.
 const GIT_NOISE: &[&str] = &["objects", "logs", "hooks", "info", "worktrees", "modules", "lfs"];
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum WatchEvent {
-    /// Berkas atau folder di working tree berubah. `paths` berisi path absolut tanpa duplikat.
-    /// Bila terlalu banyak perubahan atau sistem operasi kehilangan event, `paths` kosong dan
-    /// `overflow` bernilai `true`: muat ulang semuanya.
+    /// A file or folder in the working tree changed. `paths` contains absolute paths without duplicates.
+    /// If there are too many changes or the operating system lost events, `paths` is empty and
+    /// `overflow` is `true`: reload everything.
     Files { paths: Vec<String>, overflow: bool },
-    /// Isi direktori Git yang dipantau berubah. `git_dir` sama persis dengan path yang
-    /// diberikan pemanggil.
+    /// The contents of a watched Git directory changed. `git_dir` is exactly the path
+    /// given by the caller.
     ///
-    /// - `refs`: `refs/`, `packed-refs`, atau `HEAD` berubah.
-    /// - `index`: `index` berubah.
-    /// - `state`: penanda operasi berubah (`MERGE_HEAD`, `rebase-merge`, `rebase-apply`,
+    /// - `refs`: `refs/`, `packed-refs`, or `HEAD` changed.
+    /// - `index`: `index` changed.
+    /// - `state`: an operation marker changed (`MERGE_HEAD`, `rebase-merge`, `rebase-apply`,
     ///   `CHERRY_PICK_HEAD`, `REVERT_HEAD`).
     ///
-    /// Ketiganya bisa `false` bila yang berubah berkas lain, mis. `config` atau `FETCH_HEAD`.
+    /// All three can be `false` if another file changed, e.g. `config` or `FETCH_HEAD`.
     #[serde(rename_all = "camelCase")]
     Git { git_dir: String, refs: bool, index: bool, state: bool },
 }
 
-/// Pemantau satu folder proyek. Pemantauan berhenti saat nilai ini di-drop.
+/// A watcher for a single project folder. Watching stops when this value is dropped.
 pub struct Watcher {
     tx: mpsc::Sender<Msg>,
     thread: Option<thread::JoinHandle<()>>,
 }
 
-/// Cara memantau working tree.
+/// How to watch the working tree.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum TreeMode {
-    /// Satu pemantauan rekursif dari sistem operasi (FSEvents, ReadDirectoryChangesW).
+    /// A single recursive watch from the operating system (FSEvents, ReadDirectoryChangesW).
     Native,
-    /// Satu pemantauan per folder yang tidak diabaikan. Dipakai di Linux, karena inotify
-    /// membutuhkan satu watch per folder dan folder seperti `node_modules` atau `target`
-    /// akan menghabiskan jatah watch.
+    /// One watch per folder that is not ignored. Used on Linux, because inotify
+    /// needs one watch per folder and folders such as `node_modules` or `target`
+    /// would exhaust the watch quota.
     PerDirectory,
 }
 
@@ -78,20 +78,20 @@ enum Msg {
 }
 
 impl Watcher {
-    /// Memantau `root` secara rekursif beserta tiap direktori Git di `git_dirs` (boleh berada
-    /// di luar `root`, mis. milik worktree atau submodule).
+    /// Watches `root` recursively along with each Git directory in `git_dirs` (which may be
+    /// outside `root`, e.g. those of a worktree or submodule).
     ///
-    /// Perubahan dikumpulkan lalu dikirim setelah ±250 ms tenang, paling lambat tiap 1 detik,
-    /// dari sebuah thread latar. Perubahan pada path yang diabaikan gitignore dibuang.
-    /// Perubahan di dalam folder `.git` mana pun hanya dilaporkan sebagai `Git` (dan hanya
-    /// untuk direktori di `git_dirs`); berkas `*.lock` dan folder `objects/` diabaikan.
-    /// Dibuat atau dihapusnya entri `.git` itu sendiri dilaporkan sebagai `Files`.
+    /// Changes are collected and then sent after ±250 ms of quiet, at the latest every 1 second,
+    /// from a background thread. Changes to paths ignored by gitignore are dropped.
+    /// Changes inside any `.git` folder are only reported as `Git` (and only
+    /// for directories in `git_dirs`); `*.lock` files and the `objects/` folder are ignored.
+    /// The creation or deletion of the `.git` entry itself is reported as `Files`.
     ///
-    /// Untuk worktree tertaut, perubahan `refs/` dan `packed-refs` di direktori Git bersama
-    /// ikut dilaporkan sebagai `refs: true` pada `git_dir` worktree tersebut.
+    /// For linked worktrees, changes to `refs/` and `packed-refs` in the shared Git directory
+    /// are also reported as `refs: true` on that worktree's `git_dir`.
     ///
-    /// Gagal bila `root` atau salah satu `git_dirs` tidak dapat dipantau, termasuk bila batas
-    /// watcher sistem operasi terlampaui.
+    /// Fails if `root` or any of the `git_dirs` cannot be watched, including if the operating
+    /// system's watcher limit is exceeded.
     pub fn start(
         root: &Path,
         git_dirs: &[PathBuf],
@@ -107,8 +107,8 @@ impl Watcher {
         mode: TreeMode,
     ) -> Result<Watcher> {
         let root_shown = absolute(root)?;
-        // Sebagian backend melaporkan path yang sudah diselesaikan symlink-nya, jadi pencocokan
-        // awalan memakai path kanonis; path yang dikirim ke pemanggil tetap memakai `root` asli.
+        // Some backends report paths with their symlinks already resolved, so prefix matching
+        // uses the canonical path; the paths sent to the caller still use the original `root`.
         let root_real = std::fs::canonicalize(&root_shown).map_err(|e| WsError::io(&root_shown, e))?;
         if !root_real.is_dir() {
             return Err(WsError::invalid_path(format!("Not a folder: {}", root_shown.display())));
@@ -143,10 +143,10 @@ impl Watcher {
         Ok(Watcher { tx, thread: Some(thread) })
     }
 
-    /// Mengganti himpunan direktori Git yang dipantau.
+    /// Replaces the set of watched Git directories.
     ///
-    /// Direktori yang gagal dipantau dilewati dan galat pertama dikembalikan; direktori lain
-    /// tetap berlaku. Jangan dipanggil dari dalam callback `on_event`.
+    /// Directories that fail to be watched are skipped and the first error is returned; the other
+    /// directories still apply. Do not call from inside the `on_event` callback.
     pub fn set_git_dirs(&self, git_dirs: &[PathBuf]) -> Result<()> {
         if self.thread.as_ref().is_some_and(|t| t.thread().id() == thread::current().id()) {
             return Err(WsError::other("set_git_dirs must not be called from the watcher callback"));
@@ -162,7 +162,7 @@ impl Drop for Watcher {
     fn drop(&mut self) {
         let _ = self.tx.send(Msg::Stop);
         if let Some(thread) = self.thread.take() {
-            // Di-drop dari dalam callback: thread akan berhenti sendiri setelah callback selesai.
+            // Dropped from inside the callback: the thread will stop by itself after the callback finishes.
             if thread.thread().id() != thread::current().id() {
                 let _ = thread.join();
             }
@@ -171,10 +171,10 @@ impl Drop for Watcher {
 }
 
 struct GitDir {
-    /// Path persis seperti yang diberikan pemanggil; dipakai di `WatchEvent::Git`.
+    /// The path exactly as given by the caller; used in `WatchEvent::Git`.
     shown: String,
     dir: PathBuf,
-    /// Direktori Git bersama, bila `dir` milik worktree tertaut.
+    /// The shared Git directory, if `dir` belongs to a linked worktree.
     common: Option<PathBuf>,
 }
 
@@ -187,11 +187,11 @@ struct GitFlags {
 
 #[derive(Default)]
 struct Pending {
-    /// Path relatif terhadap akar proyek.
+    /// Paths relative to the project root.
     files: BTreeSet<PathBuf>,
     overflow: bool,
     git: BTreeMap<String, GitFlags>,
-    /// Disetel tiap kali ada perubahan baru yang tercatat; dipakai untuk mengatur masa tenang.
+    /// Set every time a new change is recorded; used to manage the quiet period.
     touched: bool,
 }
 
@@ -217,23 +217,23 @@ impl Pending {
 struct Worker {
     notify: RecommendedWatcher,
     mode: TreeMode,
-    /// Akar proyek kanonis; awalan semua path event working tree.
+    /// The canonical project root; the prefix of all working tree event paths.
     root: PathBuf,
-    /// Akar proyek seperti yang diberikan pemanggil; awalan path yang dilaporkan.
+    /// The project root as given by the caller; the prefix of the reported paths.
     root_shown: PathBuf,
     rules: IgnoreRules,
     git_dirs: Vec<GitDir>,
-    /// Path yang dipantau demi direktori Git → apakah rekursif.
+    /// Paths watched for the sake of Git directories → whether recursive.
     git_watches: BTreeMap<PathBuf, bool>,
     pending: Pending,
-    /// `.gitignore` berubah: folder yang tadinya diabaikan mungkin perlu dipantau.
+    /// `.gitignore` changed: folders that were previously ignored may need to be watched.
     resync: bool,
     on_event: Box<dyn Fn(WatchEvent) + Send + Sync>,
 }
 
 impl Worker {
     fn run(mut self, rx: mpsc::Receiver<Msg>) {
-        // Waktu perubahan pertama dan terakhir dalam kumpulan yang belum dikirim.
+        // The times of the first and last change in the batch not yet sent.
         let mut window: Option<(Instant, Instant)> = None;
         loop {
             let msg = match window {
@@ -241,8 +241,8 @@ impl Worker {
                 Some((first, last)) => {
                     let deadline = (last + QUIET).min(first + MAX_WAIT);
                     let now = Instant::now();
-                    // Diperiksa lebih dulu: `recv_timeout` tetap mengembalikan pesan yang sudah
-                    // mengantre, sehingga banjir event bisa menunda pengiriman tanpa batas.
+                    // Checked first: `recv_timeout` still returns messages that are already
+                    // queued, so a flood of events could delay delivery indefinitely.
                     if now >= deadline {
                         Err(RecvTimeoutError::Timeout)
                     } else {
@@ -292,7 +292,7 @@ impl Worker {
     fn on_notify(&mut self, result: notify::Result<notify::Event>) {
         let event = match result {
             Ok(event) => event,
-            // Backend kehilangan jejak (mis. batas inotify tercapai): minta pemuatan ulang.
+            // The backend lost track (e.g. the inotify limit was reached): ask for a reload.
             Err(_) => return self.pending.set_overflow(),
         };
         if event.need_rescan() {
@@ -301,8 +301,8 @@ impl Worker {
         if matches!(event.kind, EventKind::Access(_)) {
             return;
         }
-        // Entri dibuat, dihapus, atau berganti nama (bukan sekadar isinya berubah). Di Windows
-        // perubahan isi datang sebagai `Modify(Any)`, juga untuk folder yang isinya berubah.
+        // An entry was created, deleted, or renamed (not merely its contents changing). On Windows
+        // content changes arrive as `Modify(Any)`, also for folders whose contents changed.
         let structural = !matches!(event.kind, EventKind::Modify(ModifyKind::Data(_) | ModifyKind::Metadata(_) | ModifyKind::Any));
         for path in &event.paths {
             self.on_path(path, structural);
@@ -317,8 +317,8 @@ impl Worker {
         let Some(name) = rel.file_name() else { return };
 
         if let Some(position) = rel.components().position(|c| c.as_os_str() == ".git") {
-            // Isi `.git` bukan bagian working tree. Entri `.git` itu sendiri dilaporkan saat
-            // dibuat atau dihapus, agar repositori baru (`git init`) bisa dikenali.
+            // The contents of `.git` are not part of the working tree. The `.git` entry itself is reported when
+            // created or deleted, so a new repository (`git init`) can be recognized.
             if structural && position + 1 == rel.components().count() {
                 self.pending.add_file(rel.to_path_buf());
             }
@@ -336,7 +336,7 @@ impl Worker {
             }
         }
         let is_dir = std::fs::symlink_metadata(path).is_ok_and(|m| m.is_dir());
-        // "Isi folder berubah" (Windows) tidak membawa informasi: berkas di dalamnya dilaporkan sendiri.
+        // "Folder contents changed" (Windows) carries no information: the files inside are reported on their own.
         if is_dir && !structural {
             return;
         }
@@ -346,8 +346,8 @@ impl Worker {
         self.pending.add_file(rel.to_path_buf());
 
         if self.mode == TreeMode::PerDirectory && is_dir && structural {
-            // Folder baru (atau dipindahkan ke sini): pantau, dan laporkan isinya karena berkas
-            // yang dibuat sebelum watch terpasang tidak menghasilkan event.
+            // A new folder (or one moved here): watch it, and report its contents because files
+            // created before the watch was installed produce no events.
             match self.watch_tree(path, true) {
                 Ok(found) => found.into_iter().for_each(|rel| self.pending.add_file(rel)),
                 Err(_) => self.pending.set_overflow(),
@@ -355,8 +355,8 @@ impl Worker {
         }
     }
 
-    /// Mencatat perubahan di dalam direktori Git yang dipantau. `false` bila `path` bukan
-    /// bagian dari direktori Git mana pun.
+    /// Records a change inside a watched Git directory. `false` if `path` is not
+    /// part of any Git directory.
     fn on_git_path(&mut self, path: &Path) -> bool {
         let mut base: Option<&PathBuf> = None;
         for git in &self.git_dirs {
@@ -370,7 +370,7 @@ impl Worker {
         let Some(base) = base.cloned() else { return false };
         let Ok(rel) = path.strip_prefix(&base) else { return false };
         let mut components = rel.components();
-        // Direktori Git itu sendiri (dibuat/dihapus) ditangani sebagai entri working tree.
+        // The Git directory itself (created/deleted) is handled as a working tree entry.
         let Some(first) = components.next() else { return false };
         let first = first.as_os_str().to_string_lossy();
         let first = first.as_ref();
@@ -399,8 +399,8 @@ impl Worker {
                 entry.state |= flags.state;
                 self.pending.touched = true;
             } else if git.common.as_ref() == Some(&base) && shared_refs {
-                // Worktree tertaut berbagi ref dengan repositori induknya; `HEAD`, `index`,
-                // dan penanda operasi di direktori bersama adalah milik worktree utama.
+                // A linked worktree shares refs with its parent repository; `HEAD`, `index`,
+                // and operation markers in the shared directory belong to the main worktree.
                 self.pending.git.entry(git.shown.clone()).or_default().refs = true;
                 self.pending.touched = true;
             }
@@ -417,17 +417,17 @@ impl Worker {
         .map_err(|e| watch_error(&self.root_shown, &e))
     }
 
-    /// Memasang watch pada `top` dan semua folder di bawahnya yang tidak diabaikan.
-    /// Bila `collect`, mengembalikan entri yang ditemukan (relatif terhadap akar proyek).
+    /// Installs a watch on `top` and all folders beneath it that are not ignored.
+    /// If `collect`, returns the entries found (relative to the project root).
     ///
-    /// Gagal bila `top` sendiri tidak dapat dipantau atau batas watcher terlampaui; subfolder
-    /// lain yang gagal (mis. sudah terhapus) dilewati.
+    /// Fails if `top` itself cannot be watched or the watcher limit is exceeded; other
+    /// subfolders that fail (e.g. already deleted) are skipped.
     fn watch_tree(&mut self, top: &Path, collect: bool) -> notify::Result<Vec<PathBuf>> {
         let mut found = Vec::new();
         let mut stack = vec![top.to_path_buf()];
         let mut is_top = true;
         while let Some(dir) = stack.pop() {
-            // Watch dipasang sebelum isi folder dibaca, supaya tidak ada celah di antaranya.
+            // The watch is installed before the folder contents are read, so there is no gap in between.
             let watched = self.notify.watch(&dir, RecursiveMode::NonRecursive);
             if let Err(err) = watched {
                 if is_top || matches!(err.kind, notify::ErrorKind::MaxFilesWatch) {
@@ -460,8 +460,8 @@ impl Worker {
         Ok(found)
     }
 
-    /// Benar bila `path` adalah folder working tree, yang watch-nya tidak boleh dilepas saat
-    /// himpunan direktori Git berubah.
+    /// True if `path` is a working tree folder, whose watch must not be released when
+    /// the set of Git directories changes.
     fn is_tree_path(&self, path: &Path) -> bool {
         path.strip_prefix(&self.root).is_ok_and(|rel| rel.components().all(|c| c.as_os_str() != ".git"))
     }
@@ -483,8 +483,8 @@ impl Worker {
                 }
             };
             let common = read_common_dir(&real).and_then(|c| std::fs::canonicalize(c).ok()).filter(|c| *c != real);
-            // Berkas kunci (`HEAD`, `index`, `packed-refs`, penanda operasi) adalah anak langsung;
-            // hanya `refs/` yang perlu dipantau sampai ke dalam. `objects/` tidak dipantau.
+            // The key files (`HEAD`, `index`, `packed-refs`, operation markers) are direct children;
+            // only `refs/` needs to be watched all the way down. `objects/` is not watched.
             for base in std::iter::once(&real).chain(common.as_ref()) {
                 wanted.entry(base.clone()).or_insert(false);
                 for sub in ["refs", "reftable"] {
@@ -547,9 +547,9 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     const TIMEOUT: Duration = Duration::from_secs(3);
-    /// Cukup lama untuk memastikan sebuah event memang tidak datang (di atas masa tenang).
+    /// Long enough to be sure an event really is not coming (above the quiet period).
     const SETTLE: Duration = Duration::from_millis(700);
-    /// Backend yang bisa mengirim event terlambat (lihat [`Events::settle`]).
+    /// Backends that can deliver events late (see [`Events::settle`]).
     const DELAYED_EVENTS: bool = !cfg!(target_os = "linux");
 
     #[derive(Clone, Default)]
@@ -569,10 +569,10 @@ mod tests {
             self.0.lock().unwrap().clear();
         }
 
-        /// Membuang event langkah sebelumnya, termasuk yang masih akan datang. FSEvents (macOS) dan
-        /// ReadDirectoryChangesW (Windows, saat sibuk) bisa mengirim event dengan jeda, juga untuk
-        /// perubahan sesaat sebelum pemantauan dimulai (mis. `git init` saat persiapan uji).
-        /// inotify (Linux) tidak, jadi di sana cukup dikosongkan.
+        /// Discards the events of the previous step, including those that are still to come. FSEvents (macOS) and
+        /// ReadDirectoryChangesW (Windows, when busy) can deliver events with a delay, also for
+        /// changes made just before watching started (e.g. `git init` during test setup).
+        /// inotify (Linux) does not, so there it is enough to just clear.
         fn settle(&self) {
             if DELAYED_EVENTS {
                 thread::sleep(SETTLE);
@@ -580,7 +580,7 @@ mod tests {
             self.clear();
         }
 
-        /// Semua path yang pernah dilaporkan lewat `Files`.
+        /// All paths ever reported through `Files`.
         fn paths(&self) -> Vec<String> {
             self.all()
                 .into_iter()
@@ -595,7 +595,7 @@ mod tests {
             self.paths().iter().any(|p| Path::new(p) == path)
         }
 
-        /// Gabungan flag semua event `Git` untuk `git_dir`; `None` bila belum ada.
+        /// The merged flags of all `Git` events for `git_dir`; `None` if there are none yet.
         fn git(&self, git_dir: &Path) -> Option<(bool, bool, bool)> {
             let mut merged = None;
             for event in self.all() {
@@ -617,18 +617,18 @@ mod tests {
                 }
                 thread::sleep(Duration::from_millis(20));
             }
-            panic!("tidak terjadi dalam {TIMEOUT:?}: {what}; event: {:#?}", self.all());
+            panic!("did not happen within {TIMEOUT:?}: {what}; events: {:#?}", self.all());
         }
 
         fn wait_path(&self, path: &Path) {
-            self.wait(&format!("event Files untuk {}", path.display()), |e| e.has_path(path));
+            self.wait(&format!("Files event for {}", path.display()), |e| e.has_path(path));
         }
     }
 
     fn start(root: &Path, git_dirs: &[PathBuf], mode: TreeMode) -> (Watcher, Events) {
         let events = Events::default();
         let watcher = Watcher::start_with(root, git_dirs, events.sink(), mode).unwrap();
-        // Event susulan dari persiapan uji (berkas dan `git init` sebelum pemantauan) dibuang.
+        // Trailing events from the test setup (files and `git init` before watching) are discarded.
         if DELAYED_EVENTS {
             events.settle();
         }
@@ -643,22 +643,22 @@ mod tests {
     fn git(dir: &Path, args: &[&str]) {
         let output = Command::new("git")
             .current_dir(dir)
-            .args(["-c", "user.name=Tes", "-c", "user.email=tes@example.com", "-c", "init.defaultBranch=main"])
+            .args(["-c", "user.name=Test", "-c", "user.email=test@example.com", "-c", "init.defaultBranch=main"])
             .args(["-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null"])
             .args(args)
-            // Konfigurasi Git milik mesin yang menjalankan tes tidak boleh ikut berpengaruh.
+            // The Git configuration of the machine running the tests must not have any influence.
             .env("GIT_CONFIG_NOSYSTEM", "1")
             .env("GIT_CONFIG_GLOBAL", if cfg!(windows) { "NUL" } else { "/dev/null" })
             .output()
-            .expect("git harus terpasang untuk tes ini");
-        assert!(output.status.success(), "git {args:?} gagal: {}", String::from_utf8_lossy(&output.stderr));
+            .expect("git must be installed for this test");
+        assert!(output.status.success(), "git {args:?} failed: {}", String::from_utf8_lossy(&output.stderr));
     }
 
-    /// Folder sementara dengan path kanonis, agar path yang dilaporkan mudah dibandingkan.
+    /// A temporary folder with a canonical path, so the reported paths are easy to compare.
     fn temp_root() -> (tempfile::TempDir, PathBuf) {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().canonicalize().unwrap();
-        // Seperti root dari `workspace_open`: tanpa awalan `\\?\` Windows, yang ditolak Git.
+        // Like the root from `workspace_open`: without the Windows `\\?\` prefix, which Git rejects.
         let root = match root.to_string_lossy().strip_prefix(r"\\?\") {
             Some(rest) if !rest.starts_with("UNC") => PathBuf::from(rest),
             _ => root,
@@ -666,9 +666,9 @@ mod tests {
         (tmp, root)
     }
 
-    /// Mode yang dipakai di platform ini (lihat [`TreeMode::for_platform`]), plus `Native` di Linux.
-    /// `PerDirectory` hanya dipakai di Linux; di Windows ReadDirectoryChangesW per folder mengunci
-    /// folder (tidak bisa diganti nama), dan di macOS FSEvents per folder melaporkan isi lama.
+    /// The modes used on this platform (see [`TreeMode::for_platform`]), plus `Native` on Linux.
+    /// `PerDirectory` is only used on Linux; on Windows a per-folder ReadDirectoryChangesW locks
+    /// the folder (it cannot be renamed), and on macOS a per-folder FSEvents reports old contents.
     const MODES: &[TreeMode] = if cfg!(target_os = "linux") { &[TreeMode::PerDirectory, TreeMode::Native] } else { &[TreeMode::Native] };
 
     #[test]
@@ -678,8 +678,8 @@ mod tests {
             write(&root.join("src/existing.rs"), "v1");
             let (_watcher, events) = start(&root, &[], mode);
 
-            let created = root.join("baru.txt");
-            write(&created, "halo");
+            let created = root.join("new.txt");
+            write(&created, "hello");
             events.wait_path(&created);
 
             events.clear();
@@ -700,13 +700,13 @@ mod tests {
         let (_watcher, events) = start(&root, &[], TreeMode::for_platform());
         let file = root.join("a.txt");
         for i in 0..20 {
-            write(&file, &format!("isi {i}"));
+            write(&file, &format!("content {i}"));
         }
         write(&root.join("b.txt"), "x");
         events.wait_path(&root.join("b.txt"));
         thread::sleep(SETTLE);
 
-        // 21 penulisan menjadi segelintir kiriman (biasanya satu), tiap path sekali per kiriman.
+        // 21 writes become a handful of deliveries (usually one), each path once per delivery.
         let all = events.all();
         assert!(all.len() <= 3, "{all:#?}");
         let expected = vec![file.to_string_lossy().into_owned(), root.join("b.txt").to_string_lossy().into_owned()];
@@ -748,7 +748,7 @@ mod tests {
         write(&root.join("cache/old"), "");
         let (_watcher, events) = start(&root, &[], TreeMode::for_platform());
 
-        // Sebelum diabaikan, perubahan di `cache/` dilaporkan.
+        // Before it is ignored, changes in `cache/` are reported.
         write(&root.join("cache/a"), "1");
         events.wait_path(&root.join("cache/a"));
 
@@ -761,7 +761,7 @@ mod tests {
         thread::sleep(SETTLE);
         assert!(!events.has_path(&root.join("cache/b")), "{:#?}", events.all());
 
-        // Setelah aturan dicabut, folder yang tadinya diabaikan kembali dipantau.
+        // After the rule is revoked, the folder that was previously ignored is watched again.
         write(&root.join("build/x"), "1");
         write(&root.join(".gitignore"), "build/\n");
         events.wait_path(&root.join(".gitignore"));
@@ -778,7 +778,7 @@ mod tests {
             let (_tmp, root) = temp_root();
             let (_watcher, events) = start(&root, &[], mode);
 
-            // Folder dan isinya dibuat sekaligus, sebelum watch folder baru sempat terpasang.
+            // The folder and its contents are created at once, before the new folder's watch could be installed.
             write(&root.join("pkg/src/deep/mod.rs"), "x");
             write(&root.join("pkg/README.md"), "x");
             events.wait_path(&root.join("pkg"));
@@ -793,7 +793,7 @@ mod tests {
             write(&later, "x");
             events.wait_path(&later);
 
-            // Folder yang dipindahkan tetap terpantau di lokasi barunya.
+            // A moved folder stays watched at its new location.
             events.clear();
             fs::rename(root.join("pkg"), root.join("crate")).unwrap();
             events.wait_path(&root.join("crate"));
@@ -813,7 +813,7 @@ mod tests {
         for i in 0..(MAX_PATHS + 200) {
             fs::write(root.join(format!("f{i}.txt")), "x").unwrap();
         }
-        events.wait("event overflow", |e| {
+        events.wait("overflow event", |e| {
             e.all().iter().any(|ev| matches!(ev, WatchEvent::Files { paths, overflow: true } if paths.is_empty()))
         });
     }
@@ -826,40 +826,40 @@ mod tests {
             let git_dir = root.join(".git");
             let (_watcher, events) = start(&root, std::slice::from_ref(&git_dir), mode);
 
-            write(&git_dir.join("index"), "indeks palsu");
+            write(&git_dir.join("index"), "fake index");
             events.wait("Git{index}", |e| e.git(&git_dir) == Some((false, true, false)));
 
             events.settle();
             write(&git_dir.join("refs/heads/x"), "0000000000000000000000000000000000000000\n");
-            events.wait("Git{refs} dari refs/heads/x", |e| e.git(&git_dir) == Some((true, false, false)));
+            events.wait("Git{refs} from refs/heads/x", |e| e.git(&git_dir) == Some((true, false, false)));
 
-            // Folder ref baru (branch bernama `fitur/a`) ikut terpantau.
+            // A new ref folder (a branch named `feature/a`) is watched too.
             events.settle();
-            write(&git_dir.join("refs/heads/fitur/a"), "0000000000000000000000000000000000000000\n");
-            events.wait("Git{refs} dari refs/heads/fitur/a", |e| e.git(&git_dir) == Some((true, false, false)));
+            write(&git_dir.join("refs/heads/feature/a"), "0000000000000000000000000000000000000000\n");
+            events.wait("Git{refs} from refs/heads/feature/a", |e| e.git(&git_dir) == Some((true, false, false)));
 
             events.settle();
             write(&git_dir.join("packed-refs"), "# pack-refs\n");
-            events.wait("Git{refs} dari packed-refs", |e| e.git(&git_dir) == Some((true, false, false)));
+            events.wait("Git{refs} from packed-refs", |e| e.git(&git_dir) == Some((true, false, false)));
 
             events.settle();
-            write(&git_dir.join("HEAD"), "ref: refs/heads/lain\n");
-            events.wait("Git{refs} dari HEAD", |e| e.git(&git_dir) == Some((true, false, false)));
+            write(&git_dir.join("HEAD"), "ref: refs/heads/other\n");
+            events.wait("Git{refs} from HEAD", |e| e.git(&git_dir) == Some((true, false, false)));
 
             events.settle();
             write(&git_dir.join("MERGE_HEAD"), "0000000000000000000000000000000000000000\n");
-            events.wait("Git{state} dari MERGE_HEAD", |e| e.git(&git_dir) == Some((false, false, true)));
+            events.wait("Git{state} from MERGE_HEAD", |e| e.git(&git_dir) == Some((false, false, true)));
 
             events.settle();
             fs::create_dir(git_dir.join("rebase-merge")).unwrap();
-            events.wait("Git{state} dari rebase-merge", |e| e.git(&git_dir) == Some((false, false, true)));
+            events.wait("Git{state} from rebase-merge", |e| e.git(&git_dir) == Some((false, false, true)));
 
-            // Berkas lain di direktori Git: event tanpa flag.
+            // Another file in the Git directory: an event without flags.
             events.settle();
             write(&git_dir.join("FETCH_HEAD"), "x\n");
-            events.wait("Git tanpa flag", |e| e.git(&git_dir) == Some((false, false, false)));
+            events.wait("Git without flags", |e| e.git(&git_dir) == Some((false, false, false)));
 
-            // Tidak ada satu pun yang bocor sebagai perubahan working tree.
+            // None of it leaks as a working tree change.
             thread::sleep(SETTLE);
             assert_eq!(events.paths(), Vec::<String>::new(), "{mode:?}");
         }
@@ -894,20 +894,20 @@ mod tests {
         let (_tmp, root) = temp_root();
         git(&root, &["init", "-q"]);
         let git_dir = root.join(".git");
-        write(&root.join("a.txt"), "satu\n");
+        write(&root.join("a.txt"), "one\n");
         let (_watcher, events) = start(&root, std::slice::from_ref(&git_dir), TreeMode::for_platform());
 
         git(&root, &["add", "a.txt"]);
-        events.wait("git add mengubah index", |e| e.git(&git_dir).is_some_and(|(_, index, _)| index));
+        events.wait("git add changes the index", |e| e.git(&git_dir).is_some_and(|(_, index, _)| index));
 
         events.clear();
-        git(&root, &["commit", "-q", "-m", "awal"]);
-        events.wait("git commit mengubah refs", |e| e.git(&git_dir).is_some_and(|(refs, _, _)| refs));
+        git(&root, &["commit", "-q", "-m", "initial"]);
+        events.wait("git commit changes refs", |e| e.git(&git_dir).is_some_and(|(refs, _, _)| refs));
 
         thread::sleep(SETTLE);
         events.clear();
-        git(&root, &["branch", "fitur"]);
-        events.wait("git branch mengubah refs", |e| e.git(&git_dir) == Some((true, false, false)));
+        git(&root, &["branch", "feature"]);
+        events.wait("git branch changes refs", |e| e.git(&git_dir) == Some((true, false, false)));
         thread::sleep(SETTLE);
         assert_eq!(events.paths(), Vec::<String>::new());
     }
@@ -927,10 +927,10 @@ mod tests {
         assert_eq!(events.all().len(), 1, "{:#?}", events.all());
 
         watcher.set_git_dirs(std::slice::from_ref(&git_dir)).unwrap();
-        // Event susulan dari `git init` kini ikut tergolong sebagai event Git; buang dulu.
+        // Trailing events from `git init` now also count as Git events; discard them first.
         events.settle();
         write(&git_dir.join("index"), "2");
-        events.wait("Git{index} setelah set_git_dirs", |e| e.git(&git_dir) == Some((false, true, false)));
+        events.wait("Git{index} after set_git_dirs", |e| e.git(&git_dir) == Some((false, true, false)));
 
         watcher.set_git_dirs(&[]).unwrap();
         thread::sleep(SETTLE);
@@ -943,7 +943,7 @@ mod tests {
         thread::sleep(SETTLE);
         assert_eq!(events.git(&git_dir), None, "{:#?}", events.all());
 
-        let err = watcher.set_git_dirs(&[root.join("tidak-ada")]).unwrap_err();
+        let err = watcher.set_git_dirs(&[root.join("does-not-exist")]).unwrap_err();
         assert_eq!(err.code, WsErrorCode::NotFound);
     }
 
@@ -958,8 +958,8 @@ mod tests {
 
         write(&git_dir.join("index"), "x");
         write(&git_dir.join("refs/heads/x"), "x");
-        events.wait("Git dari direktori di luar root", |e| e.git(&git_dir) == Some((true, true, false)));
-        // Berkas penunjuk `.git` di working tree tidak dilaporkan saat isinya tidak berubah.
+        events.wait("Git from a directory outside root", |e| e.git(&git_dir) == Some((true, true, false)));
+        // The `.git` pointer file in the working tree is not reported when its contents do not change.
         assert_eq!(events.paths(), Vec::<String>::new());
     }
 
@@ -969,25 +969,25 @@ mod tests {
         let main = top.join("main");
         fs::create_dir(&main).unwrap();
         git(&main, &["init", "-q"]);
-        git(&main, &["commit", "-q", "--allow-empty", "-m", "awal"]);
+        git(&main, &["commit", "-q", "--allow-empty", "-m", "initial"]);
         let linked = top.join("linked");
-        git(&main, &["worktree", "add", "-q", "-b", "topik", linked.to_str().unwrap()]);
+        git(&main, &["worktree", "add", "-q", "-b", "topic", linked.to_str().unwrap()]);
         let linked_git_dir = main.join(".git/worktrees/linked");
         assert!(linked_git_dir.join("commondir").is_file());
 
         let (_watcher, events) = start(&linked, std::slice::from_ref(&linked_git_dir), TreeMode::for_platform());
 
-        // Ref hidup di direktori Git bersama.
-        git(&main, &["branch", "baru"]);
-        events.wait("refs bersama", |e| e.git(&linked_git_dir) == Some((true, false, false)));
+        // Refs live in the shared Git directory.
+        git(&main, &["branch", "new"]);
+        events.wait("shared refs", |e| e.git(&linked_git_dir) == Some((true, false, false)));
 
-        // `index` milik worktree utama bukan urusan worktree tertaut.
+        // The main worktree's `index` is none of the linked worktree's business.
         thread::sleep(SETTLE);
         events.clear();
         write(&main.join(".git/index"), "x");
         write(&main.join(".git/MERGE_HEAD"), "x");
         write(&linked_git_dir.join("index"), "x");
-        events.wait("index milik worktree tertaut", |e| e.git(&linked_git_dir).is_some());
+        events.wait("index of the linked worktree", |e| e.git(&linked_git_dir).is_some());
         thread::sleep(SETTLE);
         assert_eq!(events.git(&linked_git_dir), Some((false, true, false)));
     }
@@ -1022,7 +1022,7 @@ mod tests {
         write(&real.join("a.txt"), "x");
         events.wait_path(&link.join("a.txt"));
         write(&real.join(".git/index"), "x");
-        events.wait("Git dengan path asli pemanggil", |e| e.git(&git_dir) == Some((false, true, false)));
+        events.wait("Git with the caller's original path", |e| e.git(&git_dir) == Some((false, true, false)));
     }
 
     #[test]
@@ -1041,12 +1041,12 @@ mod tests {
     #[test]
     fn start_fails_for_missing_paths() {
         let (_tmp, root) = temp_root();
-        let err = Watcher::start(&root.join("tidak-ada"), &[], |_| {}).err().unwrap();
+        let err = Watcher::start(&root.join("does-not-exist"), &[], |_| {}).err().unwrap();
         assert_eq!(err.code, WsErrorCode::NotFound);
-        let err = Watcher::start(&root, &[root.join("tidak-ada/.git")], |_| {}).err().unwrap();
+        let err = Watcher::start(&root, &[root.join("does-not-exist/.git")], |_| {}).err().unwrap();
         assert_eq!(err.code, WsErrorCode::NotFound);
-        write(&root.join("berkas"), "x");
-        let err = Watcher::start(&root.join("berkas"), &[], |_| {}).err().unwrap();
+        write(&root.join("file"), "x");
+        let err = Watcher::start(&root.join("file"), &[], |_| {}).err().unwrap();
         assert_eq!(err.code, WsErrorCode::InvalidPath);
     }
 

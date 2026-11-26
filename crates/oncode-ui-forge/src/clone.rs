@@ -1,6 +1,6 @@
-//! Fungsi murni untuk dialog clone: nama folder dari URL dan validasi masukan.
+//! Pure functions for the clone dialog: folder name from a URL and input validation.
 
-/// Panjang awalan `skema://` bila `value` diawali skema URL (`[a-z][a-z0-9+.-]*://`).
+/// Length of the `scheme://` prefix if `value` starts with a URL scheme (`[a-z][a-z0-9+.-]*://`).
 fn scheme(value: &str) -> Option<&str> {
     let end = value.find("://")?;
     let scheme = &value[..end];
@@ -16,16 +16,16 @@ fn strip_git_suffix(value: &str) -> &str {
     }
 }
 
-/// Nama folder bawaan untuk sebuah URL clone, seperti yang dipilih `git clone`: segmen terakhir
-/// tanpa garis miring penutup dan tanpa akhiran `.git`. Mendukung bentuk https/ssh/git/file
-/// maupun bentuk scp (`git@host:owner/repo.git`). Kosong bila tidak ada nama yang bisa ditebak.
+/// Default folder name for a clone URL, as `git clone` picks it: the last segment
+/// without a trailing slash and without the `.git` suffix. Supports the https/ssh/git/file forms
+/// as well as the scp form (`git@host:owner/repo.git`). Empty if no name can be guessed.
 pub fn repo_name_from_url(url: &str) -> String {
     let value = url.trim();
-    // Query dan fragmen bukan bagian dari nama.
+    // The query and fragment are not part of the name.
     let value = value.split(['?', '#']).next().unwrap_or_default();
     let value = value.trim_end_matches(['/', '\\']);
     let value = strip_git_suffix(value).trim_end_matches(['/', '\\']);
-    // Sisa yang hanya berupa host (mis. "https://example.com") bukan nama repositori.
+    // A remainder that is only a host (e.g. "https://example.com") is not a repository name.
     if let Some(scheme) = scheme(value) {
         if !value[scheme.len() + 3..].contains('/') {
             return String::new();
@@ -39,7 +39,7 @@ pub fn repo_name_from_url(url: &str) -> String {
     }
 }
 
-/// Pesan galat untuk nama folder tujuan, atau `None` bila sah.
+/// Error message for the destination folder name, or `None` if valid.
 pub fn validate_folder_name(name: &str) -> Option<&'static str> {
     if name.trim().is_empty() {
         return Some("Enter a folder name");
@@ -71,28 +71,28 @@ pub fn validate_folder_name(name: &str) -> Option<&'static str> {
     None
 }
 
-/// Bentuk scp: `[user@]host:path`.
+/// The scp form: `[user@]host:path`.
 fn is_scp_like(value: &str) -> bool {
     let Some((head, path)) = value.split_once(':') else { return false };
     if path.is_empty() || head.contains(['/', '\\']) {
         return false;
     }
     match head.split_once('@') {
-        // user@host: keduanya tidak kosong.
+        // user@host: neither may be empty.
         Some((user, host)) => !user.is_empty() && !host.is_empty(),
-        // host tanpa user harus berupa nama bertitik, agar `C:\...` tidak dianggap scp.
+        // a host without a user must be a dotted name, so `C:\...` is not taken for scp.
         None => head.char_indices().any(|(index, c)| c == '.' && index > 0 && index + 1 < head.len()),
     }
 }
 
-/// Path lokal absolut: `/…`, `C:\…`, atau `~/…`.
+/// Absolute local path: `/…`, `C:\…`, or `~/…`.
 fn is_local_absolute(value: &str) -> bool {
     let bytes = value.as_bytes();
     value.starts_with('/') || value.starts_with("~/") || (bytes.len() >= 3 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' && matches!(bytes[2], b'/' | b'\\'))
 }
 
-/// Pesan galat untuk URL clone, atau `None` bila bentuknya masuk akal. Git sendiri yang
-/// memeriksa sisanya.
+/// Error message for a clone URL, or `None` if its shape is plausible. Git itself checks
+/// the rest.
 pub fn validate_clone_url(url: &str) -> Option<&'static str> {
     let value = url.trim();
     if value.is_empty() {
@@ -104,7 +104,7 @@ pub fn validate_clone_url(url: &str) -> Option<&'static str> {
     if value.starts_with('-') {
         return Some("The URL cannot start with a dash");
     }
-    // Bentuk `transport::alamat` (mis. `ext::`) menjalankan program pembantu; tidak pernah diterima dari sini.
+    // The `transport::address` form (e.g. `ext::`) runs a helper program; never accepted from here.
     if let Some(end) = value.find("::") {
         let transport = &value[..end];
         if !transport.is_empty() && transport.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '.' | '-')) {
@@ -121,7 +121,7 @@ pub fn validate_clone_url(url: &str) -> Option<&'static str> {
     Some("Enter a full URL, for example https://github.com/owner/repo.git")
 }
 
-/// Menggabungkan folder induk dan nama untuk ditampilkan.
+/// Joins the parent folder and a name for display.
 pub fn join_path(parent: &str, name: &str) -> String {
     if parent.is_empty() {
         return name.to_string();
@@ -146,7 +146,7 @@ mod tests {
             ("https://gitlab.com/group/sub/group/project.git", "project"),
             ("https://user@host.example:8443/scm/my.repo.git", "my.repo"),
             ("https://github.com/owner/repo.git?ref=main#readme", "repo"),
-            // Bentuk scp.
+            // The scp form.
             ("git@github.com:owner/repo.git", "repo"),
             ("git@github.com:owner/repo", "repo"),
             ("git@github.com:repo.git", "repo"),
@@ -156,7 +156,7 @@ mod tests {
             ("git://host.example/pub/thing.git", "thing"),
             ("file:///home/me/src/local.git", "local"),
             ("/home/me/src/local-repo/", "local-repo"),
-            // Seperti git: menunjuk ke direktori `.git` berarti repositori induknya.
+            // Like git: pointing at a `.git` directory means its parent repository.
             ("/home/me/src/local-repo/.git", "local-repo"),
             ("C:\\repos\\win-repo", "win-repo"),
         ];
@@ -174,7 +174,7 @@ mod tests {
 
     #[test]
     fn folder_names_are_validated() {
-        for name in ["repo", "my.repo", "repo-2", "Proyek Baru", ".dotfiles", "a"] {
+        for name in ["repo", "my.repo", "repo-2", "New Project", ".dotfiles", "a"] {
             assert_eq!(validate_folder_name(name), None, "{name:?}");
         }
         let long = "x".repeat(256);
@@ -198,7 +198,7 @@ mod tests {
             (long.as_str(), "too long"),
         ];
         for (name, message) in cases {
-            let problem = validate_folder_name(name).unwrap_or_else(|| panic!("{name:?} harus ditolak"));
+            let problem = validate_folder_name(name).unwrap_or_else(|| panic!("{name:?} must be rejected"));
             assert!(problem.contains(message), "{name:?}: {problem}");
         }
         assert_eq!(validate_folder_name(&"x".repeat(255)), None);
@@ -226,7 +226,7 @@ mod tests {
             ("--upload-pack=touch /tmp/pwned", "spaces"),
             ("--upload-pack=x", "dash"),
             ("-u", "dash"),
-            // Transport pembantu menjalankan program; tidak boleh lolos.
+            // A helper transport runs a program; it must not get through.
             ("ext::sh -c touch% /tmp/pwned", "spaces"),
             ("ext::sh", "not supported"),
             ("fd::17", "not supported"),
@@ -236,7 +236,7 @@ mod tests {
             ("repo", "full URL"),
         ];
         for (url, message) in cases {
-            let problem = validate_clone_url(url).unwrap_or_else(|| panic!("{url:?} harus ditolak"));
+            let problem = validate_clone_url(url).unwrap_or_else(|| panic!("{url:?} must be rejected"));
             assert!(problem.contains(message), "{url:?}: {problem}");
         }
     }

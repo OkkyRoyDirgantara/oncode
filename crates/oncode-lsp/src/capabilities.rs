@@ -1,4 +1,4 @@
-//! Kemampuan klien yang diumumkan saat `initialize`, dan pemeriksaan kemampuan server.
+//! Client capabilities announced at `initialize`, and server capability checks.
 
 use lsp_types::{
     ClientCapabilities, CodeActionProviderCapability, HoverProviderCapability, OneOf, SaveOptions, ServerCapabilities, TextDocumentSyncCapability, TextDocumentSyncKind,
@@ -6,12 +6,12 @@ use lsp_types::{
 };
 use serde_json::json;
 
-/// Kemampuan klien OnCode. Disusun sebagai JSON agar mudah dibandingkan dengan spesifikasi;
-/// uji di bawah memastikan tidak ada nama field yang salah ketik.
+/// OnCode's client capabilities. Built as JSON to make it easy to compare against the spec;
+/// the test below makes sure there are no misspelled field names.
 pub(crate) fn client_capabilities_json() -> serde_json::Value {
     json!({
         "general": {
-            // Urutan = preferensi. UTF-16 wajib didukung semua server dan menjadi pilihan terakhir.
+            // Order = preference. UTF-16 must be supported by all servers and is the last choice.
             "positionEncodings": ["utf-8", "utf-32", "utf-16"],
             "staleRequestSupport": { "cancel": true, "retryOnContentModified": [] }
         },
@@ -28,7 +28,7 @@ pub(crate) fn client_capabilities_json() -> serde_json::Value {
                 "dynamicRegistration": false,
                 "contextSupport": true,
                 "completionItem": {
-                    // Editor menyisipkan teks apa adanya; snippet tidak didukung.
+                    // The editor inserts text as-is; snippets are not supported.
                     "snippetSupport": false,
                     "documentationFormat": ["markdown", "plaintext"],
                     "deprecatedSupport": true,
@@ -69,7 +69,7 @@ pub fn client_capabilities() -> ClientCapabilities {
     serde_json::from_value(client_capabilities_json()).unwrap_or_default()
 }
 
-/// Fitur server yang dipakai UI; diperiksa sebelum permintaan dikirim.
+/// Server features the UI uses; checked before a request is sent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Feature {
     Completion,
@@ -86,7 +86,7 @@ pub enum Feature {
 }
 
 impl Feature {
-    /// Metode yang mendaftarkan fitur ini lewat `client/registerCapability`.
+    /// The method that registers this feature via `client/registerCapability`.
     pub fn method(self) -> &'static str {
         match self {
             Self::Completion => "textDocument/completion",
@@ -108,7 +108,7 @@ fn one_of<T>(value: &Option<OneOf<bool, T>>) -> bool {
     !matches!(value, None | Some(OneOf::Left(false)))
 }
 
-/// Apakah kemampuan statis server mencakup `feature`.
+/// Whether the server's static capabilities include `feature`.
 pub fn server_supports(capabilities: &ServerCapabilities, feature: Feature) -> bool {
     match feature {
         Feature::Completion => capabilities.completion_provider.is_some(),
@@ -127,12 +127,12 @@ pub fn server_supports(capabilities: &ServerCapabilities, feature: Feature) -> b
     }
 }
 
-/// Cara dokumen disinkronkan dengan server, diturunkan dari `textDocumentSync`.
+/// How documents are synchronized with the server, derived from `textDocumentSync`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SyncOptions {
     pub open_close: bool,
     pub change: TextDocumentSyncKind,
-    /// `None`: server tidak menginginkan `didSave`. `Some(true)`: sertakan isi berkas.
+    /// `None`: the server does not want `didSave`. `Some(true)`: include the file contents.
     pub save: Option<bool>,
 }
 
@@ -146,7 +146,7 @@ impl SyncOptions {
     pub fn from_capabilities(capabilities: &ServerCapabilities) -> Self {
         match &capabilities.text_document_sync {
             None => Self::default(),
-            // Bentuk singkat: buka/tutup dan simpan (tanpa isi) dikirim selama jenisnya bukan `None`.
+            // The short form: open/close and save (without contents) are sent as long as the kind is not `None`.
             Some(TextDocumentSyncCapability::Kind(kind)) => {
                 let active = *kind != TextDocumentSyncKind::NONE;
                 Self { open_close: active, change: *kind, save: active.then_some(false) }
@@ -168,7 +168,7 @@ impl SyncOptions {
 mod tests {
     use super::*;
 
-    /// Membuang nilai `null` agar hasil serialisasi ulang bisa dibandingkan dengan JSON sumber.
+    /// Drops `null` values so the re-serialized result can be compared with the source JSON.
     fn strip_nulls(value: serde_json::Value) -> serde_json::Value {
         match value {
             serde_json::Value::Object(map) => serde_json::Value::Object(map.into_iter().filter(|(_, v)| !v.is_null()).map(|(k, v)| (k, strip_nulls(v))).collect()),
@@ -180,8 +180,8 @@ mod tests {
     #[test]
     fn client_capabilities_match_the_typed_schema() {
         let source = client_capabilities_json();
-        let typed: ClientCapabilities = serde_json::from_value(source.clone()).expect("kemampuan klien harus sesuai skema lsp-types");
-        // Field yang salah ketik akan hilang saat diserialisasi ulang.
+        let typed: ClientCapabilities = serde_json::from_value(source.clone()).expect("client capabilities must match the lsp-types schema");
+        // Misspelled fields will be lost when re-serialized.
         assert_eq!(strip_nulls(serde_json::to_value(&typed).unwrap()), source);
         assert_eq!(typed.text_document.unwrap().completion.unwrap().completion_item.unwrap().snippet_support, Some(false));
     }

@@ -1,4 +1,4 @@
-//! Uji tampilan kerangka jendela: command palette, quick open, pintasan keyboard, sesi.
+//! View tests for the window framework: command palette, quick open, keyboard shortcuts, session.
 
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::TestAppContext;
@@ -18,8 +18,8 @@ async fn quick_open_finds_and_opens_a_file(cx: &mut TestAppContext) {
 
     assert!(window.run_command(cx, "workbench.quickOpen"));
     cx.run_until_parked();
-    // Enter langsung setelah mengetik, sebelum pencarian di backend selesai (daftar masih berisi
-    // hasil kueri kosong): pilihan menunggu hasil untuk "lib", bukan diabaikan.
+    // Enter right after typing, before the backend search finishes (the list still holds
+    // the results of the empty query): the pick waits for the results for "lib", instead of being ignored.
     window.update(cx, |window, cx| {
         window.render_frame(cx);
         window.input("lib", cx);
@@ -27,11 +27,11 @@ async fn quick_open_finds_and_opens_a_file(cx: &mut TestAppContext) {
     cx.run_until_parked();
     window.update(cx, |window, cx| window.press("enter", cx));
     let workbench_for_wait = workbench.clone();
-    window.wait_until(cx, "lib.rs terbuka", move |_, cx| workbench_for_wait.read(cx).model().all_tabs().any(|tab| tab.title == "lib.rs")).await;
+    window.wait_until(cx, "lib.rs open", move |_, cx| workbench_for_wait.read(cx).model().all_tabs().any(|tab| tab.title == "lib.rs")).await;
     assert_eq!(tab_titles(&workbench, cx), ["lib.rs"]);
 }
 
-/// Hasil quick open tampil dan bisa dibedakan dari status "mencari" (id untuk uji).
+/// Quick open results are shown and can be told apart from the "searching" state (ids for tests).
 #[gpui_kit::test]
 async fn quick_open_lists_matching_files(cx: &mut TestAppContext) {
     let app = TestApp::new(cx);
@@ -41,7 +41,7 @@ async fn quick_open_lists_matching_files(cx: &mut TestAppContext) {
     cx.run_until_parked();
     window.update(cx, |window, cx| {
         window.render_frame(cx);
-        window.input("zzz-tidak-ada", cx);
+        window.input("zzz-does-not-exist", cx);
     });
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
     loop {
@@ -50,10 +50,10 @@ async fn quick_open_lists_matching_files(cx: &mut TestAppContext) {
             (window.find_all(("quick-pick-item", 0usize)).len(), window.find_all("quick-pick-empty").len())
         });
         if empty > 0 {
-            assert_eq!(items, 0, "tidak ada berkas yang cocok");
+            assert_eq!(items, 0, "no file matches");
             break;
         }
-        assert!(std::time::Instant::now() < deadline, "status kosong tidak tampil");
+        assert!(std::time::Instant::now() < deadline, "the empty state is not shown");
         window.wait_until(cx, "backend", |_, _| true).await;
         std::thread::sleep(std::time::Duration::from_millis(20));
     }
@@ -81,7 +81,7 @@ async fn command_palette_runs_the_selected_command(cx: &mut TestAppContext) {
     cx.run_until_parked();
     window.update(cx, |window, cx| window.press("enter", cx));
     cx.run_until_parked();
-    assert!(tab_titles(&workbench, cx).is_empty(), "command terpilih harus dijalankan");
+    assert!(tab_titles(&workbench, cx).is_empty(), "the picked command must be run");
 }
 
 #[gpui_kit::test]
@@ -92,17 +92,17 @@ async fn keybindings_json_overrides_default_shortcuts(cx: &mut TestAppContext) {
     let visible = |cx: &mut TestAppContext| cx.update(|cx| workbench.read(cx).is_sidebar_visible());
     assert!(visible(cx));
 
-    // Pintasan bawaan Mod+B.
+    // The default shortcut Mod+B.
     window.update(cx, |window, cx| {
         window.render_frame(cx);
         window.press("secondary-b", cx);
     });
     cx.run_until_parked();
-    assert!(!visible(cx), "Mod+B menyembunyikan sidebar");
+    assert!(!visible(cx), "Mod+B hides the sidebar");
 
-    // Penimpaan pengguna: pintasan bawaan tidak lagi berlaku, yang baru berlaku.
+    // A user override: the default shortcut no longer applies, the new one does.
     std::fs::create_dir_all(app.core.keybindings_path().parent().unwrap()).unwrap();
-    std::fs::write(app.core.keybindings_path(), "// milik pengguna\n{ \"workbench.toggleSidebar\": \"Mod+Alt+B\" }\n").unwrap();
+    std::fs::write(app.core.keybindings_path(), "// the user's own\n{ \"workbench.toggleSidebar\": \"Mod+Alt+B\" }\n").unwrap();
     assert!(window.run_command(cx, "keybindings.reload"));
     for _ in 0..100 {
         let applied = window.update(cx, |window, cx| {
@@ -116,10 +116,10 @@ async fn keybindings_json_overrides_default_shortcuts(cx: &mut TestAppContext) {
     }
     window.update(cx, |window, cx| window.press("secondary-b", cx));
     cx.run_until_parked();
-    assert!(!visible(cx), "pintasan lama tidak lagi berlaku");
+    assert!(!visible(cx), "the old shortcut no longer applies");
     window.update(cx, |window, cx| window.press("secondary-alt-b", cx));
     cx.run_until_parked();
-    assert!(visible(cx), "pintasan baru berlaku");
+    assert!(visible(cx), "the new shortcut applies");
 }
 
 #[gpui_kit::test]
@@ -134,23 +134,23 @@ async fn session_restores_pinned_file_tabs(cx: &mut TestAppContext) {
         workbench.update(cx, |workbench, cx| {
             open_file(workbench, OpenFile::new(path("a.txt")), window, cx);
             open_file(workbench, OpenFile::new(path("b.txt")), window, cx);
-            // Tab pratinjau tidak ikut disimpan.
+            // A preview tab is not saved.
             open_file(workbench, OpenFile::new(path("c.txt")).preview(), window, cx);
             open_file(workbench, OpenFile::new(path("a.txt")), window, cx);
         })
     });
     cx.run_until_parked();
 
-    // Menutup folder menyimpan sesi; membukanya lagi memulihkan tab.
+    // Closing the folder saves the session; opening it again restores the tabs.
     window.update(cx, |window, cx| window.shell_close_folder(cx));
-    window.wait_until(cx, "folder tertutup", |shell, cx| shell.read(cx).workspace().is_none()).await;
+    window.wait_until(cx, "folder closed", |shell, cx| shell.read(cx).workspace().is_none()).await;
     let shell = window.shell.clone();
     window.update(cx, |window, cx| shell.update(cx, |shell, cx| shell.open_folder(project.clone(), window, cx)));
-    window.wait_until(cx, "folder terbuka lagi", |shell, cx| shell.read(cx).workspace().is_some()).await;
+    window.wait_until(cx, "folder open again", |shell, cx| shell.read(cx).workspace().is_some()).await;
     let workbench = window.workbench(cx);
-    window.wait_until(cx, "tab dipulihkan", |_, cx| workbench.read(cx).model().all_tabs().count() == 2).await;
+    window.wait_until(cx, "tabs restored", |_, cx| workbench.read(cx).model().all_tabs().count() == 2).await;
     assert_eq!(tab_titles(&workbench, cx), ["a.txt", "b.txt"]);
-    window.wait_until(cx, "tab aktif dipulihkan", |_, cx| active_file(workbench.read(cx), cx).is_some_and(|(_, buffer, _)| buffer.read(cx).file_name() == "a.txt")).await;
+    window.wait_until(cx, "active tab restored", |_, cx| active_file(workbench.read(cx), cx).is_some_and(|(_, buffer, _)| buffer.read(cx).file_name() == "a.txt")).await;
 }
 
 trait ShellWindowExt {
@@ -165,8 +165,8 @@ impl ShellWindowExt for gpui_kit::Window {
     }
 }
 
-/// Enter yang ditekan selagi pencarian async masih berjalan tidak hilang: item pertama dari hasil
-/// kueri terakhir dipilih begitu hasilnya tiba.
+/// An Enter pressed while an async search is still running is not lost: the first item of the latest
+/// query's results is picked as soon as they arrive.
 #[gpui_kit::test]
 async fn enter_during_a_pending_search_picks_the_first_result_when_it_arrives(cx: &mut TestAppContext) {
     use gpui_kit::AppContext as _;
@@ -184,7 +184,7 @@ async fn enter_during_a_pending_search_picks_the_first_result_when_it_arrives(cx
             window.has_active_dialog(cx)
         })
     };
-    // Setiap pencarian untuk kueri "x" (bisa lebih dari sekali) menunggu sampai uji mengirim hasilnya.
+    // Every search for the query "x" (possibly more than once) waits until the test sends its results.
     let (send, receive) = tokio::sync::watch::channel::<Option<Vec<PickItem>>>(None);
     let _keep_open = receive.clone();
     let picked: Rc<RefCell<Option<Option<String>>>> = Rc::default();
@@ -200,28 +200,28 @@ async fn enter_during_a_pending_search_picks_the_first_result_when_it_arrives(cx
             })
         };
         let picked = picked.clone();
-        quick_pick(QuickPickOptions::with_search("Cari", search), move |item, _, _| *picked.borrow_mut() = Some(item.map(|i| i.value)), window, cx);
+        quick_pick(QuickPickOptions::with_search("Search", search), move |item, _, _| *picked.borrow_mut() = Some(item.map(|i| i.value)), window, cx);
     });
     cx.run_until_parked();
-    assert!(dialog_open(&window, cx), "quick pick terbuka");
+    assert!(dialog_open(&window, cx), "the quick pick is open");
     window.update(cx, |window, cx| {
         window.render_frame(cx);
         window.input("x", cx);
     });
     cx.run_until_parked();
-    assert!(dialog_open(&window, cx), "masih terbuka setelah mengetik");
+    assert!(dialog_open(&window, cx), "still open after typing");
     window.update(cx, |window, cx| window.press("enter", cx));
     cx.run_until_parked();
-    assert!(picked.borrow().is_none(), "belum ada hasil: belum memilih apa pun");
-    assert!(dialog_open(&window, cx), "quick pick tetap terbuka menunggu hasil");
+    assert!(picked.borrow().is_none(), "no results yet: nothing has been picked");
+    assert!(dialog_open(&window, cx), "the quick pick stays open waiting for results");
 
-    send.send(Some(vec![PickItem::new("satu", "1"), PickItem::new("dua", "2")])).unwrap();
+    send.send(Some(vec![PickItem::new("one", "1"), PickItem::new("two", "2")])).unwrap();
     let picked_for_wait = picked.clone();
-    window.wait_until(cx, "item pertama dipilih", move |_, _| picked_for_wait.borrow().is_some()).await;
+    window.wait_until(cx, "first item picked", move |_, _| picked_for_wait.borrow().is_some()).await;
     assert_eq!(picked.borrow().clone(), Some(Some("1".to_string())));
 }
 
-/// Folder yang dibuka tiap jendela, sesuai urutan `cx.windows()`.
+/// The folder each window has open, in the order of `cx.windows()`.
 fn window_folders(cx: &mut TestAppContext) -> Vec<Option<String>> {
     use gpui_kit::AppContext as _;
     let windows = cx.update(|cx| cx.windows());
@@ -235,8 +235,8 @@ fn window_folders(cx: &mut TestAppContext) -> Vec<Option<String>> {
         .collect()
 }
 
-/// `oncode <folder>` saat OnCode sudah berjalan: jendela yang sudah membuka folder itu dipakai lagi,
-/// folder lain mendapat jendela baru.
+/// `oncode <folder>` while OnCode is already running: the window that already has that folder open is reused,
+/// another folder gets a new window.
 #[gpui_kit::test]
 async fn command_line_folder_reuses_its_window_or_opens_a_new_one(cx: &mut TestAppContext) {
     let app = TestApp::new(cx);
@@ -244,7 +244,7 @@ async fn command_line_folder_reuses_its_window_or_opens_a_new_one(cx: &mut TestA
     let second = app.project(&[("b.txt", "b\n")]);
     app.open(Some(&first), cx).await;
 
-    // Path lain untuk folder yang sama (`<folder>/.`, seperti `oncode .`) tetap dikenali.
+    // Another path for the same folder (`<folder>/.`, like `oncode .`) is still recognized.
     cx.update(|cx| oncode_ui::open_from_command_line(Some(first.join(".")), cx));
     cx.run_until_parked();
     assert_eq!(window_folders(cx).len(), 1);
@@ -253,7 +253,7 @@ async fn command_line_folder_reuses_its_window_or_opens_a_new_one(cx: &mut TestA
     let wanted = second.to_string_lossy().into_owned();
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     while !window_folders(cx).contains(&Some(wanted.clone())) {
-        assert!(std::time::Instant::now() < deadline, "folder kedua tidak terbuka: {:?}", window_folders(cx));
+        assert!(std::time::Instant::now() < deadline, "the second folder did not open: {:?}", window_folders(cx));
         cx.run_until_parked();
         cx.executor().timer(std::time::Duration::from_millis(20)).await;
     }
@@ -263,7 +263,7 @@ async fn command_line_folder_reuses_its_window_or_opens_a_new_one(cx: &mut TestA
     cx.run_until_parked();
     assert_eq!(window_folders(cx).len(), 2);
 
-    // Tanpa folder: jendela kosong baru.
+    // Without a folder: a new empty window.
     cx.update(|cx| oncode_ui::open_from_command_line(None, cx));
     cx.run_until_parked();
     assert_eq!(window_folders(cx).len(), 3);

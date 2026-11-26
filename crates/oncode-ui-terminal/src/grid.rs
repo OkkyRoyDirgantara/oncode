@@ -1,10 +1,10 @@
-//! Isi layar terminal yang siap digambar, dalam satuan sel: latar per sel, potongan teks bergaya
-//! sama, karakter yang digambar sendiri (lihat `glyphs.rs`), seleksi, dan kursor.
+//! The terminal screen contents, ready to draw, in cell units: the background per cell, runs of text with
+//! the same style, characters drawn by us (see `glyphs.rs`), the selection, and the cursor.
 //!
-//! Setiap potongan teks diletakkan di kolomnya sendiri dan tiap hurufnya dipaksa selebar satu sel
-//! saat digambar, sehingga huruf dari font cadangan (ikon, emoji, aksara lain) tidak menggeser
-//! kolom sesudahnya. Latar digambar per sel setinggi baris penuh, tidak hanya di belakang huruf.
-//! Murni (tanpa GPUI) agar bisa diuji.
+//! Each text run is placed at its own column and each of its letters is forced to be one cell wide
+//! when drawn, so letters from a fallback font (icons, emoji, other scripts) do not shift the
+//! columns after them. The background is drawn per cell at the full line height, not just behind the letters.
+//! Pure (no GPUI) so it can be tested.
 
 use alacritty_terminal::event::EventListener;
 use alacritty_terminal::grid::Dimensions as _;
@@ -15,15 +15,15 @@ use alacritty_terminal::vte::ansi::{CursorShape, Rgb};
 use crate::glyphs;
 use crate::palette::{cell_style, Palette};
 
-/// Potongan teks di satu baris: sel-sel bersebelahan dengan gaya yang sama.
+/// A run of text on one line: adjacent cells with the same style.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TextRun {
     pub row: usize,
     pub column: usize,
     pub text: String,
-    /// Lebar tiap karakter dalam sel: 1, atau 2 untuk karakter lebar (yang selalu sendirian).
+    /// The width of each character in cells: 1, or 2 for a wide character (which is always alone).
     pub cell_width: usize,
-    /// Jumlah sel yang ditempati seluruh potongan.
+    /// The number of cells occupied by the whole run.
     pub cells: usize,
     pub fg: Rgb,
     pub bold: bool,
@@ -38,7 +38,7 @@ impl TextRun {
     }
 }
 
-/// Karakter yang digambar sendiri.
+/// A character drawn by us.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Glyph {
     pub row: usize,
@@ -47,7 +47,7 @@ pub struct Glyph {
     pub fg: Rgb,
 }
 
-/// Sel-sel bersebelahan di satu baris (`start..end`) berwarna sama.
+/// Adjacent cells on one line (`start..end`) with the same color.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Span {
     pub row: usize,
@@ -60,10 +60,10 @@ pub struct Span {
 pub struct Cursor {
     pub row: usize,
     pub column: usize,
-    /// 2 bila kursor berada di atas karakter lebar.
+    /// 2 if the cursor is on a wide character.
     pub cells: usize,
-    /// `Block` hanya saat terminal fokus (latar dan warna hurufnya sudah ada di `Frame`); tanpa
-    /// fokus menjadi `HollowBlock`.
+    /// `Block` only while the terminal is focused (its background and letter color are already in the
+    /// `Frame`); without focus it becomes `HollowBlock`.
     pub shape: CursorShape,
     pub color: Rgb,
 }
@@ -71,14 +71,14 @@ pub struct Cursor {
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Frame {
     pub backgrounds: Vec<Span>,
-    /// Sel terpilih; digambar dengan warna seleksi palet (transparan) di atas latar.
+    /// Selected cells; drawn with the palette's selection color (transparent) over the background.
     pub selections: Vec<Span>,
     pub runs: Vec<TextRun>,
     pub glyphs: Vec<Glyph>,
     pub cursor: Option<Cursor>,
 }
 
-/// Menambah sel ke rentang terakhir bila bersambung dan berwarna sama, atau membuka rentang baru.
+/// Adds a cell to the last span if it is contiguous and the same color, or opens a new span.
 fn extend(spans: &mut Vec<Span>, row: usize, column: usize, cells: usize, color: Rgb) {
     match spans.last_mut() {
         Some(last) if last.row == row && last.end == column && last.color == color => last.end = column + cells,
@@ -86,8 +86,8 @@ fn extend(spans: &mut Vec<Span>, row: usize, column: usize, cells: usize, color:
     }
 }
 
-/// Menyusun isi layar yang tampil (memperhitungkan posisi gulir). `show_cursor`: proses masih
-/// berjalan.
+/// Builds the visible screen contents (taking the scroll position into account). `show_cursor`: the
+/// process is still running.
 pub fn build<T: EventListener>(term: &Term<T>, palette: &Palette, focused: bool, show_cursor: bool) -> Frame {
     let content = term.renderable_content();
     let offset = content.display_offset as i32;
@@ -108,7 +108,7 @@ pub fn build<T: EventListener>(term: &Term<T>, palette: &Palette, focused: bool,
         }
         let (row, column) = (row as usize, indexed.point.column.0);
         let cell = indexed.cell;
-        // Separuh kanan karakter lebar sudah ditangani bersama separuh kirinya.
+        // The right half of a wide character is already handled together with its left half.
         if cell.flags.contains(Flags::WIDE_CHAR_SPACER) {
             continue;
         }
@@ -186,7 +186,7 @@ mod tests {
     fn plain_text_is_one_run_per_style_and_skips_blanks() {
         let f = frame("hello world", true);
         assert_eq!(texts(&f), [(0, 0, "hello"), (0, 6, "world")]);
-        // `->` tetap dua karakter dalam satu potongan; ligaturnya dimatikan saat digambar.
+        // `->` stays two characters in one run; its ligature is turned off when drawn.
         assert_eq!(texts(&frame("a -> b", true)), [(0, 0, "a"), (0, 2, "->"), (0, 5, "b")]);
     }
 
@@ -202,7 +202,7 @@ mod tests {
     fn backgrounds_cover_whole_cells_including_spaces() {
         let f = frame("\x1b[41mA B\x1b[0m C", true);
         let red: Vec<Span> = f.backgrounds.iter().copied().filter(|s| s.color == P.ansi[1]).collect();
-        assert_eq!(red, [Span { row: 0, start: 0, end: 3, color: P.ansi[1] }], "spasi berlatar ikut diwarnai");
+        assert_eq!(red, [Span { row: 0, start: 0, end: 3, color: P.ansi[1] }], "spaces with a background are colored too");
         assert_eq!(texts(&f), [(0, 0, "A"), (0, 2, "B"), (0, 4, "C")]);
     }
 

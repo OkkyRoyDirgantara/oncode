@@ -1,13 +1,13 @@
-//! LSP OnCode: pengelola proses language server dan klien protokolnya.
+//! OnCode LSP: language server process manager and its protocol client.
 //!
-//! - [`LspManager`] menjalankan proses dan membingkai pesan JSON-RPC lewat stdio
+//! - [`LspManager`] runs the processes and frames JSON-RPC messages over stdio
 //!   (`Content-Length: N\r\n\r\n<json>`).
-//! - [`Client`] adalah klien JSON-RPC/LSP bertipe di atas transport pesan mentah: korelasi
-//!   permintaan–jawaban, batas waktu, pembatalan, permintaan dari server, jabat tangan
-//!   `initialize`, dan sinkronisasi dokumen.
-//! - [`position`] dan [`uri`] menerjemahkan posisi dan path antara editor dan protokol.
+//! - [`Client`] is a typed JSON-RPC/LSP client on top of a raw message transport: request–response
+//!   correlation, timeouts, cancellation, requests from the server, the `initialize`
+//!   handshake, and document synchronization.
+//! - [`position`] and [`uri`] translate positions and paths between the editor and the protocol.
 //!
-//! Tidak bergantung pada UI.
+//! Does not depend on the UI.
 
 mod capabilities;
 mod client;

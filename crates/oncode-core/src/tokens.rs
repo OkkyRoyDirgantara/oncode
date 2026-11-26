@@ -1,5 +1,5 @@
-//! Penyimpanan token: keychain OS, dengan cadangan di memori bila keychain tidak tersedia
-//! (mis. Linux tanpa layanan Secret Service). Token di memori hilang saat aplikasi ditutup.
+//! Token storage: the OS keychain, with an in-memory fallback if the keychain is unavailable
+//! (e.g. Linux without a Secret Service). In-memory tokens are lost when the app is closed.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc};
@@ -7,8 +7,8 @@ use std::time::Duration;
 
 use oncode_forge::{ForgeError, ForgeErrorCode, MemoryStore, Result, TokenSet, TokenStore};
 
-/// Batas waktu satu operasi keychain. Tanpa layanan keychain, panggilan D-Bus bisa
-/// menunggu puluhan detik sebelum gagal; pengguna tidak boleh ikut menunggu selama itu.
+/// Time limit for a single keychain operation. Without a keychain service, a D-Bus call can
+/// wait tens of seconds before failing; the user must not have to wait that long.
 const KEYCHAIN_TIMEOUT: Duration = Duration::from_secs(4);
 
 pub struct FallbackStore {
@@ -27,12 +27,12 @@ impl FallbackStore {
         Self { primary, memory: MemoryStore::new(), memory_only: AtomicBool::new(false), timeout }
     }
 
-    /// `true` setelah keychain gagal dipakai: token hanya bertahan selama sesi ini.
+    /// `true` once the keychain has failed: tokens only last for this session.
     pub fn is_memory_only(&self) -> bool {
         self.memory_only.load(Ordering::SeqCst)
     }
 
-    /// Menjalankan operasi keychain di thread tersendiri; melewati batas waktu dianggap keychain tidak tersedia.
+    /// Runs a keychain operation on its own thread; exceeding the time limit counts as the keychain being unavailable.
     fn primary<T: Send + 'static>(&self, operation: impl FnOnce(&dyn TokenStore) -> Result<T> + Send + 'static) -> Result<T> {
         let store = self.primary.clone();
         let (tx, rx) = mpsc::channel();
@@ -71,7 +71,7 @@ impl TokenStore for FallbackStore {
         }
         let id = account_id.to_string();
         match self.primary(move |store| store.load(&id)) {
-            // Keychain yang tidak bisa dibuka diperlakukan seperti token tidak ada: pengguna diminta login lagi.
+            // A keychain that cannot be opened is treated like a missing token: the user is asked to log in again.
             Err(e) if e.code == ForgeErrorCode::Keychain => Ok(None),
             other => other,
         }
@@ -94,7 +94,7 @@ impl TokenStore for FallbackStore {
 mod tests {
     use super::*;
 
-    /// Keychain yang selalu gagal, seperti di sistem tanpa Secret Service.
+    /// A keychain that always fails, like on a system without a Secret Service.
     struct Broken;
     impl TokenStore for Broken {
         fn save(&self, _: &str, _: &TokenSet) -> Result<()> {
@@ -108,7 +108,7 @@ mod tests {
         }
     }
 
-    /// Keychain yang tidak pernah menjawab tepat waktu.
+    /// A keychain that never answers in time.
     struct Hanging;
     impl TokenStore for Hanging {
         fn save(&self, _: &str, _: &TokenSet) -> Result<()> {
@@ -132,11 +132,11 @@ mod tests {
         store.save("a", &tokens("t1")).unwrap();
         assert!(store.is_memory_only());
         assert_eq!(store.load("a").unwrap().unwrap().access_token, "t1");
-        // Operasi berikutnya tidak menunggu keychain lagi.
+        // Subsequent operations no longer wait for the keychain.
         store.save("b", &tokens("t2")).unwrap();
-        assert!(store.load("tidak-ada").unwrap().is_none());
+        assert!(store.load("does-not-exist").unwrap().is_none());
         store.delete("a").unwrap();
-        assert!(started.elapsed() < Duration::from_secs(1), "hanya operasi pertama yang boleh menunggu batas waktu");
+        assert!(started.elapsed() < Duration::from_secs(1), "only the first operation may wait for the timeout");
     }
 
     fn tokens(value: &str) -> TokenSet {
@@ -156,7 +156,7 @@ mod tests {
     #[test]
     fn broken_keychain_falls_back_to_memory_for_the_session() {
         let store = FallbackStore::new(Arc::new(Broken));
-        // Sebelum ada yang disimpan, keychain rusak berarti "tidak ada token", bukan galat.
+        // Before anything is stored, a broken keychain means "no token", not an error.
         assert!(store.load("a").unwrap().is_none());
         store.save("a", &tokens("t1")).unwrap();
         assert!(store.is_memory_only());

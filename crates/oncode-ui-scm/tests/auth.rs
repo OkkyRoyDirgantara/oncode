@@ -1,5 +1,5 @@
-//! Uji dialog kredensial HTTP: git meminta username dan password lewat `oncode-helper`, aplikasi
-//! menampilkan dialog, dan jawabannya kembali ke git. Server: `git http-backend` lokal dengan Basic auth.
+//! Tests of the HTTP credentials dialog: git asks for a username and password through `oncode-helper`, the app
+//! shows a dialog, and the answer goes back to git. Server: a local `git http-backend` with Basic auth.
 
 mod common;
 
@@ -16,7 +16,7 @@ fn remote_head(server: &GitHttpServer) -> Option<String> {
     output.status.success().then(|| String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
-/// Menunggu dialog terbuka lalu menjawabnya. `None` menekan Escape (membatalkan).
+/// Waits for a dialog to open, then answers it. `None` presses Escape (cancels).
 async fn answer_prompt(window: &TestWindow, cx: &mut TestAppContext, text: Option<&str>) {
     for _ in 0..500 {
         let open = window.update(cx, |window, cx| {
@@ -41,7 +41,7 @@ async fn answer_prompt(window: &TestWindow, cx: &mut TestAppContext, text: Optio
         }
     });
     cx.run_until_parked();
-    // Dialog berikutnya baru dibuka setelah jawaban sampai ke git.
+    // The next dialog only opens after the answer reaches git.
     for _ in 0..25 {
         std::thread::sleep(std::time::Duration::from_millis(20));
         cx.run_until_parked();
@@ -65,34 +65,34 @@ fn head(project: &Path) -> String {
 #[gpui_kit::test]
 async fn push_asks_for_username_and_password(cx: &mut TestAppContext) {
     let app = TestApp::new(cx);
-    let server = GitHttpServer::start("budi", "rahasia");
+    let server = GitHttpServer::start("budi", "secret");
     let (window, project) = setup(&app, &server, cx).await;
 
     assert!(window.run_command(cx, "git.push"));
     answer_prompt(&window, cx, Some("budi")).await;
-    answer_prompt(&window, cx, Some("rahasia")).await;
+    answer_prompt(&window, cx, Some("secret")).await;
     let expected = head(&project);
-    window.wait_until(cx, "push berhasil", |_, _| remote_head(&server).as_deref() == Some(expected.as_str())).await;
+    window.wait_until(cx, "push succeeded", |_, _| remote_head(&server).as_deref() == Some(expected.as_str())).await;
 }
 
 #[gpui_kit::test]
 async fn wrong_password_or_cancel_leaves_the_remote_untouched(cx: &mut TestAppContext) {
     let app = TestApp::new(cx);
-    let server = GitHttpServer::start("budi", "rahasia");
+    let server = GitHttpServer::start("budi", "secret");
     let (window, _project) = setup(&app, &server, cx).await;
 
-    // Password salah: git menyerah, remote tetap kosong.
+    // Wrong password: git gives up, the remote stays empty.
     assert!(window.run_command(cx, "git.push"));
     answer_prompt(&window, cx, Some("budi")).await;
-    answer_prompt(&window, cx, Some("salah")).await;
-    window.wait_until(cx, "kredensial ditolak", |_, _| server.rejected.load(std::sync::atomic::Ordering::SeqCst) >= 2).await;
+    answer_prompt(&window, cx, Some("wrong")).await;
+    window.wait_until(cx, "credentials rejected", |_, _| server.rejected.load(std::sync::atomic::Ordering::SeqCst) >= 2).await;
     for _ in 0..50 {
         std::thread::sleep(std::time::Duration::from_millis(20));
         cx.run_until_parked();
     }
     assert_eq!(remote_head(&server), None);
 
-    // Dibatalkan pada dialog username: push berhenti tanpa mengirim apa pun.
+    // Canceled at the username dialog: the push stops without sending anything.
     assert!(window.run_command(cx, "git.push"));
     answer_prompt(&window, cx, None).await;
     for _ in 0..50 {
@@ -104,5 +104,5 @@ async fn wrong_password_or_cancel_leaves_the_remote_untouched(cx: &mut TestAppCo
         use gpui_kit::component::WindowExt as _;
         window.has_active_dialog(cx)
     });
-    assert!(!busy, "tidak ada dialog yang tertinggal");
+    assert!(!busy, "no dialog is left behind");
 }

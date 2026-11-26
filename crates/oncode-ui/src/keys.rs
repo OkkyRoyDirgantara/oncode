@@ -1,5 +1,5 @@
-//! Penulisan pintasan keyboard: bentuk kanonis, tampilan, dan pengurai `keybindings.json`.
-//! Logika murni; aturannya sama dengan versi 0.2 agar berkas pengguna tetap berlaku.
+//! Keyboard shortcut notation: the canonical form, display, and the `keybindings.json` parser.
+//! Pure logic; the rules are the same as in version 0.2 so users' files still apply.
 
 use std::collections::BTreeMap;
 
@@ -35,7 +35,7 @@ fn canonical_key(key: &str) -> String {
     match (chars.next(), chars.next()) {
         (Some(c), None) => c.to_uppercase().collect(),
         (Some(c), Some(_)) => {
-            // F1..F12 dan nama lain: huruf pertama besar, sisanya kecil.
+            // F1..F12 and other names: first letter uppercase, the rest lowercase.
             let rest: String = lower.chars().skip(1).collect();
             format!("{}{}", c.to_uppercase(), rest)
         }
@@ -43,8 +43,8 @@ fn canonical_key(key: &str) -> String {
     }
 }
 
-/// Menormalkan penulisan pintasan: urutan modifier tetap, tombol huruf besar.
-/// `Mod` berarti Ctrl di Linux/Windows dan Cmd di macOS.
+/// Normalizes shortcut notation: fixed modifier order, uppercase key.
+/// `Mod` means Ctrl on Linux/Windows and Cmd on macOS.
 pub fn canonical_keybinding(binding: &str) -> String {
     canonical_for(binding, IS_MAC)
 }
@@ -52,7 +52,7 @@ pub fn canonical_keybinding(binding: &str) -> String {
 fn canonical_for(binding: &str, mac: bool) -> String {
     let trimmed = binding.trim();
     let mut parts: Vec<&str> = trimmed.split('+').map(str::trim).filter(|p| !p.is_empty()).collect();
-    // "Ctrl++" berarti tombol plus.
+    // "Ctrl++" means the plus key.
     if trimmed.ends_with("++") || trimmed == "+" {
         parts.push("+");
     }
@@ -69,7 +69,7 @@ fn canonical_for(binding: &str, mac: bool) -> String {
             _ => m.to_string(),
         })
         .collect();
-    // `Ctrl+~` dan `Ctrl+Shift+`` adalah pintasan yang sama (lihat `unshifted`).
+    // `Ctrl+~` and `Ctrl+Shift+`` are the same shortcut (see `unshifted`).
     if let Some(base) = unshifted(&key) {
         key = base.to_string();
         mods.push("Shift".to_string());
@@ -79,23 +79,23 @@ fn canonical_for(binding: &str, mac: bool) -> String {
     out.join("+")
 }
 
-/// Modifier dan tombol sebuah penekanan, tanpa bergantung pada tipe GPUI.
+/// The modifiers and key of a key press, without depending on GPUI types.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct KeyPress {
     pub control: bool,
     pub alt: bool,
     pub shift: bool,
-    /// Cmd di macOS, Super/Win di tempat lain.
+    /// Cmd on macOS, Super/Win elsewhere.
     pub platform: bool,
     pub key: String,
 }
 
-/// Tombol dasar (layout US) untuk simbol yang diketik dengan Shift, mis. `~` → `` ` ``.
+/// The base key (US layout) for symbols typed with Shift, e.g. `~` → `` ` ``.
 ///
-/// GPUI di Windows melaporkan Ctrl+Shift+` sebagai `ctrl` + `~` (Shift sudah "terpakai" menjadi
-/// karakter), sedangkan platform lain bisa melaporkan `ctrl-shift` + `` ` ``. Keduanya dinormalkan
-/// ke `Shift+<tombol dasar>` agar pintasan seperti `Mod+Shift+`` cocok di semua platform. `+`
-/// sengaja tidak termasuk: `Ctrl++` berarti tombol plus, yang di banyak layout tidak memakai Shift.
+/// GPUI on Windows reports Ctrl+Shift+` as `ctrl` + `~` (Shift is already "used up" turning into the
+/// character), while other platforms may report `ctrl-shift` + `` ` ``. Both are normalized
+/// to `Shift+<base key>` so a shortcut like `Mod+Shift+`` matches on all platforms. `+`
+/// is deliberately not included: `Ctrl++` means the plus key, which on many layouts does not use Shift.
 fn unshifted(key: &str) -> Option<&'static str> {
     Some(match key {
         "~" => "`",
@@ -122,12 +122,12 @@ fn unshifted(key: &str) -> Option<&'static str> {
     })
 }
 
-/// Pintasan kanonis untuk sebuah penekanan tombol, atau `None` bila hanya modifier.
+/// The canonical shortcut for a key press, or `None` if it is only a modifier.
 pub fn keybinding_from_press(press: &KeyPress) -> Option<String> {
     keybinding_from_press_on(press, IS_MAC)
 }
 
-/// Seperti [`keybinding_from_press`], dengan platform yang ditentukan pemanggil (untuk uji lintas platform).
+/// Like [`keybinding_from_press`], with the platform chosen by the caller (for cross-platform tests).
 pub fn keybinding_from_press_on(press: &KeyPress, mac: bool) -> Option<String> {
     let lower = press.key.to_lowercase();
     if press.key.is_empty() || matches!(lower.as_str(), "shift" | "control" | "alt" | "platform" | "function" | "cmd" | "super") {
@@ -160,7 +160,7 @@ pub fn keybinding_from_press_on(press: &KeyPress, mac: bool) -> Option<String> {
     Some(mods.join("+"))
 }
 
-/// Teks pintasan untuk ditampilkan, mis. "Ctrl+Shift+P" atau "⌘⇧P".
+/// The shortcut text to display, e.g. "Ctrl+Shift+P" or "⌘⇧P".
 pub fn format_keybinding(binding: &str) -> String {
     format_for(binding, IS_MAC)
 }
@@ -203,8 +203,8 @@ fn format_for(binding: &str, mac: bool) -> String {
     }
 }
 
-/// Mengurai isi `keybindings.json`: objek `{ "<id command>": "<pintasan>" | ["<pintasan>", ...] }`.
-/// Baris komentar `//` diabaikan. Daftar kosong menghapus pintasan bawaan.
+/// Parses the content of `keybindings.json`: an object `{ "<command id>": "<shortcut>" | ["<shortcut>", ...] }`.
+/// `//` comment lines are ignored. An empty list removes the default shortcuts.
 pub fn parse_keybindings(text: &str) -> Result<BTreeMap<String, Vec<String>>, String> {
     let stripped: String = text.lines().filter(|line| !line.trim_start().starts_with("//")).collect::<Vec<_>>().join("\n");
     let source = if stripped.trim().is_empty() { "{}" } else { stripped.as_str() };
@@ -273,7 +273,7 @@ mod tests {
 
     #[test]
     fn shifted_symbols_match_their_base_key_with_shift() {
-        // Windows: Ctrl+Shift+` datang sebagai ctrl + "~" tanpa Shift; platform lain bisa ctrl-shift + "`".
+        // Windows: Ctrl+Shift+` arrives as ctrl + "~" without Shift; other platforms may send ctrl-shift + "`".
         let windows = KeyPress { control: true, key: "~".into(), ..Default::default() };
         let other = KeyPress { control: true, shift: true, key: "`".into(), ..Default::default() };
         assert_eq!(keybinding_from_press_on(&windows, false).as_deref(), Some("Mod+Shift+`"));
@@ -281,12 +281,12 @@ mod tests {
         assert_eq!(canonical_for("Ctrl+Shift+`", false), "Mod+Shift+`");
         assert_eq!(canonical_for("Ctrl+~", false), "Mod+Shift+`");
         assert_eq!(canonical_for("Ctrl+Shift+~", false), "Mod+Shift+`");
-        // Shift+angka dan simbol lain.
+        // Shift+digit and other symbols.
         let bang = KeyPress { control: true, key: "!".into(), ..Default::default() };
         assert_eq!(keybinding_from_press_on(&bang, false).as_deref(), Some("Mod+Shift+1"));
         assert_eq!(canonical_for("Ctrl+Shift+1", false), "Mod+Shift+1");
         assert_eq!(canonical_for("Ctrl+?", false), "Mod+Shift+/");
-        // Tanpa Shift tetap tombol dasarnya; `+` tidak diubah.
+        // Without Shift it stays the base key; `+` is not changed.
         assert_eq!(canonical_for("Mod+`", false), "Mod+`");
         assert_eq!(canonical_for("Ctrl++", false), "Mod++");
         let plus = KeyPress { control: true, key: "+".into(), ..Default::default() };
@@ -303,8 +303,8 @@ mod tests {
 
     #[test]
     fn parses_keybindings_file() {
-        let parsed = parse_keybindings("// komentar\n{ \"file.save\": \"ctrl+alt+s\", \"view.toggleTerminal\": [], \"a.b\": [\"F5\", \"shift+f5\"] }").unwrap();
-        // `ctrl` adalah `Mod` di Windows/Linux, tetapi tombol Control tersendiri di macOS (`Mod` = Cmd).
+        let parsed = parse_keybindings("// comment\n{ \"file.save\": \"ctrl+alt+s\", \"view.toggleTerminal\": [], \"a.b\": [\"F5\", \"shift+f5\"] }").unwrap();
+        // `ctrl` is `Mod` on Windows/Linux, but a separate Control key on macOS (`Mod` = Cmd).
         assert_eq!(parsed["file.save"], vec![canonical_keybinding("Ctrl+Alt+S")]);
         assert_eq!(canonical_for("ctrl+alt+s", false), "Mod+Alt+S");
         assert_eq!(canonical_for("ctrl+alt+s", true), "Ctrl+Alt+S");

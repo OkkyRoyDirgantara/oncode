@@ -1,6 +1,6 @@
-//! Ekstensi Markdown Preview: tab `markdownPreview` yang menampilkan berkas Markdown sebagai
-//! dokumen jadi dan ikut berubah selagi berkasnya disunting (juga sebelum disimpan).
-//! Bisa dimatikan di Settings → Extensions (`extensions.markdownPreview`).
+//! Markdown Preview extension: a `markdownPreview` tab that shows a Markdown file as a rendered
+//! document and updates as the file is edited (even before it is saved).
+//! Can be turned off in Settings → Extensions (`extensions.markdownPreview`).
 
 use std::time::Duration;
 
@@ -16,18 +16,18 @@ use oncode_ui::editor::{open_file, OpenFile};
 use oncode_ui::{register_feature, register_tab_kind, EditorAction, Env, Lucide, OpenOptions, TabContent, TabData, TabKind, ViewTab, Workbench};
 use serde_json::{json, Value};
 
-/// Jenis tab pratinjau.
+/// The preview tab kind.
 pub const KIND: &str = "markdownPreview";
-/// Jeda setelah ketikan terakhir sebelum pratinjau digambar ulang.
+/// Delay after the last keystroke before the preview is redrawn.
 const REFRESH_DELAY: Duration = Duration::from_millis(150);
 
-/// Mendaftarkan ekstensi ini. Dipanggil sekali dari `app/src/main.rs` setelah `oncode_ui::init`.
+/// Registers this extension. Called once from `app/src/main.rs` after `oncode_ui::init`.
 pub fn init(cx: &mut App) {
     register_tab_kind(cx, KIND, PreviewKind);
     register_feature(cx, setup);
 }
 
-/// Tab pratinjau untuk sebuah berkas Markdown.
+/// A preview tab for a Markdown file.
 pub fn preview_tab(path: &str) -> TabData {
     let name = path.rsplit(['/', '\\']).next().unwrap_or(path);
     TabData::new(KIND, format!("Preview {name}"), json!({ "path": path })).with_id(format!("{KIND}:{path}")).with_description(path.to_string())
@@ -39,7 +39,7 @@ fn is_markdown(path: &str) -> bool {
 
 fn setup(workbench: &mut Workbench, _: &mut Window, cx: &mut Context<Workbench>) {
     let weak = cx.weak_entity();
-    // Aktif bila ekstensinya menyala dan tab aktif adalah berkas Markdown.
+    // Active when the extension is on and the active tab is a Markdown file.
     let markdown_active = {
         let weak = weak.clone();
         move |_: &Window, cx: &App| {
@@ -65,7 +65,7 @@ fn setup(workbench: &mut Workbench, _: &mut Window, cx: &mut Context<Workbench>)
     );
     workbench.register_command(Command::new("markdown.showPreview", "Open Preview", open(false, weak.clone())).category("Markdown").when(markdown_active));
 
-    // Dari pratinjau kembali ke berkas Markdown-nya.
+    // From the preview back to its Markdown file.
     let preview_active = {
         let weak = weak.clone();
         move |_: &Window, cx: &App| weak.upgrade().is_some_and(|workbench| workbench.read(cx).model().active().is_some_and(|(_, tab)| tab.kind == KIND))
@@ -74,7 +74,7 @@ fn setup(workbench: &mut Workbench, _: &mut Window, cx: &mut Context<Workbench>)
         Command::new("markdown.showSource", "Open Source", move |_: &Value, window: &mut Window, cx: &mut App| {
             let _ = weak.update(cx, |workbench, cx| {
                 let Some(path) = workbench.model().active().filter(|(_, tab)| tab.kind == KIND).and_then(|(_, tab)| tab.param_str("path").map(String::from)) else { return };
-                // Tab berkas yang sudah terbuka di grup lain diaktifkan, tidak dibuka lagi.
+                // A file tab that is already open in another group is activated, not opened again.
                 open_file(workbench, OpenFile::new(path), window, cx);
             });
         })
@@ -82,7 +82,7 @@ fn setup(workbench: &mut Workbench, _: &mut Window, cx: &mut Context<Workbench>)
         .when(preview_active),
     );
 
-    // Tombol di bilah tab, seperti VS Code.
+    // Buttons in the tab bar, like VS Code.
     workbench.register_editor_action(EditorAction::new(
         "markdown-preview",
         Lucide::Eye,
@@ -107,8 +107,8 @@ impl TabKind for PreviewKind {
     }
 }
 
-/// Tampilan pratinjau. Memegang buffer berkasnya, sehingga pratinjau tetap hidup walau tab
-/// editornya ditutup.
+/// The preview view. Holds the file's buffer, so the preview stays live even if its editor tab
+/// is closed.
 pub struct MarkdownPreview {
     env: Env,
     path: String,
@@ -121,12 +121,12 @@ pub struct MarkdownPreview {
 
 impl MarkdownPreview {
     fn new(path: String, env: Env, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        // `Workbench` sedang dipinjam saat tab dibangun; buffer diambil sesudahnya.
+        // `Workbench` is borrowed while the tab is being built; the buffer is fetched afterwards.
         cx.defer_in(window, |this, window, cx| this.attach(window, cx));
         Self { env, path, text: SharedString::default(), buffer: None, focus_handle: cx.focus_handle(), _refresh: Task::ready(()), _subscriptions: Vec::new() }
     }
 
-    /// Teks Markdown yang sedang ditampilkan.
+    /// The Markdown text currently shown.
     pub fn text(&self) -> &str {
         &self.text
     }

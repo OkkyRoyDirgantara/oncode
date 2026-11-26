@@ -16,8 +16,8 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "io
 tokio-util = "0.7"
 tempfile = "3"
 
-# Dependensi (GPUI dan kawan-kawan) dibangun tanpa info debug: binary debug turun dari ± 780 MB
-# dan waktu link jauh lebih singkat. Kode kita sendiri tetap punya nomor baris di backtrace.
+# Dependencies (GPUI and friends) are built without debug info: the debug binary shrinks from ± 780 MB
+# and link time gets much shorter. Our own code still has line numbers in backtraces.
 [profile.dev]
 debug = "line-tables-only"
 

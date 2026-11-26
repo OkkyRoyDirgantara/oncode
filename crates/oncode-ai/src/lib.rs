@@ -1,15 +1,15 @@
-//! Klien Claude API untuk OnCode: menulis pesan commit dari diff yang di-stage.
+//! Claude API client for OnCode: writes commit messages from the staged diff.
 //!
-//! Anthropic tidak punya SDK Rust resmi, jadi Messages API (`POST /v1/messages`) dipanggil lewat
-//! HTTP biasa dengan stream Server-Sent Events.
+//! Anthropic has no official Rust SDK, so the Messages API (`POST /v1/messages`) is called over
+//! plain HTTP with a Server-Sent Events stream.
 //!
-//! - [`request_body`]: badan permintaan (murni, diuji).
-//! - [`SseParser`]: pengurai Server-Sent Events.
-//! - [`stream_commit_message`]: mengirim permintaan dan mengalirkan teks jawabannya.
+//! - [`request_body`]: the request body (pure, tested).
+//! - [`SseParser`]: the Server-Sent Events parser.
+//! - [`stream_commit_message`]: sends the request and streams the answer text.
 //!
-//! API key tidak pernah muncul di keluaran `Debug` maupun pesan galat.
+//! The API key never appears in `Debug` output or error messages.
 //!
-//! [`claude_code`] menyediakan jalan lain tanpa API key: Claude Code CLI milik pengguna.
+//! [`claude_code`] provides another route without an API key: the user's own Claude Code CLI.
 
 pub mod claude_code;
 pub mod openai;
@@ -20,14 +20,14 @@ use std::time::Duration;
 use serde::Serialize;
 use serde_json::{json, Value};
 
-/// Model bawaan.
+/// Default model.
 pub const DEFAULT_MODEL: &str = "claude-opus-5-5";
-/// Alamat Claude API bawaan.
+/// Default Claude API address.
 pub const DEFAULT_BASE_URL: &str = "https://api.anthropic.com";
 const API_VERSION: &str = "2026-10-21";
 const FALLBACK_BETA: &str = "server-side-fallback-2026-07-01";
-/// Batas token keluaran. Thinking adaptif (selalu menyala di Opus 5.5) ikut dihitung, jadi
-/// batasnya longgar walaupun pesan commit pendek.
+/// Output token limit. Adaptive thinking (always on in Opus 5.5) counts toward it, so the
+/// limit is generous even though commit messages are short.
 const MAX_TOKENS: u32 = 16_000;
 
 pub(crate) const SYSTEM_PROMPT: &str = "You write Git commit messages for staged changes.
@@ -42,12 +42,12 @@ Describe what the diff actually changes, and do not mention anything that is not
 
 If the user has started the message, begin your reply with exactly the text they wrote and continue from there.";
 
-/// Akses ke Claude API.
+/// Access to the Claude API.
 #[derive(Clone)]
 pub struct ClaudeConfig {
     pub api_key: String,
     pub model: String,
-    /// Origin API tanpa `/v1`, mis. [`DEFAULT_BASE_URL`] atau gateway/proxy milik organisasi.
+    /// API origin without `/v1`, e.g. [`DEFAULT_BASE_URL`] or an organization-owned gateway/proxy.
     pub base_url: String,
 }
 
@@ -57,43 +57,43 @@ impl fmt::Debug for ClaudeConfig {
     }
 }
 
-/// Bahan untuk menulis pesan commit.
+/// Material for writing a commit message.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CommitPrompt {
-    /// Subjek commit terbaru, terbaru lebih dulu; contoh gaya penulisan repo.
+    /// Recent commit subjects, newest first; examples of the repo's writing style.
     pub recent_subjects: Vec<String>,
-    /// Keluaran `git diff --cached --stat`.
+    /// Output of `git diff --cached --stat`.
     pub stat: String,
-    /// Keluaran `git diff --cached` (mungkin dipotong, lihat `truncated`).
+    /// Output of `git diff --cached` (possibly truncated, see `truncated`).
     pub patch: String,
     pub truncated: bool,
-    /// Awal pesan yang sudah diketik pengguna; kosong bila belum ada.
+    /// The start of a message the user has already typed; empty if there is none.
     pub draft: String,
 }
 
-/// Kode galat yang dipakai UI untuk memilih pesan dan aksi lanjutan.
+/// Error code the UI uses to choose the message and follow-up action.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum AiErrorCode {
-    /// API key salah atau tidak berlaku (HTTP 401/403).
+    /// The API key is wrong or invalid (HTTP 401/403).
     Unauthorized,
-    /// Batas laju terlampaui (HTTP 429).
+    /// Rate limit exceeded (HTTP 429).
     RateLimited,
-    /// Claude API sedang sibuk atau bermasalah (HTTP 5xx/529, atau event `overloaded_error`).
+    /// The Claude API is busy or having problems (HTTP 5xx/529, or an `overloaded_error` event).
     Overloaded,
-    /// Claude menolak permintaan (`stop_reason: "refusal"`), termasuk setelah fallback.
+    /// Claude refused the request (`stop_reason: "refusal"`), including after fallback.
     Refused,
-    /// Gagal terhubung, waktu habis, atau koneksi putus di tengah jawaban.
+    /// Failed to connect, timed out, or the connection dropped mid-answer.
     Network,
-    /// Permintaan ditolak API (mis. nama model salah, diff terlalu besar).
+    /// The request was rejected by the API (e.g. wrong model name, diff too large).
     InvalidRequest,
-    /// Jawaban API tidak berbentuk seperti yang diharapkan.
+    /// The API's answer is not in the expected shape.
     InvalidResponse,
-    /// Claude Code CLI gagal (belum login, kuota habis, opsi tidak dikenal, …).
+    /// Claude Code CLI failed (not logged in, quota exhausted, unknown option, …).
     ClaudeCodeFailed,
 }
 
-/// Galat lapisan AI. `message` aman ditampilkan ke pengguna.
+/// Error of the AI layer. `message` is safe to show to the user.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, thiserror::Error)]
 #[serde(rename_all = "camelCase")]
 #[error("{message}")]
@@ -108,14 +108,14 @@ impl AiError {
     }
 }
 
-/// `true` untuk model yang menerima `fallbacks` server-side: bila Claude menolak karena
-/// pengaman (`stop_reason: "refusal"`), API meneruskan permintaan ke model fallback dalam
-/// panggilan yang sama.
+/// `true` for models that accept server-side `fallbacks`: if Claude refuses because of a
+/// safeguard (`stop_reason: "refusal"`), the API forwards the request to a fallback model
+/// within the same call.
 pub fn supports_server_fallbacks(model: &str) -> bool {
     matches!(model, "claude-opus-5-5" | "claude-opus-5" | "claude-sonnet-5-5" | "claude-fable-5-1" | "claude-fable-5-2")
 }
 
-/// Isi pesan pengguna: contoh subjek, stat, diff, dan draf.
+/// The user message content: example subjects, stat, diff, and draft.
 pub(crate) fn user_message(prompt: &CommitPrompt) -> String {
     let mut text = String::new();
     if !prompt.recent_subjects.is_empty() {
@@ -145,8 +145,8 @@ pub(crate) fn user_message(prompt: &CommitPrompt) -> String {
     text
 }
 
-/// Badan permintaan `POST /v1/messages`. Thinking tidak diatur (adaptif secara bawaan) dan
-/// effort `low` karena tugasnya ringkas; parameter sampling tidak dikirim.
+/// Body of the `POST /v1/messages` request. Thinking is not configured (adaptive by default) and
+/// effort is `low` because the task is short; sampling parameters are not sent.
 pub fn request_body(config: &ClaudeConfig, prompt: &CommitPrompt) -> Value {
     let mut body = json!({
         "model": config.model,
@@ -162,15 +162,15 @@ pub fn request_body(config: &ClaudeConfig, prompt: &CommitPrompt) -> Value {
     body
 }
 
-/// Satu event Server-Sent Events.
+/// A single Server-Sent Events event.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SseEvent {
     pub event: String,
     pub data: String,
 }
 
-/// Pengurai Server-Sent Events bertahap: potongan byte boleh terbelah di mana saja, termasuk
-/// di tengah karakter UTF-8 multi-byte.
+/// An incremental Server-Sent Events parser: byte chunks may be split anywhere, including in
+/// the middle of a multi-byte UTF-8 character.
 #[derive(Debug, Default)]
 pub struct SseParser {
     buffer: Vec<u8>,
@@ -210,16 +210,16 @@ impl SseParser {
     }
 }
 
-/// Keadaan jawaban yang sedang dialirkan.
+/// State of the answer being streamed.
 #[derive(Debug, Default)]
 struct StreamState {
     text: String,
     stop_reason: Option<String>,
 }
 
-/// Menerapkan satu event; mengembalikan potongan teks baru bila ada. Hanya `text_delta` yang
-/// diambil: thinking, `ping`, dan blok `fallback` diabaikan. Dengan fallback server-side, teks
-/// yang sudah diterima tidak pernah dibatalkan; model fallback melanjutkannya.
+/// Applies a single event; returns the new text chunk if there is one. Only `text_delta` is
+/// taken: thinking, `ping`, and `fallback` blocks are ignored. With server-side fallback, text
+/// already received is never rolled back; the fallback model continues it.
 fn apply_event(state: &mut StreamState, event: &SseEvent) -> Result<Option<String>, AiError> {
     if event.data.trim().is_empty() {
         return Ok(None);
@@ -246,7 +246,7 @@ fn apply_event(state: &mut StreamState, event: &SseEvent) -> Result<Option<Strin
     }
 }
 
-/// Membuang pagar kode dan spasi di tepi, bila model tetap menambahkannya.
+/// Removes code fences and surrounding whitespace, in case the model adds them anyway.
 pub(crate) fn clean_message(text: &str) -> String {
     let trimmed = text.trim();
     let unfenced = trimmed
@@ -259,7 +259,7 @@ pub(crate) fn clean_message(text: &str) -> String {
 
 fn finish(state: StreamState) -> Result<String, AiError> {
     match state.stop_reason.as_deref() {
-        // Seluruh rantai (termasuk fallback) menolak: teks parsial dibuang.
+        // The whole chain (including fallback) refused: the partial text is discarded.
         Some("refusal") => Err(AiError::new(AiErrorCode::Refused, "Claude declined to write a message for these changes. Write it yourself or try again.")),
         None => Err(AiError::new(AiErrorCode::Network, "The connection closed before the answer was complete. Try again.")),
         Some(_) => {
@@ -272,7 +272,7 @@ fn finish(state: StreamState) -> Result<String, AiError> {
     }
 }
 
-/// Galat dari status HTTP dan/atau objek `error` API.
+/// Error from the HTTP status and/or the API's `error` object.
 fn api_error(status: Option<u16>, kind: Option<&str>, detail: Option<&str>, retry_after: Option<u64>) -> AiError {
     let detail = detail.map(str::trim).filter(|d| !d.is_empty());
     match (status, kind) {
@@ -315,13 +315,13 @@ fn transport_error(err: reqwest::Error) -> AiError {
     AiError::new(AiErrorCode::Network, message)
 }
 
-/// Menulis pesan commit. `on_text` menerima tiap potongan teks begitu tiba; hasil akhirnya pesan
-/// lengkap yang sudah dirapikan.
+/// Writes a commit message. `on_text` receives each text chunk as soon as it arrives; the final
+/// result is the complete, cleaned-up message.
 pub async fn stream_commit_message(config: &ClaudeConfig, prompt: &CommitPrompt, mut on_text: impl FnMut(&str)) -> Result<String, AiError> {
     let client = reqwest::Client::builder()
         .user_agent("OnCode")
         .connect_timeout(Duration::from_secs(10))
-        // Stream mengirim `ping` secara berkala; jeda selama ini berarti koneksi macet.
+        // The stream sends `ping` periodically; a pause this long means the connection is stuck.
         .read_timeout(Duration::from_secs(120))
         .build()
         .map_err(transport_error)?;
@@ -359,14 +359,14 @@ mod tests {
     use super::*;
 
     fn config(model: &str) -> ClaudeConfig {
-        ClaudeConfig { api_key: "sk-ant-rahasia".into(), model: model.into(), base_url: DEFAULT_BASE_URL.into() }
+        ClaudeConfig { api_key: "sk-ant-secret".into(), model: model.into(), base_url: DEFAULT_BASE_URL.into() }
     }
 
     fn prompt() -> CommitPrompt {
         CommitPrompt {
-            recent_subjects: vec!["fix: perbaiki login".into(), "feat: tambah halaman profil".into()],
+            recent_subjects: vec!["fix: repair login".into(), "feat: add profile page".into()],
             stat: " src/a.rs | 2 +-\n 1 file changed".into(),
-            patch: "diff --git a/src/a.rs b/src/a.rs\n-lama\n+baru\n".into(),
+            patch: "diff --git a/src/a.rs b/src/a.rs\n-old\n+new\n".into(),
             truncated: false,
             draft: String::new(),
         }
@@ -374,7 +374,7 @@ mod tests {
 
     #[test]
     fn debug_hides_the_api_key() {
-        assert!(!format!("{:?}", config(DEFAULT_MODEL)).contains("rahasia"));
+        assert!(!format!("{:?}", config(DEFAULT_MODEL)).contains("secret"));
     }
 
     #[test]
@@ -387,7 +387,7 @@ mod tests {
         assert_eq!(body["fallbacks"], "default");
         assert_eq!(body["messages"][0]["role"], "user");
         for absent in ["temperature", "top_p", "top_k", "thinking"] {
-            assert!(body.get(absent).is_none(), "{absent} tidak boleh dikirim");
+            assert!(body.get(absent).is_none(), "{absent} must not be sent");
         }
         assert!(body["system"].as_str().unwrap().contains("commit message only"));
     }
@@ -397,7 +397,7 @@ mod tests {
         for model in ["claude-opus-5-5", "claude-sonnet-5-5", "claude-fable-5-2"] {
             assert!(supports_server_fallbacks(model), "{model}");
         }
-        for model in ["claude-haiku-5-5", "claude-opus-4-8", "model-lain"] {
+        for model in ["claude-haiku-5-5", "claude-opus-4-8", "other-model"] {
             assert!(!supports_server_fallbacks(model), "{model}");
             assert!(request_body(&config(model), &prompt()).get("fallbacks").is_none(), "{model}");
         }
@@ -406,36 +406,36 @@ mod tests {
     #[test]
     fn user_message_carries_style_examples_diff_and_draft() {
         let text = user_message(&prompt());
-        assert!(text.contains("- fix: perbaiki login\n- feat: tambah halaman profil"));
+        assert!(text.contains("- fix: repair login\n- feat: add profile page"));
         assert!(text.contains("1 file changed"));
-        assert!(text.contains("<diff>\ndiff --git a/src/a.rs b/src/a.rs\n-lama\n+baru\n</diff>"));
+        assert!(text.contains("<diff>\ndiff --git a/src/a.rs b/src/a.rs\n-old\n+new\n</diff>"));
         assert!(text.ends_with("Write the commit message."));
         assert!(!text.contains("cut off"));
 
         let mut with_draft = prompt();
-        with_draft.draft = "fix: perbaiki".into();
+        with_draft.draft = "fix: repair".into();
         with_draft.truncated = true;
         with_draft.recent_subjects.clear();
         let text = user_message(&with_draft);
-        assert!(text.contains("<draft>\nfix: perbaiki\n</draft>"));
+        assert!(text.contains("<draft>\nfix: repair\n</draft>"));
         assert!(text.contains("cut off"));
         assert!(!text.contains("Recent commit subjects"));
     }
 
     #[test]
     fn sse_parser_handles_events_split_across_chunks() {
-        let stream = "event: message_start\ndata: {\"type\":\"message_start\"}\n\n: komentar\nevent: content_block_delta\r\ndata: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"Perbaiki é\"}}\r\n\r\n";
+        let stream = "event: message_start\ndata: {\"type\":\"message_start\"}\n\n: comment\nevent: content_block_delta\r\ndata: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"Repair é\"}}\r\n\r\n";
         let bytes = stream.as_bytes();
         let mut parser = SseParser::default();
         let mut events = Vec::new();
-        // Satu byte per potongan: memotong baris, CRLF, dan karakter multi-byte.
+        // One byte per chunk: splits lines, CRLF, and multi-byte characters.
         for byte in bytes {
             events.extend(parser.push(std::slice::from_ref(byte)));
         }
         assert_eq!(events.len(), 2);
         assert_eq!(events[0].event, "message_start");
         assert_eq!(events[1].event, "content_block_delta");
-        assert!(events[1].data.contains("Perbaiki é"));
+        assert!(events[1].data.contains("Repair é"));
     }
 
     fn event(data: Value) -> SseEvent {
@@ -448,7 +448,7 @@ mod tests {
         let events = [
             json!({"type": "message_start", "message": {"model": "claude-opus-5-5"}}),
             json!({"type": "content_block_start", "index": 0, "content_block": {"type": "thinking", "thinking": ""}}),
-            json!({"type": "content_block_delta", "index": 0, "delta": {"type": "thinking_delta", "thinking": "rahasia"}}),
+            json!({"type": "content_block_delta", "index": 0, "delta": {"type": "thinking_delta", "thinking": "secret"}}),
             json!({"type": "ping"}),
             json!({"type": "content_block_start", "index": 1, "content_block": {"type": "fallback", "from": {"model": "a"}, "to": {"model": "b"}}}),
             json!({"type": "content_block_delta", "index": 2, "delta": {"type": "text_delta", "text": "Fix login"}}),
@@ -462,9 +462,9 @@ mod tests {
 
     #[test]
     fn refusal_and_incomplete_streams_are_errors() {
-        let refused = StreamState { text: "Sebagian".into(), stop_reason: Some("refusal".into()) };
+        let refused = StreamState { text: "Partial".into(), stop_reason: Some("refusal".into()) };
         assert_eq!(finish(refused).unwrap_err().code, AiErrorCode::Refused);
-        let cut = StreamState { text: "Sebagian".into(), stop_reason: None };
+        let cut = StreamState { text: "Partial".into(), stop_reason: None };
         assert_eq!(finish(cut).unwrap_err().code, AiErrorCode::Network);
         let empty = StreamState { text: "  ".into(), stop_reason: Some("end_turn".into()) };
         assert_eq!(finish(empty).unwrap_err().code, AiErrorCode::InvalidResponse);

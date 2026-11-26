@@ -1,5 +1,5 @@
-//! Akun GitHub dan GitLab: masuk (device flow atau token), keluar, dan daftar akun untuk halaman
-//! pengaturan.
+//! GitHub and GitLab accounts: sign in (device flow or token), sign out, and the account list for
+//! the settings page.
 
 use std::time::{Duration, Instant};
 
@@ -20,7 +20,7 @@ use oncode_ui::{core, core_bus, spawn_core, Lucide};
 use crate::login::{scopes_sentence, DevicePoller, LoginOutcome, PollNext};
 use crate::util::{describe_forge_error, forge_host, forge_name, login_host_for, normalize_host, open_external};
 
-/// Memilih dari daftar lewat quick pick, menunggu hasilnya.
+/// Picks from a list through quick pick and waits for the result.
 pub(crate) async fn pick(cx: &mut AsyncWindowContext, options: QuickPickOptions) -> Option<PickItem> {
     let (tx, rx) = tokio::sync::oneshot::channel::<Option<PickItem>>();
     let tx = std::cell::Cell::new(Some(tx));
@@ -47,7 +47,7 @@ pub(crate) async fn core_call<T: Send + 'static>(cx: &mut AsyncWindowContext, fu
     }
 }
 
-/// Alur "Sign In": pilih layanan, host (untuk instance sendiri), lalu cara masuk.
+/// The "Sign In" flow: pick the service, the host (for self-hosted instances), then the sign-in method.
 pub fn sign_in(window: &mut Window, cx: &mut App) {
     window
         .spawn(cx, async move |cx| {
@@ -89,8 +89,8 @@ async fn token_flow(kind: ForgeKind, host: Option<String>, cx: &mut AsyncWindowC
     paste_token_and_login(kind, host, message, cx).await;
 }
 
-/// Login lewat browser tanpa aplikasi OAuth: membuka halaman pembuatan token (nama dan scope
-/// sudah terisi), lalu meminta token yang dibuat di sana.
+/// Browser login without an OAuth app: opens the token creation page (name and scopes
+/// already filled in), then asks for the token created there.
 async fn browser_token_flow(kind: ForgeKind, host: Option<String>, cx: &mut AsyncWindowContext) {
     let url = forge_host(kind, host.as_deref()).token_creation_url();
     let opened = cx.update(|_, cx| open_external(&url, cx)).unwrap_or(false);
@@ -122,7 +122,7 @@ fn finish(outcome: LoginOutcome, host: Option<&str>, cx: &mut AsyncWindowContext
     });
 }
 
-/// Isi dialog device flow: kode yang harus dimasukkan pengguna di browser.
+/// Device flow dialog content: the code the user must enter in the browser.
 struct DeviceDialog {
     code: SharedString,
     url: SharedString,
@@ -159,8 +159,8 @@ async fn device_flow(kind: ForgeKind, host: Option<String>, cx: &mut AsyncWindow
             Err(error) if error.code == "network" || error.code == "cancelled" => return finish(LoginOutcome::Error(error), host.as_deref(), cx),
             Err(error) => error,
         };
-        // Device flow tidak bisa dipakai di server ini (belum ada Client ID, atau ditolak server):
-        // tawarkan token lewat browser atau Client ID lain. Tiap putaran menunggu pilihan pengguna.
+        // Device flow cannot be used on this server (no Client ID yet, or the server rejected it):
+        // offer a token through the browser or a different Client ID. Each iteration waits for the user's choice.
         match browser_sign_in_fallback(kind, host.as_deref(), &error, cx).await {
             Some(Fallback::Token) => return browser_token_flow(kind, host, cx).await,
             Some(Fallback::ClientId) if ask_client_id(kind, host.clone(), cx).await => continue,
@@ -190,7 +190,7 @@ async fn device_flow(kind: ForgeKind, host: Option<String>, cx: &mut AsyncWindow
     let outcome = loop {
         let Some(delay) = poller.next_delay(started.elapsed()) else { break LoginOutcome::Expired };
         cx.background_executor().timer(delay).await;
-        // Dialog ditutup pengguna: berhenti.
+        // The user closed the dialog: stop.
         if cx.update(|window, cx| window.has_active_dialog(cx)).unwrap_or(false) == false {
             return;
         }
@@ -216,14 +216,14 @@ async fn device_flow(kind: ForgeKind, host: Option<String>, cx: &mut AsyncWindow
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Fallback {
-    /// Buat token di halaman web server, lalu tempel.
+    /// Create a token on the server's web page, then paste it.
     Token,
-    /// Isi Client ID aplikasi OAuth milik server itu, lalu coba device flow lagi.
+    /// Enter the Client ID of that server's OAuth application, then try the device flow again.
     ClientId,
 }
 
-/// Pilihan saat device flow tidak bisa dimulai. Aplikasi OAuth hanya dikenal oleh server tempat
-/// ia didaftarkan, jadi server self-hosted tidak bisa memakai Client ID bawaan OnCode.
+/// Choices when the device flow cannot be started. An OAuth application is only known to the server
+/// it was registered on, so a self-hosted server cannot use OnCode's built-in Client ID.
 async fn browser_sign_in_fallback(kind: ForgeKind, host: Option<&str>, error: &AppError, cx: &mut AsyncWindowContext) -> Option<Fallback> {
     let server = forge_host(kind, host).hostname();
     let (title, message) = if error.code == "noClientId" {
@@ -250,8 +250,8 @@ async fn browser_sign_in_fallback(kind: ForgeKind, host: Option<&str>, error: &A
     }
 }
 
-/// Meminta Client ID aplikasi OAuth untuk server itu lalu menyimpannya (`forge.clientIds`).
-/// `false` bila dibatalkan atau gagal disimpan.
+/// Asks for the OAuth application's Client ID for that server and saves it (`forge.clientIds`).
+/// `false` if canceled or saving failed.
 async fn ask_client_id(kind: ForgeKind, host: Option<String>, cx: &mut AsyncWindowContext) -> bool {
     let server = forge_host(kind, host.as_deref()).hostname();
     let message = match kind {
@@ -274,7 +274,7 @@ async fn ask_client_id(kind: ForgeKind, host: Option<String>, cx: &mut AsyncWind
     }
 }
 
-/// Alur "Sign Out": pilih akun lalu konfirmasi.
+/// The "Sign Out" flow: pick an account, then confirm.
 pub fn sign_out(window: &mut Window, cx: &mut App) {
     window
         .spawn(cx, async move |cx| {
@@ -303,7 +303,7 @@ async fn sign_out_account(account_id: String, cx: &mut AsyncWindowContext) {
     }
 }
 
-/// Daftar akun untuk halaman pengaturan (dan sidebar): akun yang masuk, tombol masuk/keluar.
+/// Account list for the settings page (and sidebar): signed-in accounts, sign in/out buttons.
 pub struct AccountsView {
     accounts: Vec<Account>,
     memory_only: bool,
@@ -368,16 +368,16 @@ impl Render for AccountsView {
     }
 }
 
-/// Akun yang cocok untuk host repositori, untuk dipakai alur lain.
+/// The account matching a repository's host, for use by other flows.
 pub fn account_for_host<'a>(accounts: &'a [Account], kind: ForgeKind, host: Option<&str>) -> Option<&'a Account> {
     let wanted = login_host_for(kind, host)?;
     accounts.iter().find(|account| account.kind == kind && account.host.eq_ignore_ascii_case(&wanted))
 }
 
-/// Jeda kecil di antara polling uji; dipakai agar `DevicePoller` tetap satu-satunya sumber waktu.
+/// Small pause between test polls; used so `DevicePoller` stays the only time source.
 pub const _POLL_GUARD: Duration = Duration::from_millis(1);
 
-/// Entity daftar akun baru.
+/// A new account list entity.
 pub fn accounts_view(cx: &mut App) -> Entity<AccountsView> {
     cx.new(AccountsView::new)
 }

@@ -1,4 +1,4 @@
-//! Status repositori: parser `git status --porcelain=v2 -z` dan deteksi operasi yang belum selesai.
+//! Repository status: parser for `git status --porcelain=v2 -z` and detection of unfinished operations.
 
 use std::path::Path;
 
@@ -53,7 +53,7 @@ fn conflict_kind(xy: &str) -> ConflictKind {
     }
 }
 
-/// Mengurai keluaran `git status --porcelain=v2 -z --branch --show-stash`.
+/// Parses the output of `git status --porcelain=v2 -z --branch --show-stash`.
 pub fn parse_status(raw: &[u8]) -> ParsedStatus {
     let mut status = ParsedStatus::default();
     let mut records = raw.split(|b| *b == 0).filter(|r| !r.is_empty());
@@ -88,7 +88,7 @@ pub fn parse_status(raw: &[u8]) -> ParsedStatus {
             }
             "1" | "2" => {
                 // 1 XY sub mH mI mW hH hI path
-                // 2 XY sub mH mI mW hH hI Xscore path  (lalu rekaman berikutnya = path asal)
+                // 2 XY sub mH mI mW hH hI Xscore path  (then the next record = original path)
                 let field_count = if tag == "1" { 8 } else { 9 };
                 let mut fields = rest.splitn(field_count, ' ');
                 let xy = fields.next().unwrap_or("..").as_bytes().to_vec();
@@ -138,8 +138,8 @@ fn read_trimmed(path: &Path) -> Option<String> {
     std::fs::read_to_string(path).ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
 }
 
-/// Git modern selalu membuat penanda `interactive`, jadi rebase dianggap interaktif
-/// bila daftar langkahnya memuat perintah selain `pick`.
+/// Modern Git always creates the `interactive` marker, so a rebase is considered interactive
+/// if its step list contains commands other than `pick`.
 fn has_non_pick_steps(base: &Path) -> bool {
     ["done", "git-rebase-todo"].iter().any(|name| {
         std::fs::read_to_string(base.join(name)).is_ok_and(|text| {
@@ -155,14 +155,14 @@ fn short(oid: &str) -> String {
     oid.chars().take(8).collect()
 }
 
-/// Mendeteksi merge, rebase, cherry-pick, atau revert yang belum selesai dari isi direktori git.
+/// Detects an unfinished merge, rebase, cherry-pick, or revert from the contents of the git directory.
 pub fn detect_operation(git_dir: &Path) -> Option<Operation> {
     for (dir, interactive_default) in [("rebase-merge", true), ("rebase-apply", false)] {
         let base = git_dir.join(dir);
         if !base.is_dir() {
             continue;
         }
-        // `rebase-apply` juga dipakai `git am`; hanya rebase yang memiliki berkas `onto`.
+        // `rebase-apply` is also used by `git am`; only a rebase has an `onto` file.
         let Some(onto) = read_trimmed(&base.join("onto")) else { continue };
         let number = |name: &str| read_trimmed(&base.join(name)).and_then(|s| s.parse::<u32>().ok());
         let (step, total) = if dir == "rebase-merge" {
@@ -203,7 +203,7 @@ pub fn detect_operation(git_dir: &Path) -> Option<Operation> {
 }
 
 impl Repo {
-    /// Gambaran utuh keadaan repositori saat ini.
+    /// A complete picture of the repository's current state.
     pub async fn snapshot(&self) -> Result<RepoSnapshot> {
         let out = self
             .run(Cmd::new([

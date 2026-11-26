@@ -1,18 +1,18 @@
-//! Pemilihan shell bawaan pengguna.
+//! Choosing the user's default shell.
 
-/// Shell bawaan pengguna.
+/// The user's default shell.
 ///
-/// - Unix: `$SHELL` bila menunjuk berkas yang ada, lalu `/bin/bash`, lalu `/bin/sh`.
-/// - Windows: `pwsh.exe` bila ada di PATH, lalu `powershell.exe`, lalu `%COMSPEC%`.
+/// - Unix: `$SHELL` if it points to an existing file, then `/bin/bash`, then `/bin/sh`.
+/// - Windows: `pwsh.exe` if it is on PATH, then `powershell.exe`, then `%COMSPEC%`.
 #[cfg(not(windows))]
 pub fn default_shell() -> String {
     pick_unix_shell(std::env::var("SHELL").ok().as_deref(), |path| std::path::Path::new(path).is_file())
 }
 
-/// Shell bawaan pengguna.
+/// The user's default shell.
 ///
-/// - Unix: `$SHELL` bila menunjuk berkas yang ada, lalu `/bin/bash`, lalu `/bin/sh`.
-/// - Windows: `pwsh.exe` bila ada di PATH, lalu `powershell.exe`, lalu `%COMSPEC%`.
+/// - Unix: `$SHELL` if it points to an existing file, then `/bin/bash`, then `/bin/sh`.
+/// - Windows: `pwsh.exe` if it is on PATH, then `powershell.exe`, then `%COMSPEC%`.
 #[cfg(windows)]
 pub fn default_shell() -> String {
     pick_windows_shell(std::env::var_os("PATH").as_deref(), std::env::var("COMSPEC").ok().as_deref())
@@ -44,7 +44,7 @@ fn pick_windows_shell(path_var: Option<&std::ffi::OsStr>, comspec: Option<&str>)
     }
 }
 
-/// `true` bila `file_name` ada sebagai berkas di salah satu folder PATH.
+/// `true` if `file_name` exists as a file in one of the PATH folders.
 #[cfg(any(windows, test))]
 fn is_in_path(file_name: &str, path_var: Option<&std::ffi::OsStr>) -> bool {
     let Some(path_var) = path_var else { return false };
@@ -67,8 +67,8 @@ mod tests {
     fn unix_falls_back_to_bash_then_sh() {
         assert_eq!(pick_unix_shell(None, |p| p == "/bin/bash"), "/bin/bash");
         assert_eq!(pick_unix_shell(Some(""), |p| p == "/bin/bash"), "/bin/bash");
-        assert_eq!(pick_unix_shell(Some("/hilang/shell"), |p| p == "/bin/bash"), "/bin/bash");
-        assert_eq!(pick_unix_shell(Some("/hilang/shell"), |_| false), "/bin/sh");
+        assert_eq!(pick_unix_shell(Some("/missing/shell"), |p| p == "/bin/bash"), "/bin/bash");
+        assert_eq!(pick_unix_shell(Some("/missing/shell"), |_| false), "/bin/sh");
     }
 
     #[test]
@@ -76,8 +76,8 @@ mod tests {
         let with_pwsh = tempfile::tempdir().expect("tempdir");
         let with_powershell = tempfile::tempdir().expect("tempdir");
         let empty = tempfile::tempdir().expect("tempdir");
-        std::fs::write(with_pwsh.path().join("pwsh.exe"), b"").expect("tulis");
-        std::fs::write(with_powershell.path().join("powershell.exe"), b"").expect("tulis");
+        std::fs::write(with_pwsh.path().join("pwsh.exe"), b"").expect("write");
+        std::fs::write(with_powershell.path().join("powershell.exe"), b"").expect("write");
 
         let join = |dirs: &[&std::path::Path]| std::env::join_paths(dirs).expect("join_paths");
         let comspec = Some(r"C:\Windows\System32\cmd.exe");
@@ -98,6 +98,6 @@ mod tests {
     #[test]
     fn default_shell_points_to_an_existing_file() {
         let shell = default_shell();
-        assert!(std::path::Path::new(&shell).is_file(), "shell bawaan tidak ada: {shell}");
+        assert!(std::path::Path::new(&shell).is_file(), "default shell does not exist: {shell}");
     }
 }

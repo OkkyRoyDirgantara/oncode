@@ -1,4 +1,4 @@
-//! Pembantu dialog dan pemberitahuan: konfirmasi, masukan teks, toast, dan penampil galat.
+//! Dialog and notification helpers: confirmation, text input, toasts, and the error display.
 
 use std::cell::Cell;
 use std::rc::Rc;
@@ -28,7 +28,7 @@ pub fn toast_error(message: impl Into<SharedString>, window: &mut Window, cx: &m
     window.push_notification(Notification::error(message).autohide(false), cx);
 }
 
-/// Menampilkan galat backend sebagai toast; `detail` (mis. stderr git) ikut ditampilkan bila ada.
+/// Shows a backend error as a toast; `detail` (e.g. git's stderr) is shown too if present.
 pub fn show_error(error: &AppError, window: &mut Window, cx: &mut App) {
     let message = match &error.detail {
         Some(detail) if !detail.trim().is_empty() && detail.trim() != error.message.trim() => format!("{}\n{}", error.message, detail.trim()),
@@ -41,7 +41,7 @@ pub struct Confirm {
     pub title: SharedString,
     pub message: SharedString,
     pub ok: SharedString,
-    /// Tombol konfirmasi berwarna bahaya (untuk aksi yang menghilangkan pekerjaan).
+    /// The confirm button is styled as danger (for actions that lose work).
     pub danger: bool,
 }
 
@@ -56,7 +56,7 @@ impl Confirm {
     }
 }
 
-/// Dialog konfirmasi. Hasil `true` hanya bila pengguna menekan tombol konfirmasi.
+/// A confirmation dialog. Resolves to `true` only if the user pressed the confirm button.
 pub fn confirm(options: Confirm, window: &mut Window, cx: &mut App) -> Task<bool> {
     let (tx, rx) = oneshot::channel::<bool>();
     let tx = Rc::new(Cell::new(Some(tx)));
@@ -91,7 +91,7 @@ pub struct TextPrompt {
     pub initial: SharedString,
     pub placeholder: SharedString,
     pub ok: SharedString,
-    /// Masukan disembunyikan (password, token).
+    /// The input is hidden (password, token).
     pub secret: bool,
 }
 
@@ -121,7 +121,7 @@ impl TextPrompt {
     }
 }
 
-/// Dialog masukan satu baris. `None` bila dibatalkan.
+/// A single-line input dialog. `None` if canceled.
 pub fn prompt_text(options: TextPrompt, window: &mut Window, cx: &mut App) -> Task<Option<String>> {
     let (tx, rx) = oneshot::channel::<Option<String>>();
     let tx = Rc::new(Cell::new(Some(tx)));
@@ -196,8 +196,8 @@ impl Choice {
     }
 }
 
-/// Dialog dengan beberapa tombol pilihan (mis. Cancel / Don't Save / Save).
-/// Mengembalikan id tombol yang ditekan, atau `None` bila dialog ditutup tanpa memilih.
+/// A dialog with several choice buttons (e.g. Cancel / Don't Save / Save).
+/// Returns the id of the pressed button, or `None` if the dialog was closed without choosing.
 pub fn choose(title: impl Into<SharedString>, message: impl Into<SharedString>, choices: Vec<Choice>, window: &mut Window, cx: &mut App) -> Task<Option<&'static str>> {
     let (tx, rx) = oneshot::channel::<&'static str>();
     let tx = Rc::new(Cell::new(Some(tx)));

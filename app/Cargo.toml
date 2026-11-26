@@ -4,13 +4,13 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
-description = "OnCode: editor kode native dengan Git client lengkap"
+description = "OnCode: a native code editor with a full Git client"
 
-# Nama binary sengaja bukan "oncode". Driver D3D11 Intel memilih file cache shader (di
-# %USERPROFILE%\AppData\LocalLow\Intel\ShaderCache) menurut panjang nama exe, lalu memuat seluruh
-# isinya ke memori proses saat device dibuat. Nama 6 huruf berbagi cache dengan chrome.exe dan
-# msedge.exe: "oncode.exe" memakan ± 186 MB di Task Manager tanpa folder terbuka, "oncode-app.exe"
-# ± 40 MB (diukur di Intel UHD, driver 30.0.101.1371). Hindari nama exe 6 huruf.
+# The binary is deliberately not named "oncode". The Intel D3D11 driver picks a shader cache file (in
+# %USERPROFILE%\AppData\LocalLow\Intel\ShaderCache) by the length of the exe name, then loads all of
+# its contents into process memory when the device is created. A 6-letter name shares a cache with
+# chrome.exe and msedge.exe: "oncode.exe" takes ± 186 MB in Task Manager with no folder open, "oncode-app.exe"
+# ± 40 MB (measured on Intel UHD, driver 30.0.101.1371). Avoid 6-letter exe names.
 [[bin]]
 name = "oncode-app"
 path = "src/main.rs"
@@ -34,11 +34,11 @@ gpui-kit = "=0.10.0"
 tokio.workspace = true
 serde_json.workspace = true
 
-# uid pengguna untuk nama socket satu-proses (src/single_instance.rs).
+# User uid for the single-process socket name (src/single_instance.rs).
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
-# Ikon aplikasi untuk Windows (dipakai Explorer, taskbar, dan shortcut installer).
+# Application icon for Windows (used by Explorer, the taskbar, and installer shortcuts).
 [build-dependencies]
 embed-resource = "3"
 
@@ -46,12 +46,12 @@ embed-resource = "3"
 oncode-ui = { path = "../crates/oncode-ui", features = ["test-support"] }
 gpui-kit = { version = "=0.10.0", features = ["test-support"] }
 
-# Installer dibuat dengan `cargo packager --release` (lihat docs/PENGEMBANGAN.md).
-# `oncode-helper` dipasang di samping binary utama; di sanalah aplikasi mencarinya.
+# Installers are built with `cargo packager --release` (see docs/DEVELOPMENT.md).
+# `oncode-helper` is installed next to the main binary; that is where the app looks for it.
 [package.metadata.packager]
 product-name = "OnCode"
-# Nilai sementara: ganti dengan domain milik Anda sebelum rilis publik, karena mengubahnya
-# setelah rilis memindahkan lokasi data pengguna.
+# Placeholder value: replace it with your own domain before a public release, because changing it
+# after a release moves the location of user data.
 identifier = "dev.oncode.editor"
 description = "A simple native code editor with a full Git client"
 category = "DeveloperTool"
@@ -62,15 +62,15 @@ out-dir = "../target/packages"
 
 [package.metadata.packager.deb]
 depends = ["git", "libxkbcommon-x11-0", "libvulkan1"]
-# Perintah `oncode .` di terminal. Harus executable di git (`git add --chmod=+x`).
+# The `oncode .` command in the terminal. Must be executable in git (`git add --chmod=+x`).
 files = { "packaging/linux/oncode" = "usr/bin/oncode" }
 
 [package.metadata.packager.nsis]
 installer-icon = "icons/icon.ico"
-# Perintah `oncode .` di terminal: `bin\oncode.cmd` dan PATH pengguna, dikerjakan oncode-helper
-# (lihat crates/oncode-helper/src/shell_command.rs). Bagian ini berjalan sebelum berkas aplikasi
-# disalin, jadi helper diekstrak dulu ke folder sementara installer. Saat uninstall, bagian `un.`
-# berjalan sebelum berkas dihapus.
+# The `oncode .` command in the terminal: `bin\oncode.cmd` and the user PATH, handled by oncode-helper
+# (see crates/oncode-helper/src/shell_command.rs). This section runs before the application files are
+# copied, so the helper is first extracted to the installer's temporary folder. On uninstall, the `un.`
+# section runs before the files are removed.
 preinstall-section = '''
 !searchreplace ONCODE_HELPER_SRC "${MAINBINARYSRCPATH}" "${MAINBINARYNAME}.exe" "oncode-helper.exe"
 Section ShellCommand

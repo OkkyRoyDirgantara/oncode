@@ -1,6 +1,6 @@
-# Membangun installer untuk tiga OS dari tag rilis dengan cargo-packager dan mengunggahnya
-# sebagai draf rilis. Penandatanganan macOS memakai secret APPLE_*; tanpa itu installer tetap
-# dibuat tetapi tidak ditandatangani.
+# Builds installers for three OSes from a release tag with cargo-packager and uploads them
+# as a draft release. macOS signing uses the APPLE_* secrets; without them the installer is still
+# built but not signed.
 name: Release
 
 on:
@@ -19,8 +19,8 @@ jobs:
             formats: deb,appimage
           - os: windows-latest
             formats: nsis
-          # Apple Silicon dan Intel dibangun terpisah di runner masing-masing. `macos-13` sudah
-          # dipensiunkan GitHub; `macos-15-intel` adalah runner Intel terakhir (sampai Agustus 2027).
+          # Apple Silicon and Intel are built separately on their own runners. `macos-13` has been
+          # retired by GitHub; `macos-15-intel` is the last Intel runner (until August 2027).
           - os: macos-latest
             formats: dmg
           - os: macos-15-intel
@@ -29,7 +29,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Paket sistem (Linux)
+      - name: System packages (Linux)
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
@@ -40,11 +40,11 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
 
-      - name: Pasang cargo-packager
+      - name: Install cargo-packager
         run: cargo install cargo-packager --locked
 
-      # Client id OAuth dibaca saat kompilasi (option_env!), jadi harus ada di lingkungan build.
-      - name: Buat installer
+      # The OAuth client ids are read at compile time (option_env!), so they must be in the build environment.
+      - name: Build installer
         working-directory: app
         env:
           ONCODE_GITHUB_CLIENT_ID: ${{ vars.ONCODE_GITHUB_CLIENT_ID }}

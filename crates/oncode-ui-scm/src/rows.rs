@@ -1,5 +1,5 @@
-//! Daftar perubahan diratakan menjadi baris-baris berketinggian sama, supaya bisa ditampilkan
-//! dengan daftar virtual walaupun repositori punya ribuan berkas yang berubah.
+//! The list of changes flattened into equal-height rows, so it can be displayed
+//! with a virtual list even if the repository has thousands of changed files.
 
 use std::collections::HashMap;
 
@@ -25,7 +25,7 @@ impl Section {
         }
     }
 
-    /// Bagian id elemen kepala kelompok (`scm-section-<slug>`).
+    /// Part of the group header's element id (`scm-section-<slug>`).
     pub fn slug(self) -> &'static str {
         match self {
             Self::Conflicts => "conflicts",
@@ -35,13 +35,13 @@ impl Section {
         }
     }
 
-    /// Kelompok stash tertutup sampai dibuka; yang lain terbuka.
+    /// The stash group stays closed until opened; the others are open.
     pub fn open_by_default(self) -> bool {
         self != Self::Stashes
     }
 }
 
-/// Berkas-berkas sebuah stash yang dimuat saat barisnya dibuka.
+/// The files of a stash, loaded when its row is expanded.
 #[derive(Debug, Clone, PartialEq)]
 pub enum StashFiles {
     Loading,
@@ -59,15 +59,15 @@ pub enum Row {
     Clean,
     Stash { stash: Stash, expanded: bool },
     StashFile { stash: String, file: CommitFile },
-    /// Keterangan di bawah stash yang dibuka (sedang memuat, kosong, atau galat).
+    /// A note under an expanded stash (loading, empty, or an error).
     StashNote(String),
 }
 
-/// Kelompok mana yang terbuka dan stash mana yang sedang dibuka.
+/// Which groups are open and which stashes are expanded.
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct ViewState {
     toggled: HashMap<Section, bool>,
-    /// Oid stash yang dibuka beserta berkasnya.
+    /// Oids of the expanded stashes with their files.
     pub expanded: HashMap<String, StashFiles>,
 }
 
@@ -85,13 +85,13 @@ impl ViewState {
         self.toggled.insert(section, open);
     }
 
-    /// Melupakan stash yang sudah tidak ada (oid-nya berubah setiap kali daftar stash bergeser).
+    /// Forgets stashes that no longer exist (their oid changes every time the stash list shifts).
     pub fn retain_stashes(&mut self, stashes: &[Stash]) {
         self.expanded.retain(|oid, _| stashes.iter().any(|stash| &stash.oid == oid));
     }
 }
 
-/// Menyusun baris-baris panel dari snapshot, daftar stash, dan keadaan tampilan.
+/// Builds the panel's rows from the snapshot, the stash list, and the view state.
 pub fn build_rows(snapshot: &RepoSnapshot, stashes: &[Stash], view: &ViewState) -> Vec<Row> {
     let mut rows = Vec::new();
     let section = |rows: &mut Vec<Row>, section: Section, count: usize| {
@@ -154,7 +154,7 @@ mod tests {
     }
 
     fn stash(index: u32) -> Stash {
-        Stash { index, name: format!("stash@{{{index}}}"), oid: format!("oid{index}"), message: format!("pesan {index}"), time: 0.0 }
+        Stash { index, name: format!("stash@{{{index}}}"), oid: format!("oid{index}"), message: format!("message {index}"), time: 0.0 }
     }
 
     fn kinds(rows: &[Row]) -> Vec<String> {
@@ -183,7 +183,7 @@ mod tests {
         s.conflicted = vec![ConflictEntry { path: "c.txt".into(), kind: ConflictKind::BothModified }];
         s.staged = vec![change("b.txt")];
         s.unstaged = vec![change("a.txt")];
-        s.untracked = vec!["baru.txt".into()];
+        s.untracked = vec!["new.txt".into()];
         let rows = build_rows(&s, &[stash(0)], &ViewState::default());
         assert_eq!(kinds(&rows), [
             "conflicts:1:open",
@@ -192,11 +192,11 @@ mod tests {
             "staged b.txt",
             "changes:2:open",
             "change a.txt",
-            "change baru.txt (U)",
+            "change new.txt (U)",
             "stashes:1:closed",
         ]);
 
-        // Hanya ada yang ter-stage: kelompok Changes tetap ada tetapi tanpa catatan "clean".
+        // Only staged files: the Changes group is still there, but without the "clean" note.
         let mut s = snapshot();
         s.staged = vec![change("b.txt")];
         assert_eq!(kinds(&build_rows(&s, &[], &ViewState::default())), ["staged:1:open", "staged b.txt", "changes:0:open"]);
@@ -230,10 +230,10 @@ mod tests {
         assert_eq!(kinds(&build_rows(&snapshot(), &stashes, &view))[4..], ["stash stash@{1} +", "stash-file stash@{1} src/a.rs"]);
 
         view.expanded.insert("oid0".into(), StashFiles::Loaded(Vec::new()));
-        view.expanded.insert("oid1".into(), StashFiles::Failed("gagal".into()));
-        assert_eq!(kinds(&build_rows(&snapshot(), &stashes, &view))[3..], ["stash stash@{0} +", "note No changed files", "stash stash@{1} +", "note gagal"]);
+        view.expanded.insert("oid1".into(), StashFiles::Failed("failed".into()));
+        assert_eq!(kinds(&build_rows(&snapshot(), &stashes, &view))[3..], ["stash stash@{0} +", "note No changed files", "stash stash@{1} +", "note failed"]);
 
-        // Stash yang sudah hilang dilupakan.
+        // A stash that is gone is forgotten.
         view.retain_stashes(&stashes[..1]);
         assert_eq!(view.expanded.keys().collect::<Vec<_>>(), ["oid0"]);
     }
