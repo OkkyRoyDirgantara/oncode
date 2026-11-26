@@ -225,10 +225,17 @@ impl Git {
         let started = Instant::now();
         let display: Vec<String> = cmd.args.iter().map(|a| a.to_string_lossy().into_owned()).collect();
 
+        let helper = self.helper.read().unwrap().clone();
         let mut command = Command::new(&self.path);
+        command.current_dir(cwd).args(["--no-pager", "-c", "color.ui=false", "-c", "core.quotepath=false"]);
+        if let Some(server) = &helper {
+            // Logged-in forge accounts answer through git's credential protocol, which passes the
+            // protocol and host as separate fields; the askpass prompt text can be spoofed by the URL.
+            // `-c` comes last in git's config order, so the user's own helpers are still asked first,
+            // and git passes it on to the git processes it starts (submodule clones).
+            command.arg("-c").arg(credential_helper_config(server.helper_path()));
+        }
         command
-            .current_dir(cwd)
-            .args(["--no-pager", "-c", "color.ui=false", "-c", "core.quotepath=false"])
             .args(&cmd.args)
             .env("LC_ALL", "en_US.UTF-8")
             .env("LANG", "en_US.UTF-8")
@@ -244,7 +251,6 @@ impl Git {
         }
         hide_window(&mut command);
 
-        let helper = self.helper.read().unwrap().clone();
         let mut token = None;
         match &helper {
             Some(server) => {
@@ -371,6 +377,18 @@ impl Git {
     }
 }
 
+/// `credential.helper=!'<helper>' credential`: git runs it through the shell and appends the
+/// operation (`get`, `store`, `erase`).
+fn credential_helper_config(helper: &Path) -> String {
+    let path = helper.to_string_lossy().replace('\\', "/");
+    format!("credential.helper=!{} credential", sh_quote(&path))
+}
+
+/// Quotes `value` as a single word for `sh`.
+fn sh_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', r"'\''"))
+}
+
 #[cfg(windows)]
 fn hide_window(command: &mut Command) {
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
@@ -476,6 +494,24 @@ mod tests {
     fn stderr_keeps_last_progress_update() {
         let raw = "Counting: 10% (1/10)\rCounting: 100% (10/10), done.\nfatal: boom\n";
         assert_eq!(clean_stderr(raw), "Counting: 100% (10/10), done.\nfatal: boom");
+    }
+
+    #[test]
+    fn credential_helper_path_is_one_shell_word() {
+        assert_eq!(
+            credential_helper_config(Path::new("/opt/On Code/oncode-helper")),
+            "credential.helper=!'/opt/On Code/oncode-helper' credential"
+        );
+        assert_eq!(
+            credential_helper_config(Path::new("/home/o'brien/$x/oncode-helper")),
+            r"credential.helper=!'/home/o'\''brien/$x/oncode-helper' credential"
+        );
+        if cfg!(windows) {
+            assert_eq!(
+                credential_helper_config(Path::new(r"C:\Program Files\OnCode\oncode-helper.exe")),
+                "credential.helper=!'C:/Program Files/OnCode/oncode-helper.exe' credential"
+            );
+        }
     }
 
     #[test]

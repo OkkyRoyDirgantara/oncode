@@ -1,5 +1,7 @@
 //! End-to-end tests: git → oncode-helper → HelperServer → the app's answer.
 
+use std::io::{BufRead, BufReader, Write};
+use std::net::TcpListener;
 use std::path::Path;
 use std::process::Command;
 use std::sync::{Arc, Mutex};
@@ -44,6 +46,7 @@ async fn server(answer: impl Fn(&Prompt) -> Option<String> + Send + Sync + 'stat
     let answer = Arc::new(answer);
     let prompt: PromptFn = Arc::new(move |p: Prompt| {
         let description = match &p {
+            Prompt::Credential(r) => format!("credential:{} {} {}", r.protocol, r.host, r.username.as_deref().unwrap_or("-")),
             Prompt::Askpass { prompt, .. } => format!("askpass:{prompt}"),
             Prompt::EditMessage { initial, .. } => format!("edit:{initial}"),
         };
@@ -81,6 +84,119 @@ async fn askpass_prints_the_answer_and_cancel_fails() {
     let (ok, out) = run_helper(&srv, &token, &["Username for 'https://example.com': "]);
     assert!(!ok && out.is_empty());
     assert_eq!(seen.lock().unwrap().len(), 2);
+}
+
+fn base64(input: &[u8]) -> String {
+    const TABLE: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::new();
+    for chunk in input.chunks(3) {
+        let b = [chunk[0], *chunk.get(1).unwrap_or(&0), *chunk.get(2).unwrap_or(&0)];
+        let n = (u32::from(b[0]) << 16) | (u32::from(b[1]) << 8) | u32::from(b[2]);
+        for i in 0..4 {
+            out.push(if i <= chunk.len() { TABLE[((n >> (18 - 6 * i)) & 63) as usize] as char } else { '=' });
+        }
+    }
+    out
+}
+
+/// An HTTP server on 127.0.0.1 that answers every request with 401 Basic and records the
+/// `Authorization` headers it receives.
+fn unauthorized_server() -> (u16, Arc<Mutex<Vec<String>>>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let log = seen.clone();
+    std::thread::spawn(move || {
+        for mut stream in listener.incoming().flatten() {
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut line = String::new();
+            while reader.read_line(&mut line).unwrap_or(0) > 0 && !line.trim_end().is_empty() {
+                if let Some((name, value)) = line.split_once(':') {
+                    if name.eq_ignore_ascii_case("authorization") {
+                        log.lock().unwrap().push(value.trim().to_string());
+                    }
+                }
+                line.clear();
+            }
+            let _ = stream.write_all(b"HTTP/1.1 401 Unauthorized\r\nWWW-Authenticate: Basic realm=\"test\"\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+        }
+    });
+    (port, seen)
+}
+
+/// The `.gitmodules` attack from issue #2: the user name `github.com'x` makes the askpass prompt
+/// read `Password for 'http://github.com'x@127.0.0.1:…': `. The credential helper gets the real
+/// host as its own field, and its answer goes to that host with the URL's user name.
+#[tokio::test(flavor = "multi_thread")]
+async fn credential_helper_gets_the_real_host_and_its_answer_reaches_the_server() {
+    isolate();
+    let (port, authorization) = unauthorized_server();
+    let (srv, seen) = server(|p| match p {
+        Prompt::Credential(request) if request.hostname() == "127.0.0.1" => request.reply("unused", "SECRET"),
+        _ => None,
+    })
+    .await;
+    let g = Git::discover(None).await.unwrap();
+    g.set_helper(srv);
+    let dir = tempfile::tempdir().unwrap();
+
+    let url = format!("http://github.com'x@127.0.0.1:{port}/owner/repo.git");
+    assert!(g.run(dir.path(), Cmd::new(["ls-remote", "--end-of-options", &url])).await.is_err(), "the server rejects every login");
+    assert_eq!(seen.lock().unwrap().first().cloned(), Some(format!("credential:http 127.0.0.1:{port} github.com'x")));
+    // curl first tries the URL's user name with an empty password, then git asks for credentials.
+    let expected = format!("Basic {}", base64(b"github.com'x:SECRET"));
+    let received = authorization.lock().unwrap().clone();
+    assert!(received.contains(&expected), "the URL's user name is kept, the password comes from the app: {received:?}");
+}
+
+/// Without a matching account, git moves on to askpass, which only the user answers.
+#[tokio::test(flavor = "multi_thread")]
+async fn credential_helper_without_an_answer_falls_back_to_askpass() {
+    isolate();
+    let (port, authorization) = unauthorized_server();
+    let (srv, seen) = server(|_| None).await;
+    let g = Git::discover(None).await.unwrap();
+    g.set_helper(srv);
+    let dir = tempfile::tempdir().unwrap();
+
+    let url = format!("http://github.com'x@127.0.0.1:{port}/owner/repo.git");
+    assert!(g.run(dir.path(), Cmd::new(["ls-remote", "--end-of-options", &url])).await.is_err());
+    assert_eq!(
+        seen.lock().unwrap().as_slice(),
+        [format!("credential:http 127.0.0.1:{port} github.com'x"), format!("askpass:Password for 'http://github.com'x@127.0.0.1:{port}': ")]
+    );
+    // Only curl's first try with the URL's user name and an empty password.
+    let empty = format!("Basic {}", base64(b"github.com'x:"));
+    let received = authorization.lock().unwrap().clone();
+    assert!(received.iter().all(|header| *header == empty), "no password is sent when nobody answers: {received:?}");
+}
+
+/// `clone --recurse-submodules` clones each submodule in a child git process; the helper set
+/// with `-c` must reach it too.
+#[tokio::test(flavor = "multi_thread")]
+async fn credential_helper_reaches_submodule_clones() {
+    isolate();
+    let (port, _) = unauthorized_server();
+    let (srv, seen) = server(|_| None).await;
+    let g = Git::discover(None).await.unwrap();
+    g.set_helper(srv);
+
+    let dir = tempfile::tempdir().unwrap();
+    let parent = dir.path().join("super");
+    std::fs::create_dir(&parent).unwrap();
+    git(&parent, &["init", "-q", "-b", "main"]);
+    let gitmodules = format!("[submodule \"sub\"]\n\tpath = sub\n\turl = http://github.com'x@127.0.0.1:{port}/owner/repo.git\n");
+    std::fs::write(parent.join(".gitmodules"), gitmodules).unwrap();
+    git(&parent, &["update-index", "--add", "--cacheinfo", "160000,1111111111111111111111111111111111111111,sub"]);
+    git(&parent, &["add", ".gitmodules"]);
+    git(&parent, &["commit", "-q", "-m", "Add submodule"]);
+
+    // The submodule cannot be fetched; whether that fails the whole clone depends on the git version.
+    let dest = dir.path().join("dest");
+    let _ = g.clone_repo(parent.to_str().unwrap(), &dest, true, None, None).await;
+    assert!(dest.join(".gitmodules").exists(), "the superproject itself was cloned");
+    let credential = format!("credential:http 127.0.0.1:{port} github.com'x");
+    assert!(seen.lock().unwrap().contains(&credential), "requests: {:?}", seen.lock().unwrap());
 }
 
 #[tokio::test(flavor = "multi_thread")]

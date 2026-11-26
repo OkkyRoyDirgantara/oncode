@@ -1,5 +1,7 @@
 //! Helper program that git runs on behalf of OnCode.
 //!
+//! - `oncode-helper credential <op>`    : `credential.helper`; for `get`, the request fields (stdin)
+//!   go to the app, which answers with the login of a matching forge account.
 //! - `oncode-helper <prompt>`           : askpass (GIT_ASKPASS / SSH_ASKPASS); the answer is printed to stdout.
 //! - `oncode-helper editor <file>`      : GIT_EDITOR; the app fills in the message file.
 //! - `oncode-helper sequence <file>`    : GIT_SEQUENCE_EDITOR; the app fills in the rebase todo list.
@@ -66,11 +68,27 @@ fn request(kind: &str, text: &str) -> Option<String> {
     }
 }
 
+/// Git's credential helper protocol. Only `get` is answered; `store` and `erase` are ignored
+/// because the app keeps the tokens itself. Nothing is printed when the app has no login for
+/// that host, so git moves on to askpass. The exit code is always 0: git ignores it anyway.
+fn credential(operation: Option<&str>) -> ExitCode {
+    // Read all of stdin for every operation, so git never writes into a closed pipe.
+    let mut input = String::new();
+    let _ = std::io::stdin().read_to_string(&mut input);
+    if operation == Some("get") {
+        if let Some(answer) = request("credential", &input) {
+            print!("{answer}");
+        }
+    }
+    ExitCode::SUCCESS
+}
+
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
         Some("install-shell-command") => return shell_command::main(true, args.get(1).map(String::as_str)),
         Some("uninstall-shell-command") => return shell_command::main(false, args.get(1).map(String::as_str)),
+        Some("credential") => return credential(args.get(1).map(String::as_str)),
         _ => {}
     }
     let (kind, text) = match args.first().map(String::as_str) {

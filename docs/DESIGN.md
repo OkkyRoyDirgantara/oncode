@@ -198,7 +198,7 @@ flowchart TB
     end
 
     GitCrate -->|"runs"| GitCli["git CLI"]
-    GitCli -->|"askpass and editor"| Helper["oncode-helper"]
+    GitCli -->|"credential helper, askpass and editor"| Helper["oncode-helper"]
     Helper <-->|"local socket"| GitCrate
     WsCrate --> Disk["File system"]
     TermCrate --> Shell["Shell via PTY"]
@@ -359,7 +359,7 @@ The Git layer (`crates/oncode-git`) is **unchanged**. A summary of its contract,
 | Runner | Arguments as an array, fixed environment, per-repository write queue, cancellation, progress, logging to Git Output |
 | Status | `git status --porcelain=v2 -z`; unfinished operations are detected from the Git directory |
 | Partial staging | Line splice with content fingerprints of both sides, written via `hash-object` + `update-index` |
-| Authentication | `oncode-helper` as `GIT_ASKPASS` and `SSH_ASKPASS`, local socket with a one-time token |
+| Authentication | `oncode-helper` as `GIT_ASKPASS` and `SSH_ASKPASS`, and as the last `credential.helper` (`-c`), over a local socket with a one-time token. A logged-in GitHub/GitLab account only answers the credential helper, whose protocol and host arrive as separate fields and must match the account's scheme and host name. Askpass prompts always go to the user, because a user name in the URL can spoof the host in the prompt text |
 | Interactive rebase | `oncode-helper` as the todo-list editor and message editor |
 | Conflicts | The three versions from the index are re-merged with `git merge-file --diff3` into segments |
 | Errors | Classified into codes (`pushRejected`, `noUpstream`, `dirtyWorkTree`, …) that determine the actions offered in the UI |

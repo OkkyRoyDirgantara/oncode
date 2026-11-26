@@ -17,7 +17,7 @@ pub mod runner;
 pub mod status;
 
 pub use error::{GitError, GitErrorCode, Result};
-pub use helper::{EditorMode, HelperServer, OpContext, Prompt, PromptFn, PromptFuture};
+pub use helper::{CredentialRequest, EditorMode, HelperServer, OpContext, Prompt, PromptFn, PromptFuture};
 pub use log::LogStream;
 pub use model::*;
 pub use repo::Repo;

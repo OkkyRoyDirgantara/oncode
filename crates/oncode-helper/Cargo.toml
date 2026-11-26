@@ -3,7 +3,7 @@ name = "oncode-helper"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Helper program called by git: askpass and editor"
+description = "Helper program called by git: credential helper, askpass and editor"
 
 [dependencies]
 serde_json.workspace = true

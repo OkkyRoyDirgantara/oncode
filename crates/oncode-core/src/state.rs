@@ -8,8 +8,8 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
-use oncode_forge::TokenStore;
-use oncode_git::{CancellationToken, Git, GitErrorCode, HelperServer, LogStream, Prompt, PromptFn, PromptFuture, Repo};
+use oncode_forge::{Account, ForgeHost, TokenStore};
+use oncode_git::{CancellationToken, CredentialRequest, Git, GitErrorCode, HelperServer, LogStream, Prompt, PromptFn, PromptFuture, Repo};
 use oncode_lsp::LspManager;
 use oncode_terminal::TerminalManager;
 use oncode_workspace::{FileIndex, WatchEvent, Watcher};
@@ -493,38 +493,36 @@ impl Core {
         answer
     }
 
-    /// Answers a request from git: the credentials of an already logged-in account are used automatically, otherwise the user is asked.
+    /// Answers a request from git. A logged-in account answers the credential helper for its own
+    /// host; askpass prompts always go to the user, because their text cannot tell the real host
+    /// apart from a user name in the URL (`Password for 'https://github.com'x@evil.com': `).
     pub(crate) async fn answer_prompt(&self, prompt: Prompt) -> Option<String> {
         match prompt {
-            Prompt::Askpass { prompt, repo } => {
-                if let Some(answer) = self.account_credential(&prompt).await {
-                    return Some(answer);
-                }
-                self.ask_user(classify_prompt(&prompt), prompt, String::new(), repo).await
-            }
+            Prompt::Credential(request) => self.account_credential(&request).await,
+            Prompt::Askpass { prompt, repo } => self.ask_user(classify_prompt(&prompt), prompt, String::new(), repo).await,
             Prompt::EditMessage { initial, repo } => self.ask_user(PromptKind::Message, String::new(), initial, repo).await,
         }
     }
 
-    /// Username/password for a host that matches a logged-in GitHub/GitLab account.
-    async fn account_credential(&self, prompt: &str) -> Option<String> {
-        let wants_username = prompt.starts_with("Username");
-        if !wants_username && !prompt.starts_with("Password") {
-            return None;
-        }
-        let host = prompt_host(prompt)?;
-        let host = host.split(':').next().unwrap_or(&host).to_string();
-        let account = self.store.accounts().into_iter().find(|a| {
-            let account_host = host_of(&a.host);
-            account_host.split(':').next().unwrap_or(&account_host).eq_ignore_ascii_case(&host)
-        })?;
+    /// The login of the GitHub/GitLab account on the requested host, in git's credential format.
+    async fn account_credential(&self, request: &CredentialRequest) -> Option<String> {
+        let account = self.store.accounts().into_iter().find(|a| account_serves(a, request))?;
         let store = self.tokens.clone();
         let id = account.id.clone();
         // Keychain access can block, so it runs on its own thread.
         let tokens = self.runtime.spawn_blocking(move || store.load(&id)).await.ok()?.ok().flatten()?;
         let (username, password) = oncode_forge::git_credentials(account.kind, &tokens.access_token);
-        Some(if wants_username { username } else { password })
+        request.reply(&username, &password)
     }
+}
+
+/// `true` if git asks for a login on `account`'s host with its scheme, so an `http://` remote never
+/// receives the token of an `https://` account. Like [`oncode_forge::ForgeHost::matches`], the port
+/// is not compared.
+fn account_serves(account: &Account, request: &CredentialRequest) -> bool {
+    let Some((scheme, _)) = account.host.split_once("://") else { return false };
+    let hostname = ForgeHost { kind: account.kind, host: account.host.clone() }.hostname();
+    !hostname.is_empty() && scheme.eq_ignore_ascii_case(&request.protocol) && hostname == request.hostname()
 }
 
 /// `oncode-helper`: the path from `ONCODE_HELPER` if set, otherwise next to the app binary
@@ -543,21 +541,6 @@ fn resolve_helper(explicit: Option<PathBuf>, exe: Option<PathBuf>) -> Option<Pat
     candidate.is_file().then_some(candidate)
 }
 
-fn host_of(origin: &str) -> String {
-    origin.split("://").nth(1).unwrap_or(origin).split('/').next().unwrap_or("").to_string()
-}
-
-/// Extracts the host name from a git prompt such as `Password for 'https://user@github.com': `.
-pub fn prompt_host(prompt: &str) -> Option<String> {
-    let start = prompt.find('\'')? + 1;
-    let end = prompt[start..].find('\'')? + start;
-    let url = &prompt[start..end];
-    let rest = url.split("://").nth(1)?;
-    let authority = rest.split('/').next()?;
-    let host = authority.rsplit('@').next()?;
-    (!host.is_empty()).then(|| host.to_string())
-}
-
 /// Determines the dialog kind from the text of a git/ssh prompt.
 pub fn classify_prompt(prompt: &str) -> PromptKind {
     let lower = prompt.to_lowercase();
@@ -574,15 +557,7 @@ pub fn classify_prompt(prompt: &str) -> PromptKind {
 mod tests {
     use super::*;
     use crate::testing::{git, isolate_git, recv, TestCore};
-    use oncode_forge::{Account, ForgeKind, TokenSet};
-
-    #[test]
-    fn extracts_host_from_git_prompts() {
-        assert_eq!(prompt_host("Username for 'https://github.com': ").as_deref(), Some("github.com"));
-        assert_eq!(prompt_host("Password for 'https://ana@gitlab.example.com:8443': ").as_deref(), Some("gitlab.example.com:8443"));
-        assert_eq!(prompt_host("Password for 'https://x@github.com/a/b.git': ").as_deref(), Some("github.com"));
-        assert_eq!(prompt_host("Enter passphrase for key '/home/a/.ssh/id_ed25519': "), None);
-    }
+    use oncode_forge::{ForgeKind, TokenSet};
 
     #[test]
     fn classifies_prompt_kinds() {
@@ -595,10 +570,41 @@ mod tests {
         );
     }
 
+    fn account(kind: ForgeKind, host: &str) -> Account {
+        let id = format!("{}:{}:ana", kind.as_str(), ForgeHost { kind, host: host.into() }.hostname());
+        Account { id, kind, host: host.into(), username: "ana".into(), display_name: "Ana".into(), avatar_url: None }
+    }
+
+    fn request(protocol: &str, host: &str, username: Option<&str>) -> CredentialRequest {
+        CredentialRequest { protocol: protocol.into(), host: host.into(), username: username.map(String::from) }
+    }
+
     #[test]
-    fn host_of_strips_scheme_and_path() {
-        assert_eq!(host_of("https://github.com"), "github.com");
-        assert_eq!(host_of("https://git.example.com/sub"), "git.example.com");
+    fn account_serves_only_its_own_scheme_and_host() {
+        let github = account(ForgeKind::GitHub, "https://github.com");
+        assert!(account_serves(&github, &request("https", "github.com", None)));
+        assert!(account_serves(&github, &request("https", "GitHub.com", Some("x-access-token"))));
+        // Like `ForgeHost::matches`, the port is not compared.
+        assert!(account_serves(&github, &request("https", "github.com:443", None)));
+
+        // The user name of `https://github.com'x@evil.com/` arrives as its own field, never as the host.
+        assert!(!account_serves(&github, &request("https", "evil.com", Some("github.com'x"))));
+        assert!(!account_serves(&github, &request("https", "evil.com", Some("https://github.com"))));
+        // Plain HTTP never receives the token of an HTTPS account.
+        assert!(!account_serves(&github, &request("http", "github.com", None)));
+        // Look-alike hosts.
+        assert!(!account_serves(&github, &request("https", "github.com.evil.com", None)));
+        assert!(!account_serves(&github, &request("https", "evil-github.com", None)));
+        assert!(!account_serves(&github, &request("https", "", None)));
+        assert!(!account_serves(&github, &request("ssh", "github.com", None)));
+
+        let gitlab = account(ForgeKind::GitLab, "https://gitlab.example.com:8443/sub");
+        assert!(account_serves(&gitlab, &request("https", "gitlab.example.com:8443", None)));
+        assert!(!account_serves(&gitlab, &request("https", "example.com", None)));
+        // An instance served over plain HTTP matches only HTTP.
+        let local = account(ForgeKind::GitLab, "http://127.0.0.1:8080");
+        assert!(account_serves(&local, &request("http", "127.0.0.1:9000", None)));
+        assert!(!account_serves(&local, &request("https", "127.0.0.1:8080", None)));
     }
 
     #[test]
@@ -684,35 +690,35 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn logged_in_account_answers_credential_prompts_without_asking() {
+    async fn logged_in_account_answers_the_credential_helper_for_its_host_only() {
         let mut t = TestCore::new();
-        let account = Account {
-            id: "github:github.com:ana".into(),
-            kind: ForgeKind::GitHub,
-            host: "https://github.com".into(),
-            username: "ana".into(),
-            display_name: "Ana".into(),
-            avatar_url: None,
-        };
-        t.core.tokens.save(&account.id, &TokenSet { access_token: "tok-123".into(), refresh_token: None, expires_at: None }).unwrap();
-        t.core.store.upsert_account(account, true);
+        let github = account(ForgeKind::GitHub, "https://github.com");
+        t.core.tokens.save(&github.id, &TokenSet { access_token: "tok-123".into(), refresh_token: None, expires_at: None }).unwrap();
+        t.core.store.upsert_account(github, true);
 
-        let ask = |text: &str| t.core.answer_prompt(Prompt::Askpass { prompt: text.into(), repo: None });
-        assert_eq!(ask("Username for 'https://github.com': ").await.as_deref(), Some("x-access-token"));
-        assert_eq!(ask("Password for 'https://x-access-token@GitHub.com': ").await.as_deref(), Some("tok-123"));
-        assert!(t.events.try_recv().is_err(), "no dialog for a host whose account is already logged in");
+        let ask = |protocol: &str, host: &str, username: Option<&str>| t.core.answer_prompt(Prompt::Credential(request(protocol, host, username)));
+        assert_eq!(ask("https", "github.com", None).await.as_deref(), Some("username=x-access-token\npassword=tok-123\n"));
+        // A user name in the URL is kept; only the password is filled in.
+        assert_eq!(ask("https", "GitHub.com", Some("ana")).await.as_deref(), Some("password=tok-123\n"));
+        // `.gitmodules` with `http://github.com'x@evil.com/...`: the token must not leave.
+        assert_eq!(ask("http", "evil.com", Some("github.com'x")).await, None);
+        assert_eq!(ask("https", "evil.com", Some("github.com'x")).await, None);
+        assert_eq!(ask("http", "github.com", None).await, None);
+        assert!(t.events.try_recv().is_err(), "the credential helper never opens a dialog; git falls back to askpass");
 
-        // Other hosts are still asked of the user.
+        // Askpass is never answered from an account, even when its text names the account's host:
+        // git builds it from the URL, so `Password for 'https://github.com'x@evil.com': ` asks for evil.com.
         let core = t.core.clone();
-        let asking = t.core.spawn(async move { core.answer_prompt(Prompt::Askpass { prompt: "Username for 'https://git.example.com': ".into(), repo: None }).await });
-        let request = recv(&mut t.events, |e| match e {
+        let spoofed = "Password for 'https://github.com'x@evil.com': ";
+        let asking = t.core.spawn(async move { core.answer_prompt(Prompt::Askpass { prompt: spoofed.into(), repo: None }).await });
+        let shown = recv(&mut t.events, |e| match e {
             CoreEvent::Prompt { request, .. } => Some(request),
             _ => None,
         })
         .await;
-        assert_eq!(request.kind, PromptKind::Text);
-        t.core.respond_prompt(&request.id, Some("bob".into()));
-        assert_eq!(asking.await.unwrap().as_deref(), Some("bob"));
+        assert_eq!((shown.kind, shown.prompt.as_str()), (PromptKind::Secret, spoofed));
+        t.core.respond_prompt(&shown.id, None);
+        assert_eq!(asking.await.unwrap(), None);
     }
 
     /// The full path git → `oncode-helper` → core → UI, with the helper found via `ONCODE_HELPER`.

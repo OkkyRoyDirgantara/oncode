@@ -1,6 +1,6 @@
 //! Server for `oncode-helper`.
 //!
-//! Git runs `oncode-helper` when it needs credentials (askpass) or an
+//! Git runs `oncode-helper` when it needs credentials (credential helper or askpass) or an
 //! editor (commit message, rebase todo list). The helper contacts this server over a
 //! local socket, carrying the one-time token belonging to that `git` invocation.
 
@@ -13,13 +13,73 @@ use std::sync::{Arc, Mutex};
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
 
-/// A request the user must answer.
+/// A request the app (or the user) must answer.
 #[derive(Debug, Clone)]
 pub enum Prompt {
+    /// Git asks for an HTTP(S) login through the credential helper protocol. The answer is
+    /// [`CredentialRequest::reply`]; `None` lets git fall back to askpass.
+    Credential(CredentialRequest),
     /// Username, password, passphrase, or SSH host confirmation.
     Askpass { prompt: String, repo: Option<PathBuf> },
     /// Git asks for a message (commit, merge, squash, reword).
     EditMessage { initial: String, repo: Option<PathBuf> },
+}
+
+/// What git asks a credential helper for (`git credential` protocol, operation `get`): a login
+/// for one HTTP(S) origin. Git parses the remote URL itself and passes each part as its own
+/// field, so a user name in the URL cannot pose as the host the way it can in the askpass
+/// prompt text (`Password for 'https://github.com'x@evil.com': `).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CredentialRequest {
+    /// `https` or `http`.
+    pub protocol: String,
+    /// The host name, with `:port` if the URL has one.
+    pub host: String,
+    /// The user name from the URL, if it has one.
+    pub username: Option<String>,
+}
+
+impl CredentialRequest {
+    /// Reads git's `key=value` lines. Other keys (`path`, `wwwauth[]`, `capability[]`, …) are ignored.
+    pub fn parse(text: &str) -> Self {
+        let mut request = Self::default();
+        for line in text.lines() {
+            let Some((key, value)) = line.split_once('=') else { continue };
+            match key {
+                "protocol" => request.protocol = value.to_string(),
+                "host" => request.host = value.to_string(),
+                "username" => request.username = Some(value.to_string()),
+                _ => {}
+            }
+        }
+        request
+    }
+
+    /// The host name without the port, in lowercase (`[::1]` keeps its brackets).
+    pub fn hostname(&self) -> String {
+        let host = self.host.as_str();
+        let name = if host.starts_with('[') {
+            host.find(']').map_or(host, |end| &host[..=end])
+        } else {
+            host.split(':').next().unwrap_or_default()
+        };
+        name.to_ascii_lowercase()
+    }
+
+    /// The answer in git's format. The user name is only included when the URL has none, so
+    /// git keeps the one in the URL. `None` if a value contains a line break or NUL, which
+    /// would let it add fields of its own.
+    pub fn reply(&self, username: &str, password: &str) -> Option<String> {
+        if [username, password].iter().any(|value| value.contains(['\n', '\r', '\0'])) {
+            return None;
+        }
+        let mut reply = String::new();
+        if self.username.is_none() {
+            reply.push_str(&format!("username={username}\n"));
+        }
+        reply.push_str(&format!("password={password}\n"));
+        Some(reply)
+    }
 }
 
 pub type PromptFuture = Pin<Box<dyn Future<Output = Option<String>> + Send>>;
@@ -119,6 +179,7 @@ impl HelperServer {
     async fn answer(&self, request: Request) -> Option<String> {
         let ctx = self.contexts.lock().unwrap().get(&request.token).cloned()?;
         match request.kind.as_str() {
+            "credential" => (self.prompt)(Prompt::Credential(CredentialRequest::parse(&request.text))).await,
             "askpass" => (self.prompt)(Prompt::Askpass { prompt: request.text, repo: ctx.repo }).await,
             "sequence" => {
                 let todo = ctx.todo?;
@@ -240,5 +301,33 @@ mod tests {
     fn strips_git_comment_lines() {
         let text = "Subject\n\nMessage body\n# Please enter the commit message\n# Lines starting with '#'\n";
         assert_eq!(strip_comments(text), "Subject\n\nMessage body");
+    }
+
+    #[test]
+    fn credential_request_keeps_the_user_name_apart_from_the_host() {
+        // What git sends for `http://github.com'x@127.0.0.1:48731/owner/repo.git`.
+        let text = "protocol=http\nhost=127.0.0.1:48731\nusername=github.com'x\nwwwauth[]=Basic realm=\"evil\"\n";
+        let request = CredentialRequest::parse(text);
+        assert_eq!(request.protocol, "http");
+        assert_eq!(request.host, "127.0.0.1:48731");
+        assert_eq!(request.username.as_deref(), Some("github.com'x"));
+        assert_eq!(request.hostname(), "127.0.0.1");
+
+        let request = CredentialRequest::parse("protocol=https\r\nhost=GitHub.com\r\n\r\n");
+        assert_eq!((request.hostname().as_str(), request.username), ("github.com", None));
+        assert_eq!(CredentialRequest::parse("protocol=https\nhost=[::1]:8443\n").hostname(), "[::1]");
+        assert_eq!(CredentialRequest::parse("protocol=https\n").hostname(), "");
+    }
+
+    #[test]
+    fn credential_reply_fills_only_what_the_url_lacks() {
+        let without_user = CredentialRequest { protocol: "https".into(), host: "github.com".into(), username: None };
+        assert_eq!(without_user.reply("x-access-token", "tok").as_deref(), Some("username=x-access-token\npassword=tok\n"));
+        let with_user = CredentialRequest { username: Some("ana".into()), ..without_user.clone() };
+        assert_eq!(with_user.reply("x-access-token", "tok").as_deref(), Some("password=tok\n"));
+        // A value with a line break could add fields of its own (for example a second `host=`).
+        assert_eq!(without_user.reply("x", "tok\nhost=evil.com"), None);
+        assert_eq!(without_user.reply("x\r", "tok"), None);
+        assert_eq!(without_user.reply("x", "tok\0"), None);
     }
 }
