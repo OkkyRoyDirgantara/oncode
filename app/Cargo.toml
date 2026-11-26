@@ -62,6 +62,8 @@ out-dir = "../target/packages"
 
 [package.metadata.packager.deb]
 depends = ["git", "libxkbcommon-x11-0", "libvulkan1"]
+# The default entry plus StartupWMClass, so the dock shows OnCode's name and icon. Also used for the AppImage.
+desktop-template = "packaging/linux/oncode.desktop"
 # The `oncode .` command in the terminal. Must be executable in git (`git add --chmod=+x`).
 files = { "packaging/linux/oncode" = "usr/bin/oncode" }
 

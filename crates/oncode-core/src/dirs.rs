@@ -104,4 +104,13 @@ mod tests {
         assert_eq!(dirs.config_dir, dirs.data_dir);
         assert!(dirs.config_dir.ends_with("dev.oncode.editor"));
     }
+
+    /// The window's app_id is APP_IDENTIFIER. The dock on Linux finds OnCode's name and icon by matching
+    /// it to the installed `.desktop` entry's StartupWMClass.
+    #[test]
+    fn linux_desktop_entry_matches_the_window_app_id() {
+        let entry = include_str!("../../../app/packaging/linux/oncode.desktop");
+        let expected = format!("StartupWMClass={APP_IDENTIFIER}");
+        assert!(entry.lines().any(|line| line == expected), "app/packaging/linux/oncode.desktop needs `{expected}`");
+    }
 }

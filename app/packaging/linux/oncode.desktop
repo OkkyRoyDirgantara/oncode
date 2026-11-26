@@ -1,0 +1,16 @@
+[Desktop Entry]
+Categories={{categories}}
+{{#if comment}}
+Comment={{comment}}
+{{/if}}
+Exec={{exec}} {{exec_arg}}
+Icon={{icon}}
+Name={{name}}
+# The window's app_id (APP_IDENTIFIER in crates/oncode-core/src/dirs.rs). Without it the dock cannot
+# match the window to this entry, and shows the app_id as its name, with no icon.
+StartupWMClass=dev.oncode.editor
+Terminal=false
+Type=Application
+{{#if mime_type}}
+MimeType={{mime_type}}
+{{/if}}

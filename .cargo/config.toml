@@ -1,0 +1,5 @@
+# Intel Macs: Apple's linker signs ad-hoc by default only for Apple Silicon. cargo-packager signs
+# OnCode.app ad-hoc (app/Cargo.toml), and codesign refuses to sign oncode-app while oncode-helper, in
+# the same folder, has no signature at all.
+[target.x86_64-apple-darwin]
+rustflags = ["-C", "link-arg=-Wl,-adhoc_codesign"]
