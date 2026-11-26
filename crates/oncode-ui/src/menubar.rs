@@ -29,6 +29,7 @@ pub const MENUS: &[(&str, &[Option<&str>])] = &[
             Some("file.saveAll"),
             None,
             Some("settings.open"),
+            Some("workbench.selectTheme"),
             Some("keybindings.openJson"),
             None,
             Some("file.closeFolder"),

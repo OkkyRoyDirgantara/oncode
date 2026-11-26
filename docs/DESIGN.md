@@ -346,7 +346,7 @@ The detailed wireframes for the Source Control panel, Graph, conflict editor, an
 ### 5.3 Commands, keybindings, and themes
 
 - The command registry and the keybinding format (`Mod+Shift+P`, `keybindings.json`) are kept. GPUI has its own action and key-context system; our registry is mapped onto it, so users' files from v0.2 still apply.
-- Two built-in themes (dark and light) plus follow-the-system, defined through `gpui-component`'s `theme`. Git colors (added, modified, deleted, conflict) and graph lane colors are defined once and used in the editor, lists, and terminal.
+- One setting, `workbench.theme`, picks the color theme: System (switches between Default Light and Default Dark with the operating system), the two default themes (`dark` and `light`, as before), or one of nine bundled themes: One Dark, Dracula, Nord, Gruvbox Dark, Tokyo Night, Catppuccin Mocha, One Light, Solarized Light, and Catppuccin Latte. Each is a small palette in `crates/oncode-ui/src/themes.rs`, following the published colors of the MIT-licensed original, turned into gpui-component's theme format at startup; the UI, syntax highlighting, and terminal colors all come from it. **Preferences: Color Theme** (also in the File menu) previews the highlighted theme and saves the picked one. Git colors (added, modified, deleted, conflict) and graph lane colors are defined once and used in the editor, lists, and terminal.
 
 ---
 

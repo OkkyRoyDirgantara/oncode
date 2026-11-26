@@ -315,6 +315,43 @@ async fn title_bar_search_box_opens_go_to_file(cx: &mut TestAppContext) {
     });
 }
 
+fn theme_name(cx: &mut TestAppContext) -> String {
+    cx.update(|cx| gpui_kit::component::Theme::global(cx).theme_name().to_string())
+}
+
+/// Preferences: Color Theme shows the highlighted theme at once, Escape goes back to the theme from the settings,
+/// and picking one saves it.
+#[gpui_kit::test]
+async fn color_theme_picker_previews_and_saves_the_theme(cx: &mut TestAppContext) {
+    let app = TestApp::new(cx);
+    let window = app.open(None, cx).await;
+    let before = theme_name(cx);
+    assert_eq!(before, "Default Light");
+
+    assert!(window.run_command(cx, "workbench.selectTheme"));
+    cx.run_until_parked();
+    window.update(cx, |window, cx| {
+        window.render_frame(cx);
+        window.input("dracula", cx);
+    });
+    cx.run_until_parked();
+    assert_eq!(theme_name(cx), "Dracula", "previewed while highlighted");
+    window.update(cx, |window, cx| window.press("escape", cx));
+    cx.run_until_parked();
+    assert_eq!(theme_name(cx), before, "Escape goes back");
+
+    assert!(window.run_command(cx, "workbench.selectTheme"));
+    cx.run_until_parked();
+    window.update(cx, |window, cx| {
+        window.render_frame(cx);
+        window.input("nord", cx);
+    });
+    cx.run_until_parked();
+    window.update(cx, |window, cx| window.press("enter", cx));
+    window.wait_until(cx, "Nord saved", |_, cx| oncode_ui::core(cx).user_settings().workbench.theme == oncode_core::settings::Theme::Nord).await;
+    assert_eq!(theme_name(cx), "Nord");
+}
+
 /// Without a folder there are no files to go to: the box opens the command palette.
 #[gpui_kit::test]
 async fn title_bar_search_box_without_a_folder_opens_the_command_palette(cx: &mut TestAppContext) {

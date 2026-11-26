@@ -19,6 +19,7 @@ pub mod repos;
 pub mod shell;
 #[cfg(any(test, feature = "test-support"))]
 pub mod testing;
+pub mod themes;
 pub mod workbench;
 
 pub use app::{core, core_bus, spawn_core, CoreBus, OnCode};
@@ -36,6 +37,7 @@ pub use gpui_kit::assets::IconName as Lucide;
 
 /// Sets up everything global. Called once after `gpui_kit::init`.
 pub fn init(app: OnCode, cx: &mut gpui_kit::App) {
+    themes::install(cx);
     app::install(app, cx);
     commands::install(cx);
     workbench::install(cx);

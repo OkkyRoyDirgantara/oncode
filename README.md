@@ -32,6 +32,10 @@ The full design is in [docs/DESIGN.md](docs/DESIGN.md); the development guide is
 - Integrated terminal with multiple sessions: side-by-side splits in the panel (`Cmd+\` on macOS, `Ctrl+Shift+5` on Linux/Windows), terminals as tabs in the editor area (can sit next to code), and drag and drop of terminals between the panel list and the editor area. Drawn per cell: columns stay straight, box-drawing lines and powerline prompts connect seamlessly, no ligatures; the terminal font and line height can be set in Settings → Terminal
 - LSP: completion, hover, diagnostics, go to definition, references, rename, format (language servers are installed by you)
 
+**Appearance**
+
+- One **Theme** setting with eleven color themes: Default Dark, One Dark, Dracula, Nord, Gruvbox Dark, Tokyo Night, Catppuccin Mocha, Default Light, One Light, Solarized Light, and Catppuccin Latte (palettes from those MIT-licensed projects), or System, which switches between the two default themes with your operating system. **Preferences: Color Theme** in the command palette or the File menu previews each theme as you move through the list
+
 **Extensions** (built in, each can be turned off in Settings → Extensions)
 
 - **Markdown Preview** (`Ctrl+Shift+V`): live preview next to the editor

@@ -347,7 +347,7 @@ async fn select_persists_and_reopening_shows_persisted_values(cx: &mut TestAppCo
     let shown = |cx: &mut TestAppContext, id: &str| cx.update(|cx| page.read(cx).field_input(id, cx)).unwrap();
     assert_eq!(shown(cx, "git.autoFetchMinutes"), "30");
     assert_eq!(shown(cx, "forge.githubClientId"), "Iv1.0123456789abcdef");
-    assert_eq!(window.update(cx, |window, _| window.find("st-workbench.theme").value().map(str::to_owned)).as_deref(), Some("Dark"));
+    assert_eq!(window.update(cx, |window, _| window.find("st-workbench.theme").value().map(str::to_owned)).as_deref(), Some("Default Dark"));
     search(&window, cx, "git.pullStrategy");
     assert_eq!(window.update(cx, |window, _| window.find("st-git.pullStrategy").value().map(str::to_owned)).as_deref(), Some("Rebase"));
 
@@ -396,7 +396,7 @@ async fn external_change_updates_controls_but_not_the_field_being_typed(cx: &mut
 
     assert_eq!(shown(cx, "editor.tabSize"), "8");
     assert_eq!(window.update(cx, |window, _| window.find("st-editor.lineNumbers").checked()), Some(false));
-    assert_eq!(window.update(cx, |window, _| window.find("st-workbench.theme").value().map(str::to_owned)).as_deref(), Some("Light"));
+    assert_eq!(window.update(cx, |window, _| window.find("st-workbench.theme").value().map(str::to_owned)).as_deref(), Some("Default Light"));
     assert_eq!(shown(cx, "editor.fontFamily"), "Fira Co", "the field being typed is not overwritten");
 
     // Typing continues; what is saved contains the external changes plus the field being typed.

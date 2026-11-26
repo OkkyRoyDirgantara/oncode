@@ -6,13 +6,12 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use gpui_kit::component::input::{Editor, EditorState};
-use gpui_kit::component::{v_flex, Theme, ThemeMode, TitleBar, WindowExt as _};
+use gpui_kit::component::{v_flex, TitleBar, WindowExt as _};
 use gpui_kit::{
     div, px, App, AppContext as _, Context, Entity, IntoElement, ParentElement as _, PathPromptOptions, Render, SharedString, Styled as _, Subscription, Task,
     WeakEntity, Window,
 };
 use oncode_core::api::app::{self, WorkspaceInfo};
-use oncode_core::settings::Theme as ThemeSetting;
 use oncode_core::{CoreEvent, NoticeKind, PromptKind, PromptRequest, Settings, Shared};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -98,7 +97,7 @@ impl Shell {
         let core = crate::core(cx);
         let label: SharedString = format!("window-{}", window.window_handle().window_id().as_u64()).into();
         let settings = core.user_settings();
-        apply_theme(&settings, window, cx);
+        crate::themes::apply(&settings, window, cx);
         let workbench = Self::build_workbench(&core, &label, None, settings, window, cx);
 
         let weak = cx.weak_entity();
@@ -181,7 +180,7 @@ impl Shell {
     fn install(&mut self, workspace: Option<WorkspaceInfo>, window: &mut Window, cx: &mut Context<Self>) {
         self.session_frozen = true;
         let settings = workspace.as_ref().map(|w| w.settings.clone()).unwrap_or_else(|| self.core.user_settings());
-        apply_theme(&settings, window, cx);
+        crate::themes::apply(&settings, window, cx);
         self.workbench = Self::build_workbench(&self.core, &self.label, workspace.as_ref(), settings, window, cx);
         self.workspace = workspace;
         self.watch_workbench(window, cx);
@@ -362,7 +361,7 @@ impl Shell {
         match event {
             CoreEvent::SettingsChanged { .. } => {
                 let settings = self.core.effective_settings(&self.label);
-                apply_theme(&settings, window, cx);
+                crate::themes::apply(&settings, window, cx);
                 self.workbench.update(cx, |workbench, cx| workbench.set_settings(settings, cx));
             }
             CoreEvent::FsChanged { window: target, paths, overflow } if target.as_str() == self.label.as_ref() => {
@@ -496,14 +495,6 @@ pub(crate) fn quit(cx: &mut App) {
     .detach();
 }
 
-fn apply_theme(settings: &Settings, window: &mut Window, cx: &mut App) {
-    match settings.workbench.theme {
-        ThemeSetting::System => Theme::sync_system_appearance(Some(window), cx),
-        ThemeSetting::Dark => Theme::change(ThemeMode::Dark, Some(window), cx),
-        ThemeSetting::Light => Theme::change(ThemeMode::Light, Some(window), cx),
-    }
-}
-
 /// A multi-line message dialog (the commit message during rebase, merge, and the like). `None` cancels the git operation.
 fn prompt_message(initial: String, window: &mut Window, cx: &mut App) -> Task<Option<String>> {
     let (tx, rx) = tokio::sync::oneshot::channel::<Option<String>>();
@@ -617,6 +608,13 @@ fn register_shell_commands(workbench: &mut Workbench, cx: &mut Context<Workbench
         .category("Preferences"),
     );
     workbench.register_command(Command::new("keybindings.reload", "Reload Keyboard Shortcuts", with_shell(|shell, window, cx| shell.load_keybindings(true, window, cx))).category("Preferences"));
+    workbench.register_command(
+        Command::new("workbench.selectTheme", "Color Theme", {
+            let (core, label) = (core.clone(), label.clone());
+            move |_, window, cx| show_theme_picker(core.clone(), label.clone(), window, cx)
+        })
+        .category("Preferences"),
+    );
     for (install, id, title) in [(true, "shellCommand.install", "Install 'oncode' Command in PATH"), (false, "shellCommand.uninstall", "Uninstall 'oncode' Command from PATH")] {
         workbench.register_command(Command::new(id, title, move |_, window, cx| set_shell_command(install, window, cx)).category("Shell Command"));
     }
@@ -666,6 +664,49 @@ fn show_command_palette(window: &mut Window, cx: &mut App) {
             if let Some(item) = item {
                 commands::execute_now(&item.value, &Value::Null, window, cx);
             }
+        },
+        window,
+        cx,
+    );
+}
+
+/// Lists the color themes, starting with the one in use. The highlighted theme is shown at once; picking one
+/// saves it in the user's settings, and Escape goes back to the theme from the settings.
+fn show_theme_picker(core: Shared, label: SharedString, window: &mut Window, cx: &mut App) {
+    use oncode_core::settings::Theme as ThemeSetting;
+    let current = core.effective_settings(&label).workbench.theme;
+    let items: Vec<PickItem> = ThemeSetting::ALL
+        .into_iter()
+        .map(|theme| {
+            let hint = match theme.is_dark() {
+                None => "Follows the system",
+                Some(true) => "Dark",
+                Some(false) => "Light",
+            };
+            PickItem::new(theme.label(), theme.id()).hint(hint)
+        })
+        .collect();
+    quick_pick(
+        QuickPickOptions::new("Select a color theme", items).selected(current.id()).on_highlight(|item, window, cx| {
+            if let Some(theme) = ThemeSetting::from_id(&item.value) {
+                crate::themes::show(theme, window, cx);
+            }
+        }),
+        move |item, window, cx| match item.and_then(|item| ThemeSetting::from_id(&item.value)) {
+            Some(theme) => {
+                let mut settings = core.user_settings();
+                settings.workbench.theme = theme;
+                let core = core.clone();
+                let task = spawn_core(cx, async move { app::settings_set(&core, settings).await });
+                window
+                    .spawn(cx, async move |cx| {
+                        if let Err(error) = task.await {
+                            let _ = cx.update(|window, cx| overlay::show_error(&error, window, cx));
+                        }
+                    })
+                    .detach();
+            }
+            None => crate::themes::apply(&core.effective_settings(&label), window, cx),
         },
         window,
         cx,

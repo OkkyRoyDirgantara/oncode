@@ -60,15 +60,33 @@ pub struct QuickPickOptions {
     pub source: PickSource,
     /// Allow picking the typed text as is (e.g. a new branch name); its label comes from this function.
     pub allow_custom: Option<Rc<dyn Fn(&str) -> Option<PickItem>>>,
+    /// The value of the item highlighted when the quick pick opens (e.g. the current theme).
+    pub selected: Option<String>,
+    /// Called whenever another item is highlighted, e.g. to preview it.
+    pub on_highlight: Option<Rc<dyn Fn(&PickItem, &mut Window, &mut App)>>,
 }
 
 impl QuickPickOptions {
     pub fn new(placeholder: impl Into<SharedString>, items: Vec<PickItem>) -> Self {
-        Self { placeholder: placeholder.into(), empty_text: "No matches".into(), source: PickSource::Static(Rc::new(items)), allow_custom: None }
+        Self::from_source(placeholder, PickSource::Static(Rc::new(items)))
     }
 
     pub fn with_search(placeholder: impl Into<SharedString>, search: impl Fn(String, &mut App) -> Task<Vec<PickItem>> + 'static) -> Self {
-        Self { placeholder: placeholder.into(), empty_text: "No matches".into(), source: PickSource::Async(Rc::new(search)), allow_custom: None }
+        Self::from_source(placeholder, PickSource::Async(Rc::new(search)))
+    }
+
+    fn from_source(placeholder: impl Into<SharedString>, source: PickSource) -> Self {
+        Self { placeholder: placeholder.into(), empty_text: "No matches".into(), source, allow_custom: None, selected: None, on_highlight: None }
+    }
+
+    pub fn selected(mut self, value: impl Into<String>) -> Self {
+        self.selected = Some(value.into());
+        self
+    }
+
+    pub fn on_highlight(mut self, on_highlight: impl Fn(&PickItem, &mut Window, &mut App) + 'static) -> Self {
+        self.on_highlight = Some(Rc::new(on_highlight));
+        self
     }
 
     pub fn empty_text(mut self, text: impl Into<SharedString>) -> Self {
@@ -150,6 +168,10 @@ pub struct QuickPick {
     confirm_pending: bool,
     scroll: ScrollHandle,
     on_pick: Rc<dyn Fn(Option<PickItem>, &mut Window, &mut App)>,
+    /// The value last passed to `on_highlight`, so it is only called when the highlight moves.
+    highlighted: Option<String>,
+    /// Set once `new` has moved to the `selected` option; until then refreshes do not highlight.
+    ready: bool,
     done: bool,
     revision: usize,
     _search: Task<()>,
@@ -173,13 +195,35 @@ impl QuickPick {
             confirm_pending: false,
             scroll: ScrollHandle::new(),
             on_pick,
+            highlighted: None,
+            ready: false,
             done: false,
             revision: 0,
             _search: Task::ready(()),
             _subscriptions: vec![subscription],
         };
         this.refresh(window, cx);
+        if let Some(index) = this.options.selected.as_ref().and_then(|value| this.items.iter().position(|item| &item.value == value)) {
+            this.selected = index;
+            this.scroll.scroll_to_item(index);
+        }
+        this.ready = true;
+        this.highlight(window, cx);
         this
+    }
+
+    /// Tells `on_highlight` about the highlighted item, if it changed.
+    fn highlight(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.ready {
+            return;
+        }
+        let Some(on_highlight) = self.options.on_highlight.clone() else { return };
+        let Some(item) = self.items.get(self.selected).cloned() else { return };
+        if self.highlighted.as_ref() == Some(&item.value) {
+            return;
+        }
+        self.highlighted = Some(item.value.clone());
+        on_highlight(&item, window, cx);
     }
 
     fn with_custom(&self, mut items: Vec<PickItem>, query: &str) -> Vec<PickItem> {
@@ -203,6 +247,7 @@ impl QuickPick {
                 self.items = self.with_custom(filter_items(&all, &query, LIMIT), &query);
                 self.selected = 0;
                 self.loading = false;
+                self.highlight(window, cx);
             }
             PickSource::Async(search) => {
                 self.loading = true;
@@ -220,28 +265,37 @@ impl QuickPick {
                         cx.notify();
                         std::mem::take(&mut this.confirm_pending)
                     });
-                    if confirm.unwrap_or(false) {
-                        let _ = cx.update_window(window_handle, |_, window, cx| {
-                            let _ = this.update(cx, |this, cx| this.confirm(window, cx));
+                    let _ = cx.update_window(window_handle, |_, window, cx| {
+                        let _ = this.update(cx, |this, cx| {
+                            this.highlight(window, cx);
+                            if confirm.unwrap_or(false) {
+                                this.confirm(window, cx);
+                            }
                         });
-                    }
+                    });
                 });
             }
         }
         cx.notify();
     }
 
-    fn move_selection(&mut self, delta: isize, cx: &mut Context<Self>) {
+    fn move_selection(&mut self, delta: isize, window: &mut Window, cx: &mut Context<Self>) {
         if self.items.is_empty() {
             return;
         }
         let len = self.items.len() as isize;
         self.selected = (self.selected as isize + delta).rem_euclid(len) as usize;
         self.scroll.scroll_to_item(self.selected);
+        self.highlight(window, cx);
         cx.notify();
     }
 
     fn finish(&mut self, item: Option<PickItem>, window: &mut Window, cx: &mut Context<Self>) {
+        self.finish_with(item, true, window, cx);
+    }
+
+    /// `close_dialog` is false when the dialog is already closing by itself (Escape, a click outside it).
+    fn finish_with(&mut self, item: Option<PickItem>, close_dialog: bool, window: &mut Window, cx: &mut Context<Self>) {
         if self.done {
             return;
         }
@@ -252,7 +306,9 @@ impl QuickPick {
         if open.get(&window_id).is_some_and(|open| open.entity_id() == this) {
             open.remove(&window_id);
         }
-        window.close_dialog(cx);
+        if close_dialog {
+            window.close_dialog(cx);
+        }
         let on_pick = self.on_pick.clone();
         // Runs after the dialog has closed, so the handler may open another dialog.
         window.defer(cx, move |window, cx| on_pick(item, window, cx));
@@ -273,10 +329,10 @@ impl QuickPick {
 
     fn on_key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         match event.keystroke.key.as_str() {
-            "down" => self.move_selection(1, cx),
-            "up" => self.move_selection(-1, cx),
-            "pagedown" => self.move_selection(8, cx),
-            "pageup" => self.move_selection(-8, cx),
+            "down" => self.move_selection(1, window, cx),
+            "up" => self.move_selection(-1, window, cx),
+            "pagedown" => self.move_selection(8, window, cx),
+            "pageup" => self.move_selection(-8, window, cx),
             "escape" => self.finish(None, window, cx),
             _ => return,
         }
@@ -355,7 +411,23 @@ pub fn quick_pick(options: QuickPickOptions, on_pick: impl Fn(Option<PickItem>, 
     let focus = picker.read(cx).input.clone();
     // Enter does not close the dialog through its built-in Confirm action: the quick pick closes it itself
     // when picking. Without this, Enter while a search is running closes the dialog without picking anything.
-    window.open_dialog(cx, move |dialog, _, _| dialog.close_button(false).on_ok(|_, _, _| false).margin_top(px(80.)).w(px(620.)).child(picker.clone()));
+    // The dialog itself handles Escape and a click outside it (its Cancel), so the owner hears about those here.
+    let canceled = picker.downgrade();
+    window.open_dialog(cx, move |dialog, _, _| {
+        let canceled = canceled.clone();
+        dialog
+            .close_button(false)
+            .on_ok(|_, _, _| false)
+            .on_cancel(move |_, window, cx| {
+                if let Some(picker) = canceled.upgrade() {
+                    picker.update(cx, |picker, cx| picker.finish_with(None, false, window, cx));
+                }
+                true
+            })
+            .margin_top(px(80.))
+            .w(px(620.))
+            .child(picker.clone())
+    });
     window.defer(cx, move |window, cx| focus.update(cx, |state, cx| state.focus(window, cx)));
 }
 

@@ -54,13 +54,91 @@ pub struct FilesSettings {
     pub auto_save: AutoSave,
 }
 
+/// The color theme. `dark` and `light` are the default themes (their names in `settings.json` date from
+/// before there were other themes); `system` switches between them with the operating system.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub enum Theme {
     #[default]
     System,
     Dark,
+    OneDark,
+    Dracula,
+    Nord,
+    GruvboxDark,
+    TokyoNight,
+    CatppuccinMocha,
     Light,
+    OneLight,
+    SolarizedLight,
+    CatppuccinLatte,
+}
+
+impl Theme {
+    /// Every theme, in the order they are offered: System, the dark themes, then the light ones.
+    pub const ALL: [Theme; 12] = [
+        Theme::System,
+        Theme::Dark,
+        Theme::OneDark,
+        Theme::Dracula,
+        Theme::Nord,
+        Theme::GruvboxDark,
+        Theme::TokyoNight,
+        Theme::CatppuccinMocha,
+        Theme::Light,
+        Theme::OneLight,
+        Theme::SolarizedLight,
+        Theme::CatppuccinLatte,
+    ];
+
+    /// The value in `settings.json`.
+    pub const fn id(self) -> &'static str {
+        match self {
+            Theme::System => "system",
+            Theme::Dark => "dark",
+            Theme::OneDark => "oneDark",
+            Theme::Dracula => "dracula",
+            Theme::Nord => "nord",
+            Theme::GruvboxDark => "gruvboxDark",
+            Theme::TokyoNight => "tokyoNight",
+            Theme::CatppuccinMocha => "catppuccinMocha",
+            Theme::Light => "light",
+            Theme::OneLight => "oneLight",
+            Theme::SolarizedLight => "solarizedLight",
+            Theme::CatppuccinLatte => "catppuccinLatte",
+        }
+    }
+
+    pub fn from_id(id: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|theme| theme.id() == id)
+    }
+
+    /// The name shown to the user, which is also the theme's name in the UI's theme registry.
+    pub const fn label(self) -> &'static str {
+        match self {
+            Theme::System => "System",
+            Theme::Dark => "Default Dark",
+            Theme::OneDark => "One Dark",
+            Theme::Dracula => "Dracula",
+            Theme::Nord => "Nord",
+            Theme::GruvboxDark => "Gruvbox Dark",
+            Theme::TokyoNight => "Tokyo Night",
+            Theme::CatppuccinMocha => "Catppuccin Mocha",
+            Theme::Light => "Default Light",
+            Theme::OneLight => "One Light",
+            Theme::SolarizedLight => "Solarized Light",
+            Theme::CatppuccinLatte => "Catppuccin Latte",
+        }
+    }
+
+    /// Whether this is a dark theme; `None` for System, which follows the operating system.
+    pub const fn is_dark(self) -> Option<bool> {
+        match self {
+            Theme::System => None,
+            Theme::Dark | Theme::OneDark | Theme::Dracula | Theme::Nord | Theme::GruvboxDark | Theme::TokyoNight | Theme::CatppuccinMocha => Some(true),
+            Theme::Light | Theme::OneLight | Theme::SolarizedLight | Theme::CatppuccinLatte => Some(false),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -331,9 +409,29 @@ mod tests {
         let path = dir.path().join("cfg/settings.json");
         let mut s = Settings::default();
         s.git.pull_strategy = PullStrategy::Rebase;
-        s.workbench.theme = Theme::Light;
+        s.workbench.theme = Theme::Dracula;
         s.save(&path).unwrap();
         assert_eq!(Settings::load(&path), s);
+    }
+
+    /// `id` is the spelling serde writes, so the settings page and `settings.json` agree; the values from
+    /// before there were other themes (`system`, `dark`, `light`) still mean the same.
+    #[test]
+    fn theme_ids_match_serde_and_old_values_still_load() {
+        for theme in Theme::ALL {
+            assert_eq!(serde_json::to_value(theme).unwrap(), theme.id(), "{theme:?}");
+            assert_eq!(Theme::from_id(theme.id()), Some(theme));
+        }
+        assert_eq!(Theme::from_id("solarized"), None);
+        let labels: std::collections::BTreeSet<&str> = Theme::ALL.iter().map(|theme| theme.label()).collect();
+        assert_eq!(labels.len(), Theme::ALL.len());
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        for (old, theme) in [("system", Theme::System), ("dark", Theme::Dark), ("light", Theme::Light)] {
+            std::fs::write(&path, format!(r#"{{ "workbench": {{ "theme": "{old}" }} }}"#)).unwrap();
+            assert_eq!(Settings::load(&path).workbench.theme, theme);
+        }
     }
 
     #[test]

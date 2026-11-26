@@ -236,7 +236,16 @@ pub fn validate_server_command(text: &str) -> Option<&'static str> {
 
 const AUTO_SAVE: &[ChoiceOption] =
     &[ChoiceOption { value: "off", label: "Off" }, ChoiceOption { value: "onFocusChange", label: "On focus change" }, ChoiceOption { value: "afterDelay", label: "After delay" }];
-const THEME: &[ChoiceOption] = &[ChoiceOption { value: "system", label: "System" }, ChoiceOption { value: "dark", label: "Dark" }, ChoiceOption { value: "light", label: "Light" }];
+/// Every theme, from [`Theme::ALL`].
+const THEME: &[ChoiceOption] = &{
+    let mut options = [ChoiceOption { value: "", label: "" }; Theme::ALL.len()];
+    let mut i = 0;
+    while i < Theme::ALL.len() {
+        options[i] = ChoiceOption { value: Theme::ALL[i].id(), label: Theme::ALL[i].label() };
+        i += 1;
+    }
+    options
+};
 const STARTUP_VIEW: &[ChoiceOption] = &[ChoiceOption { value: "scm", label: "Source Control" }, ChoiceOption { value: "explorer", label: "Explorer" }];
 const SIDEBAR_POSITION: &[ChoiceOption] = &[ChoiceOption { value: "left", label: "Left" }, ChoiceOption { value: "right", label: "Right" }];
 const PULL_STRATEGY: &[ChoiceOption] =
@@ -393,21 +402,14 @@ pub static FIELDS: [Field; 32] = [
         id: "workbench.theme",
         section: SectionId::Appearance,
         label: "Theme",
-        description: "Colour theme. System follows the light or dark setting of your operating system.",
-        keywords: "color colour dark light",
+        description: "Colour theme. System switches between Default Light and Default Dark with your operating system. To try the themes, use Preferences: Color Theme in the command palette.",
+        keywords: "color colour dark light system",
         kind: FieldKind::Select(SelectSpec {
             options: THEME,
-            get: |s| match s.workbench.theme {
-                Theme::System => "system",
-                Theme::Dark => "dark",
-                Theme::Light => "light",
-            },
+            get: |s| s.workbench.theme.id(),
             set: |s, value| {
-                s.workbench.theme = match value {
-                    "system" => Theme::System,
-                    "dark" => Theme::Dark,
-                    "light" => Theme::Light,
-                    _ => return,
+                if let Some(theme) = Theme::from_id(value) {
+                    s.workbench.theme = theme;
                 }
             },
         }),
@@ -1048,7 +1050,8 @@ mod tests {
             _ => Vec::new(),
         };
         assert_eq!(values("files.autoSave"), ["off=Off", "onFocusChange=On focus change", "afterDelay=After delay"]);
-        assert_eq!(values("workbench.theme"), ["system=System", "dark=Dark", "light=Light"]);
+        assert_eq!(values("workbench.theme")[..4], ["system=System", "dark=Default Dark", "oneDark=One Dark", "dracula=Dracula"]);
+        assert_eq!(values("workbench.theme").len(), Theme::ALL.len());
         assert_eq!(values("workbench.startupView"), ["scm=Source Control", "explorer=Explorer"]);
         assert_eq!(values("workbench.sidebarPosition"), ["left=Left", "right=Right"]);
         assert_eq!(values("git.pullStrategy"), ["ffOnly=Fast-forward only", "merge=Merge", "rebase=Rebase"]);
