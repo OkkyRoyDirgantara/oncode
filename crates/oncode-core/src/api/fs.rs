@@ -59,6 +59,16 @@ pub async fn fs_rename(core: &Shared, window: &str, from: String, to: String) ->
     Ok(oncode_workspace::rename(&from, &to).await?)
 }
 
+/// Menyalin berkas atau folder dari mana pun (hasil seret-lepas dari OS) ke dalam folder `dest_dir`
+/// di proyek. Hanya tujuannya yang dibatasi ke proyek: sumbernya dipilih pengguna lewat gestur
+/// itu. Tidak menimpa; mengembalikan path hasil salinan.
+pub async fn fs_copy_into(core: &Shared, window: &str, sources: Vec<String>, dest_dir: String) -> AppResult<Vec<String>> {
+    let dest_dir = core.resolve(window, &dest_dir)?;
+    let sources: Vec<PathBuf> = sources.into_iter().map(PathBuf::from).collect();
+    let copied = oncode_workspace::copy_into(&sources, &dest_dir).await?;
+    Ok(copied.into_iter().map(|path| path.to_string_lossy().into_owned()).collect())
+}
+
 /// Memindahkan berkas atau folder ke tempat sampah OS.
 pub async fn fs_trash(core: &Shared, window: &str, paths: Vec<String>) -> AppResult<()> {
     let root = core.workspace_root(window)?;
@@ -217,6 +227,38 @@ mod tests {
         let err = fs_trash(&t.core, "w1", vec![project.to_string_lossy().into_owned()]).await.unwrap_err();
         assert_eq!(err.code, "invalidInput");
         assert_eq!(std::fs::read_to_string(t.dir.path().join("luar.txt")).unwrap(), "rahasia");
+    }
+
+    #[tokio::test]
+    async fn dropped_files_are_copied_from_anywhere_but_only_into_the_project() {
+        let t = TestCore::new();
+        let project = open(&t, "proyek").await;
+        fs_create_dir(&t.core, "w1", "src".into()).await.unwrap();
+        let outside = t.dir.path().join("luar");
+        std::fs::create_dir_all(outside.join("assets")).unwrap();
+        std::fs::write(outside.join("assets/logo.txt"), "logo").unwrap();
+        std::fs::write(outside.join("catatan.txt"), "catatan").unwrap();
+        let outside_path = |name: &str| outside.join(name).to_string_lossy().into_owned();
+
+        // Tujuan boleh relatif maupun absolut; sumbernya di luar proyek.
+        let copied = fs_copy_into(&t.core, "w1", vec![outside_path("catatan.txt"), outside_path("assets")], "src".into()).await.unwrap();
+        // Dibandingkan sebagai `Path`: `join("src/x")` memakai pemisah campuran di Windows.
+        let copied: Vec<PathBuf> = copied.into_iter().map(PathBuf::from).collect();
+        assert_eq!(copied, [project.join("src").join("catatan.txt"), project.join("src").join("assets")]);
+        assert_eq!(std::fs::read(project.join("src/assets/logo.txt")).unwrap(), b"logo");
+        assert_eq!(std::fs::read(outside.join("catatan.txt")).unwrap(), b"catatan", "sumber tidak disentuh");
+
+        // Tidak menimpa salinan yang sudah ada.
+        let err = fs_copy_into(&t.core, "w1", vec![outside_path("catatan.txt")], project.join("src").to_string_lossy().into_owned()).await.unwrap_err();
+        assert_eq!(err.code, "alreadyExists");
+
+        // Tujuan di luar proyek ditolak, dan tidak ada yang disalin.
+        let elsewhere = t.dir.path().join("lain");
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        let err = fs_copy_into(&t.core, "w1", vec![outside_path("catatan.txt")], elsewhere.to_string_lossy().into_owned()).await.unwrap_err();
+        assert_eq!(err.code, "invalidPath");
+        assert!(!elsewhere.join("catatan.txt").exists());
+        assert_eq!(fs_copy_into(&t.core, "w1", vec![outside_path("catatan.txt")], "../lain".into()).await.unwrap_err().code, "invalidPath");
     }
 
     #[tokio::test]

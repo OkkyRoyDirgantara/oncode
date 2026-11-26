@@ -17,8 +17,8 @@ use gpui_kit::component::resizable::{h_resizable, resizable_panel, v_resizable};
 use gpui_kit::component::{h_flex, v_flex, ActiveTheme as _, Icon, Selectable as _, Sizable as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
-    div, px, relative, AnyElement, AnyView, App, AppContext as _, Context, DragMoveEvent, Entity, EventEmitter, FocusHandle, Focusable, Global,
-    InteractiveElement as _, IntoElement, MouseButton, ParentElement as _, Render, SharedString, StatefulInteractiveElement as _, Styled as _, Subscription, Task,
+    div, px, relative, AnyElement, AnyView, App, AppContext as _, Bounds, Context, DragMoveEvent, Entity, EventEmitter, ExternalPaths, FocusHandle, Focusable, Global,
+    InteractiveElement, IntoElement, MouseButton, ParentElement as _, Pixels, Point, Render, SharedString, StatefulInteractiveElement as _, Styled as _, Subscription, Task,
     TestSupportExt as _, WeakEntity, Window,
 };
 use oncode_core::api::app::WorkspaceInfo;
@@ -27,6 +27,8 @@ use oncode_core::{Settings, Shared};
 
 use crate::commands::{self, Command, CommandRegistry};
 use crate::model::{self, DropZone, Model, OpenOptions, Orientation, SplitSide, TabData};
+use crate::overlay;
+use crate::shell::file_tab;
 use crate::Lucide;
 
 /// Konteks sebuah jendela, diberikan ke semua pembangun tampilan. Tidak berubah selama
@@ -119,6 +121,25 @@ pub struct DraggedTab {
     pub tab: TabData,
     /// Grup asal di area editor; `None` bila asalnya di luar area editor.
     pub from: Option<u32>,
+}
+
+/// Berkas atau folder yang sedang diseret dari sebuah daftar berkas (mis. Explorer). Berkas yang
+/// dijatuhkan ke area editor dibuka sebagai tab di sana, sama seperti tab yang diseret; folder tidak
+/// diterima. Berkas dari luar aplikasi (seret dari OS) datang sebagai `ExternalPaths` dan diperlakukan sama.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DraggedEntry {
+    /// Path absolut.
+    pub path: String,
+    pub is_dir: bool,
+}
+
+/// Benar bila yang sedang diseret boleh dijatuhkan ke area editor: tab, berkas dari daftar berkas, atau
+/// berkas dari OS (jenisnya, folder atau bukan, baru diperiksa saat dijatuhkan).
+fn accepts_drop(value: &dyn std::any::Any) -> bool {
+    match value.downcast_ref::<DraggedEntry>() {
+        Some(entry) => !entry.is_dir,
+        None => value.is::<DraggedTab>() || value.is::<ExternalPaths>(),
+    }
 }
 
 /// Gambar kecil yang mengikuti penunjuk selama tab diseret.
@@ -721,11 +742,97 @@ impl Workbench {
         cx.notify();
     }
 
-    /// Menghitung zona jatuh selama tab diseret di atas isi grup `group`.
-    fn track_drop_zone(&mut self, group: u32, event: &DragMoveEvent<DraggedTab>, cx: &mut Context<Self>) {
-        let (bounds, position) = (event.bounds, event.event.position);
-        let zone = if bounds.contains(&position) {
-            let dragged = event.drag(cx);
+    /// Membuka berkas yang dijatuhkan ke grup `group`, dari Explorer atau dari OS. Yang pertama dibuka
+    /// di tempat jatuhnya (`place`), sisanya menyusul sebagai tab di grup itu. Folder dilewati. Berkas
+    /// di luar folder proyek ditolak: semua akses berkas dibatasi ke proyek.
+    fn drop_files(&mut self, paths: Vec<String>, group: u32, place: TabDrop, window: &mut Window, cx: &mut Context<Self>) {
+        self.drop_zone = None;
+        let Some(root) = self.env.root.clone() else {
+            overlay::toast_info("Open a folder first to work with files.", window, cx);
+            cx.notify();
+            return;
+        };
+        let (mut files, mut outside, mut folders) = (Vec::new(), Vec::new(), 0);
+        for path in paths {
+            let target = std::path::Path::new(&path);
+            if target.is_dir() {
+                folders += 1;
+            } else if oncode_workspace::is_inside(&root, target) {
+                files.push(path);
+            } else {
+                outside.push(target.file_name().map_or_else(|| path.clone(), |name| name.to_string_lossy().into_owned()));
+            }
+        }
+        if !outside.is_empty() {
+            overlay::toast_error(format!("Only files inside the project folder can be opened: {}", outside.join(", ")), window, cx);
+        } else if files.is_empty() && folders > 0 {
+            overlay::toast_info("Folders cannot be opened in the editor. Drop files instead.", window, cx);
+        }
+        let mut files = files.into_iter();
+        let Some(first) = files.next() else {
+            cx.notify();
+            return;
+        };
+        self.drop_tab(&DraggedTab { tab: file_tab(&first), from: None }, group, place, window, cx);
+        for path in files {
+            let options = OpenOptions { group: Some(self.model.active_group), ..Default::default() };
+            self.open_tab(file_tab(&path), options, window, cx);
+        }
+    }
+
+    /// Tempat jatuh di isi grup `group` menurut zona yang sedang disorot: tepi membelah, tengah masuk ke grup.
+    fn zone_place(&self, group: u32) -> TabDrop {
+        match self.drop_zone.filter(|(g, _)| *g == group).map(|(_, zone)| zone) {
+            Some(DropZone::Split(side)) => TabDrop::Split(side),
+            _ => TabDrop::End,
+        }
+    }
+
+    /// Membuat `el` menerima tab, berkas dari Explorer, dan berkas dari OS yang dijatuhkan ke grup
+    /// `group`. Tempat jatuhnya ditentukan `place`, yang dipanggil saat dijatuhkan. `tint` mewarnai
+    /// `el` selama ada yang diseret di atasnya; isi grup tidak memakainya karena sudah punya sorotan zona.
+    fn accept_drops<E: InteractiveElement>(&self, el: E, group: u32, tint: bool, place: impl Fn(&Self) -> TabDrop + Clone + 'static, cx: &Context<Self>) -> E {
+        let (place_tab, place_entry) = (place.clone(), place.clone());
+        let el = el.can_drop(|value, _, _| accepts_drop(value));
+        let el = if tint {
+            el.drag_over::<DraggedTab>(|style, _, _, cx| style.bg(cx.theme().drop_target))
+                .drag_over::<DraggedEntry>(|style, _, _, cx| style.bg(cx.theme().drop_target))
+                .drag_over::<ExternalPaths>(|style, _, _, cx| style.bg(cx.theme().drop_target))
+        } else {
+            el
+        };
+        el.on_drop(cx.listener(move |this, dragged: &DraggedTab, window, cx| {
+                let place = place_tab(this);
+                this.drop_tab(dragged, group, place, window, cx);
+            }))
+            .on_drop(cx.listener(move |this, dragged: &DraggedEntry, window, cx| {
+                let place = place_entry(this);
+                this.drop_files(vec![dragged.path.clone()], group, place, window, cx);
+            }))
+            .on_drop(cx.listener(move |this, dropped: &ExternalPaths, window, cx| {
+                let place = place(this);
+                let paths = dropped.paths().iter().map(|path| path.to_string_lossy().into_owned()).collect();
+                this.drop_files(paths, group, place, window, cx);
+            }))
+    }
+
+    /// Tab yang mewakili sesuatu yang sedang diseret ke area editor, untuk menghitung zona jatuh;
+    /// `None` bila tidak ada yang bisa dibuka (mis. folder).
+    fn drag_stand_in(value: &dyn std::any::Any) -> Option<DraggedTab> {
+        if let Some(dragged) = value.downcast_ref::<DraggedTab>() {
+            return Some(dragged.clone());
+        }
+        let path = match (value.downcast_ref::<DraggedEntry>(), value.downcast_ref::<ExternalPaths>()) {
+            (Some(entry), _) if !entry.is_dir => entry.path.clone(),
+            (None, Some(external)) => external.paths().first()?.to_string_lossy().into_owned(),
+            _ => return None,
+        };
+        Some(DraggedTab { tab: file_tab(&path), from: None })
+    }
+
+    /// Menghitung zona jatuh selama sesuatu diseret di atas isi grup `group`.
+    fn track_drop_zone(&mut self, group: u32, dragged: Option<DraggedTab>, bounds: Bounds<Pixels>, position: Point<Pixels>, cx: &mut Context<Self>) {
+        let zone = if let Some(dragged) = dragged.filter(|_| bounds.contains(&position)) {
             let (horizontal, vertical) = self.model.split_axes(group, &dragged.tab.id, dragged.from);
             let x = (position.x - bounds.origin.x) / bounds.size.width;
             let y = (position.y - bounds.origin.y) / bounds.size.height;
@@ -1010,8 +1117,7 @@ impl Workbench {
                         cx.stop_propagation();
                         cx.new(|_| TabDragPreview::new(dragged.tab.title.clone(), icon))
                     })
-                    .drag_over::<DraggedTab>(|style, _, _, cx| style.bg(cx.theme().drop_target))
-                    .on_drop(cx.listener(move |this, dragged: &DraggedTab, window, cx| this.drop_tab(dragged, group, TabDrop::Before(index), window, cx)))
+                    .map(|el| self.accept_drops(el, group, true, move |_| TabDrop::Before(index), cx))
                     .map(|el| match (image, icon) {
                         (Some(image), _) => el.child(gpui_kit::img(image).size(px(16.)).flex_none()),
                         (None, Some(icon)) => el.child(Icon::new(icon).small()),
@@ -1068,8 +1174,7 @@ impl Workbench {
                     .flex_1()
                     .min_w(px(32.))
                     .h_full()
-                    .drag_over::<DraggedTab>(|style, _, _, cx| style.bg(cx.theme().drop_target))
-                    .on_drop(cx.listener(move |this, dragged: &DraggedTab, window, cx| this.drop_tab(dragged, group, TabDrop::End, window, cx))),
+                    .map(|el| self.accept_drops(el, group, true, |_| TabDrop::End, cx)),
             );
         h_flex()
             .w_full()
@@ -1112,14 +1217,16 @@ impl Workbench {
                     .min_h_0()
                     .w_full()
                     .overflow_hidden()
-                    .on_drag_move::<DraggedTab>(cx.listener(move |this, event: &DragMoveEvent<DraggedTab>, _, cx| this.track_drop_zone(group, event, cx)))
-                    .on_drop(cx.listener(move |this, dragged: &DraggedTab, window, cx| {
-                        let place = match this.drop_zone.filter(|(g, _)| *g == group).map(|(_, zone)| zone) {
-                            Some(DropZone::Split(side)) => TabDrop::Split(side),
-                            _ => TabDrop::End,
-                        };
-                        this.drop_tab(dragged, group, place, window, cx);
+                    .on_drag_move::<DraggedTab>(cx.listener(move |this, event: &DragMoveEvent<DraggedTab>, _, cx| {
+                        this.track_drop_zone(group, Self::drag_stand_in(event.drag(cx)), event.bounds, event.event.position, cx)
                     }))
+                    .on_drag_move::<DraggedEntry>(cx.listener(move |this, event: &DragMoveEvent<DraggedEntry>, _, cx| {
+                        this.track_drop_zone(group, Self::drag_stand_in(event.drag(cx)), event.bounds, event.event.position, cx)
+                    }))
+                    .on_drag_move::<ExternalPaths>(cx.listener(move |this, event: &DragMoveEvent<ExternalPaths>, _, cx| {
+                        this.track_drop_zone(group, Self::drag_stand_in(event.drag(cx)), event.bounds, event.event.position, cx)
+                    }))
+                    .map(|el| self.accept_drops(el, group, false, move |this| this.zone_place(group), cx))
                     .when_some(content, |el, view| el.child(view))
                     .children(overlay),
             )
@@ -1135,8 +1242,7 @@ impl Workbench {
                 .test_support()
                 .size_full()
                 .bg(cx.theme().background)
-                .drag_over::<DraggedTab>(|style, _, _, cx| style.bg(cx.theme().drop_target))
-                .on_drop(cx.listener(move |this, dragged: &DraggedTab, window, cx| this.drop_tab(dragged, group, TabDrop::End, window, cx)))
+                .map(|el| self.accept_drops(el, group, true, |_| TabDrop::End, cx))
                 .map(|el| match &self.empty_view {
                     Some(view) => el.child(view.clone()),
                     None => el.flex().items_center().justify_center().text_color(cx.theme().muted_foreground).child("No file is open"),

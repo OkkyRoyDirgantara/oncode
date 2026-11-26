@@ -90,6 +90,18 @@ pub fn moved_path(path: &str, from: &str, to: &str) -> Option<String> {
     Some(format!("{to}{}", &path[strip_trailing(from).len()..]))
 }
 
+/// Benar bila kedua path menunjuk tempat yang sama, tidak peduli pemisah dan garis miring penutup.
+pub fn same_path(a: &str, b: &str) -> bool {
+    strip_trailing(a).replace('\\', "/") == strip_trailing(b).replace('\\', "/")
+}
+
+/// Benar bila `source` boleh dipindah ke dalam folder `dest_dir` lewat seret-lepas: harus berada di
+/// dalam `root` (folder proyek sendiri tidak bisa dipindah), tidak boleh masuk ke dirinya sendiri atau
+/// ke folder di dalamnya, dan tidak ada gunanya ke folder tempatnya sekarang berada.
+pub fn can_move_into(root: &str, source: &str, dest_dir: &str) -> bool {
+    !same_path(source, root) && is_same_or_under(source, root) && !is_same_or_under(dest_dir, source) && !same_path(dir_name(source), dest_dir)
+}
+
 /// Nama berkas atau folder terakhir dari sebuah path.
 pub fn base_name(path: &str) -> &str {
     let trimmed = strip_trailing(path);
@@ -1026,6 +1038,40 @@ mod tests {
     fn has_nothing_to_show_without_a_repository() {
         let d = build_decorations(None);
         assert!(d.files.is_empty() && d.folders.is_empty());
+    }
+
+    #[test]
+    fn an_entry_can_be_moved_into_any_other_folder_of_the_project() {
+        // Ke folder lain, termasuk akar proyek, dari berkas maupun folder.
+        assert!(can_move_into("/ws", "/ws/a.txt", "/ws/src"));
+        assert!(can_move_into("/ws", "/ws/src/a.txt", "/ws"));
+        assert!(can_move_into("/ws", "/ws/src/deep/a.txt", "/ws/other"));
+        assert!(can_move_into("/ws", "/ws/src", "/ws/other/inner"));
+        // Awalan nama yang sama bukan berarti di dalamnya.
+        assert!(can_move_into("/ws", "/ws/src", "/ws/src-old"));
+        assert!(can_move_into("/ws/", "/ws/a.txt", "/ws/src/"));
+    }
+
+    #[test]
+    fn an_entry_cannot_be_dropped_where_nothing_would_change_or_into_itself() {
+        // Folder tempatnya sekarang: tidak ada yang berubah.
+        assert!(!can_move_into("/ws", "/ws/a.txt", "/ws"));
+        assert!(!can_move_into("/ws", "/ws/a.txt", "/ws/"));
+        assert!(!can_move_into("/ws", "/ws/src/a.txt", "/ws/src"));
+        // Ke dirinya sendiri atau isinya.
+        assert!(!can_move_into("/ws", "/ws/src", "/ws/src"));
+        assert!(!can_move_into("/ws", "/ws/src", "/ws/src/deep"));
+        // Folder proyek sendiri, dan yang di luarnya, tidak bisa dipindah.
+        assert!(!can_move_into("/ws", "/ws", "/ws/src"));
+        assert!(!can_move_into("/ws", "/elsewhere/a.txt", "/ws/src"));
+    }
+
+    #[test]
+    fn moves_are_judged_the_same_with_windows_separators() {
+        assert!(can_move_into("C:\\ws", "C:\\ws\\src\\a.txt", "C:\\ws"));
+        assert!(!can_move_into("C:\\ws", "C:\\ws\\src\\a.txt", "C:\\ws\\src"));
+        assert!(!can_move_into("C:\\ws", "C:\\ws\\src", "C:\\ws\\src\\deep"));
+        assert!(!can_move_into("C:\\ws", "C:\\ws\\a.txt", "C:\\ws\\"));
     }
 
     #[test]

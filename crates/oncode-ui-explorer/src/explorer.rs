@@ -16,27 +16,30 @@ use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{h_flex, v_flex, ActiveTheme as _, Icon, Sizable as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
-    div, px, rgb, uniform_list, AnyElement, App, AppContext as _, ClickEvent, ClipboardItem, Context, Entity, FocusHandle, Focusable, Global, Hsla, InteractiveElement as _,
-    IntoElement, KeyDownEvent, MouseButton, ParentElement as _, Render, ScrollStrategy, SharedString, StatefulInteractiveElement as _, Styled as _, Subscription, Task,
-    TestSupportExt as _, UniformListScrollHandle, WeakEntity, Window,
+    div, px, rgb, uniform_list, AnyElement, App, AppContext as _, Bounds, ClickEvent, ClipboardItem, Context, DragMoveEvent, Entity, ExternalPaths, FocusHandle, Focusable, Global,
+    Hsla, InteractiveElement as _, IntoElement, KeyDownEvent, MouseButton, ParentElement as _, Pixels, Point, Render, ScrollStrategy, SharedString,
+    StatefulInteractiveElement as _, Styled as _, Subscription, Task, TestSupportExt as _, UniformListScrollHandle, WeakEntity, Window,
 };
 use oncode_core::api::fs;
 use oncode_core::AppError;
 use oncode_ui::editor::{buffers, open_file, OpenFile};
 use oncode_ui::file_icons::{file_icon, folder_icon};
 use oncode_ui::overlay::{self, Confirm};
-use oncode_ui::{repos, spawn_core, Env, FileMark, Lucide, WorkbenchEvent};
+use oncode_ui::{repos, spawn_core, DraggedEntry, Env, FileMark, Lucide, TabDragPreview, WorkbenchEvent};
 use oncode_workspace::DirEntry;
 use serde_json::Value;
 
 use crate::restricted;
 use crate::tree::{
-    ancestor_chain, base_name, build_decorations, decoration_for, dir_name, is_same_or_under, join_path, moved_path, relative_path, rewrite_file_tab, validate_entry_name,
-    EntryDecoration, GitDecorations, NameOptions, Row, TreeState, INDENT, ROW_HEIGHT,
+    ancestor_chain, base_name, build_decorations, can_move_into, decoration_for, dir_name, is_same_or_under, join_path, moved_path, relative_path, rewrite_file_tab, same_path,
+    validate_entry_name, EntryDecoration, GitDecorations, NameOptions, Row, TreeState, INDENT, ROW_HEIGHT,
 };
 
 /// Jeda pengumpulan event perubahan berkas yang beruntun menjadi satu pemuatan ulang.
 const FS_DEBOUNCE: Duration = Duration::from_millis(150);
+
+/// Lama penunjuk menetap di atas folder tertutup, selagi menyeret, sebelum folder itu dibuka.
+const HOVER_EXPAND: Duration = Duration::from_millis(600);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EntryKind {
@@ -90,12 +93,26 @@ pub struct Explorer {
     edit: Option<Edit>,
     /// Sasaran menu konteks: entri di bawah penunjuk, atau `None` untuk latar pohon.
     menu_target: Option<String>,
+    /// Folder yang akan menerima bila yang sedang diseret dilepas sekarang; disorot selama menyeret.
+    drop_target: Option<String>,
+    /// Folder tertutup di bawah penunjuk selagi menyeret; dibuka bila penunjuk menetap di atasnya.
+    hover_folder: Option<String>,
+    _hover_expand: Task<()>,
     focus_handle: FocusHandle,
     scroll: UniformListScrollHandle,
     fs_paths: HashSet<String>,
     fs_overflow: bool,
     _fs_debounce: Task<()>,
     _subscriptions: Vec<Subscription>,
+}
+
+/// Tempat di pohon yang ditunjuk sebuah titik saat menyeret.
+struct DropPoint {
+    /// Folder yang menerima: folder di bawah penunjuk, folder induk sebuah berkas, atau akar proyek
+    /// bila penunjuk ada di latar pohon.
+    dir: String,
+    /// Folder tertutup yang persis di bawah penunjuk.
+    collapsed: Option<String>,
 }
 
 impl Focusable for Explorer {
@@ -162,6 +179,9 @@ impl Explorer {
             pending_reveal: None,
             edit: None,
             menu_target: None,
+            drop_target: None,
+            hover_folder: None,
+            _hover_expand: Task::ready(()),
             focus_handle: cx.focus_handle(),
             scroll: UniformListScrollHandle::new(),
             fs_paths: HashSet::new(),
@@ -831,6 +851,173 @@ impl Explorer {
         cx.write_to_clipboard(ClipboardItem::new_string(text));
     }
 
+    // ----- Seret dan jatuhkan -----
+
+    /// Daftar baris digambar: akar punya isi, atau masukan nama sedang terbuka. Selain itu yang tampil
+    /// hanya satu pesan (memuat, kosong, atau galat).
+    fn list_shown(&self) -> bool {
+        let has_entries = self.root.as_deref().and_then(|root| self.tree.dirs.get(root)).is_some_and(|state| state.entries.as_ref().is_some_and(|entries| !entries.is_empty()));
+        self.edit.is_some() || has_entries
+    }
+
+    /// Folder yang sedang disorot sebagai tujuan jatuh, selama ada yang diseret di atas pohon.
+    pub fn drop_target(&self) -> Option<&str> {
+        self.drop_target.as_deref()
+    }
+
+    /// Tempat di pohon yang ditunjuk `position` (koordinat jendela). Baris dipetakan lewat posisi dan
+    /// gulir daftar, karena baris divirtualisasi dan semuanya setinggi `ROW_HEIGHT`. `None` bila di luar
+    /// daftar atau di atas masukan nama.
+    fn drop_point(&self, position: Point<Pixels>) -> Option<DropPoint> {
+        let root = self.root.clone()?;
+        // Proyek kosong (atau masih dimuat): daftar tidak digambar, hanya pesan. Seluruh pohon adalah akar.
+        if !self.list_shown() {
+            return Some(DropPoint { dir: root, collapsed: None });
+        }
+        let (bounds, offset) = {
+            let state = self.scroll.0.borrow();
+            (state.base_handle.bounds(), state.base_handle.offset())
+        };
+        if !bounds.contains(&position) {
+            return None;
+        }
+        let index = f32::from(position.y - bounds.origin.y - offset.y) / ROW_HEIGHT;
+        let display = (index >= 0.).then(|| index as usize).and_then(|index| self.display.get(index).copied());
+        let row = match display {
+            // Di bawah baris terakhir: latar pohon, artinya akar proyek.
+            None => return Some(DropPoint { dir: root, collapsed: None }),
+            Some(Display::Tree(row)) => &self.rows[row],
+            Some(Display::Edit { .. } | Display::EditError { .. }) => return None,
+        };
+        Some(match row {
+            Row::Entry { entry, expanded, .. } if entry.is_dir => DropPoint { dir: entry.path.clone(), collapsed: (!*expanded).then(|| entry.path.clone()) },
+            // Dijatuhkan di atas berkas: masuk ke folder tempat berkas itu berada.
+            Row::Entry { entry, .. } => DropPoint { dir: dir_name(&entry.path).to_string(), collapsed: None },
+            Row::Note { parent, .. } => DropPoint { dir: parent.clone(), collapsed: None },
+        })
+    }
+
+    /// Menyorot folder tujuan selama sesuatu diseret di atas pohon, dan membuka folder tertutup bila
+    /// penunjuk menetap di atasnya. `dragged` kosong untuk berkas dari OS, yang selalu boleh disalin.
+    fn track_drop_target(&mut self, dragged: Option<&DraggedEntry>, bounds: Bounds<Pixels>, position: Point<Pixels>, cx: &mut Context<Self>) {
+        let Some(root) = self.root.clone() else { return };
+        let point = if bounds.contains(&position) { self.drop_point(position) } else { None };
+        let target = point.as_ref().map(|point| point.dir.clone()).filter(|dir| dragged.is_none_or(|dragged| can_move_into(&root, &dragged.path, dir)));
+        let folder = point.and_then(|point| point.collapsed);
+        if target != self.drop_target {
+            self.drop_target = target;
+            cx.notify();
+        }
+        if folder != self.hover_folder {
+            self.hover_folder = folder.clone();
+            // Mengganti tugas sebelumnya membatalkannya.
+            self._hover_expand = match folder {
+                Some(dir) => cx.spawn(async move |this, cx| {
+                    cx.background_executor().timer(HOVER_EXPAND).await;
+                    let _ = this.update(cx, |this, cx| {
+                        if this.hover_folder.as_deref() == Some(dir.as_str()) && cx.has_active_drag() {
+                            this.hover_folder = None;
+                            this.expand(&dir, cx);
+                        }
+                    });
+                }),
+                None => Task::ready(()),
+            };
+        }
+    }
+
+    /// Menghapus sorotan dan menghentikan pembukaan otomatis, setelah dijatuhkan.
+    fn end_drop(&mut self, cx: &mut Context<Self>) {
+        self.drop_target = None;
+        self.hover_folder = None;
+        self._hover_expand = Task::ready(());
+        cx.notify();
+    }
+
+    /// Folder tujuan yang harus disorot sekarang: ada yang sedang diseret dan penunjuk di atas pohon.
+    fn active_drop_target(&self, cx: &App) -> Option<&str> {
+        self.drop_target.as_deref().filter(|_| cx.has_active_drag())
+    }
+
+    /// Entri dari pohon ini dijatuhkan: dipindah ke folder di bawah penunjuk.
+    fn drop_entry(&mut self, dragged: &DraggedEntry, window: &mut Window, cx: &mut Context<Self>) {
+        let position = window.mouse_position();
+        self.end_drop(cx);
+        let Some(root) = self.root.clone() else { return };
+        let Some(point) = self.drop_point(position) else { return };
+        if can_move_into(&root, &dragged.path, &point.dir) {
+            self.move_entry(dragged.path.clone(), point.dir, window, cx);
+        }
+    }
+
+    /// Berkas dari OS dijatuhkan: disalin ke folder di bawah penunjuk.
+    fn drop_external(&mut self, dropped: &ExternalPaths, window: &mut Window, cx: &mut Context<Self>) {
+        let position = window.mouse_position();
+        self.end_drop(cx);
+        let Some(point) = self.drop_point(position) else { return };
+        let sources = dropped.paths().iter().map(|path| path.to_string_lossy().into_owned()).collect();
+        self.copy_in(sources, point.dir, window, cx);
+    }
+
+    /// Memindahkan `from` (berkas atau folder) ke dalam folder `to_dir`. Buffer dan tab yang terbuka ikut
+    /// pindah, sama seperti ganti nama.
+    fn move_entry(&mut self, from: String, to_dir: String, window: &mut Window, cx: &mut Context<Self>) {
+        let name = base_name(&from).to_string();
+        let to = join_path(&to_dir, &name);
+        let from_dir = dir_name(&from).to_string();
+        let (core, label, source, target) = (self.env.core.clone(), self.env.window.to_string(), from.clone(), to.clone());
+        let task = spawn_core(cx, async move { fs::fs_rename(&core, &label, source, target).await });
+        cx.spawn_in(window, async move |this, cx| {
+            let result = task.await;
+            let _ = this.update_in(cx, |this, window, cx| {
+                if let Err(error) = result {
+                    overlay::show_error(&with_context(error, format!("Could not move {name}")), window, cx);
+                    return;
+                }
+                // Berkas aktif yang ikut pindah sudah diketahui di tempat barunya. Tanpa ini, tab yang ditulis
+                // ulang membuat pohon menampilkan berkas itu dan menggeser pilihan dari entri yang diseret.
+                // Path tab memakai bentuk `file_path`; `from`/`to` disamakan dulu, seperti pada `rewrite_file_tab`.
+                let (from_tab, to_tab) = (oncode_ui::editor::file_path(&from), oncode_ui::editor::file_path(&to));
+                if let Some(active) = this.active_path.as_deref().and_then(|active| moved_path(active, &from_tab, &to_tab)) {
+                    this.active_path = Some(active);
+                }
+                this.apply_rename(&from, &to, window, cx);
+                this.tree.move_state(&from, &to);
+                // Kedua folder berubah isi. Pemuatan dimulai sebelum `reveal`, supaya isi lama folder tujuan
+                // tidak dipercaya; hasilnya lalu dibuka, dipilih, dan digulir ke tampilan.
+                this.start_load(&from_dir, cx);
+                if !same_path(&from_dir, &to_dir) {
+                    this.start_load(&to_dir, cx);
+                }
+                this.reveal(&to, cx);
+            });
+        })
+        .detach();
+    }
+
+    /// Menyalin berkas dan folder dari luar proyek (hasil seret dari OS) ke dalam `dest_dir`. Tidak menimpa:
+    /// nama yang sudah ada membuat seluruhnya ditolak dengan pesan.
+    fn copy_in(&mut self, sources: Vec<String>, dest_dir: String, window: &mut Window, cx: &mut Context<Self>) {
+        if sources.is_empty() {
+            return;
+        }
+        let (core, label, dir) = (self.env.core.clone(), self.env.window.to_string(), dest_dir.clone());
+        let task = spawn_core(cx, async move { fs::fs_copy_into(&core, &label, sources, dir).await });
+        cx.spawn_in(window, async move |this, cx| {
+            let result = task.await;
+            let _ = this.update_in(cx, |this, window, cx| match result {
+                Err(error) => overlay::show_error(&with_context(error, "Could not copy the dropped files".to_string()), window, cx),
+                Ok(copied) => {
+                    this.start_load(&dest_dir, cx);
+                    if let Some(first) = copied.first() {
+                        this.reveal(first, cx);
+                    }
+                }
+            });
+        })
+        .detach();
+    }
+
     // ----- Menu konteks -----
 
     fn build_menu(this: &WeakEntity<Self>, mut menu: PopupMenu, cx: &App) -> PopupMenu {
@@ -896,7 +1083,7 @@ impl Explorer {
         px(6. + depth as f32 * INDENT)
     }
 
-    fn render_entry(&self, entry: &DirEntry, depth: usize, expanded: bool, window: &Window, cx: &mut Context<Self>) -> AnyElement {
+    fn render_entry(&self, entry: &DirEntry, depth: usize, expanded: bool, dropping: bool, window: &Window, cx: &mut Context<Self>) -> AnyElement {
         let theme = cx.theme();
         let decoration = decoration_for(&self.decorations, &entry.path, entry.is_dir);
         let mark = decoration.as_ref().map(|decoration| mark_color(decoration.status, theme.is_dark()));
@@ -923,6 +1110,7 @@ impl Explorer {
         let ignored = entry.ignored;
         let (path, is_dir) = (entry.path.clone(), entry.is_dir);
         let menu_path = entry.path.clone();
+        let dragged = DraggedEntry { path: entry.path.clone(), is_dir: entry.is_dir };
         h_flex()
             .id(self.row_id("explorer-row", &entry.path))
             .test_support()
@@ -937,8 +1125,16 @@ impl Explorer {
             .when(selected && !focused, |el| el.bg(theme.list_active.opacity(0.6)))
             .when(active && !selected, |el| el.bg(theme.list_hover))
             .when(!selected && !active, |el| el.hover(|style| style.bg(theme.list_hover)))
+            // Folder tujuan jatuh beserta isinya disorot, mengalahkan warna pilihan.
+            .when(dropping, |el| el.bg(theme.drop_target))
             .tooltip(move |window, cx| Tooltip::new(title.clone()).build(window, cx))
             .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| this.on_row_click(&path, is_dir, event.click_count(), window, cx)))
+            // Seret ke folder lain untuk memindah, atau ke area editor untuk membuka (berkas).
+            .on_drag(dragged, |dragged, _, _, cx| {
+                cx.stop_propagation();
+                let icon = if dragged.is_dir { Lucide::Folder } else { Lucide::FileText };
+                cx.new(|_| TabDragPreview::new(base_name(&dragged.path).to_string(), Some(icon)))
+            })
             .on_mouse_down(
                 MouseButton::Right,
                 cx.listener(move |this, _, _, cx| {
@@ -962,7 +1158,7 @@ impl Explorer {
             .into_any_element()
     }
 
-    fn render_note(&self, index: usize, depth: usize, text: &str, error: bool, cx: &mut Context<Self>) -> AnyElement {
+    fn render_note(&self, index: usize, depth: usize, text: &str, error: bool, dropping: bool, cx: &mut Context<Self>) -> AnyElement {
         let theme = cx.theme();
         div()
             .id(("explorer-note", index))
@@ -974,6 +1170,7 @@ impl Explorer {
             .text_xs()
             .line_height(px(ROW_HEIGHT))
             .truncate()
+            .when(dropping, |el| el.bg(theme.drop_target))
             .when(error, |el| el.text_color(theme.danger))
             .when(!error, |el| el.italic().text_color(theme.muted_foreground))
             .child(SharedString::from(text.to_string()))
@@ -1022,17 +1219,26 @@ impl Explorer {
             .into_any_element()
     }
 
+    /// Folder tujuan jatuh yang disorot barisnya: folder itu dan isinya. Akar proyek tidak disorot di
+    /// baris, melainkan di seluruh pohon (lihat `render_tree`).
+    fn highlighted_folder(&self, cx: &App) -> Option<String> {
+        let target = self.active_drop_target(cx)?;
+        (!self.root.as_deref().is_some_and(|root| same_path(root, target))).then(|| target.to_string())
+    }
+
     fn render_rows(&mut self, range: Range<usize>, window: &mut Window, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        let target = self.highlighted_folder(cx);
+        let inside = |path: &str| target.as_deref().is_some_and(|dir| is_same_or_under(path, dir));
         range
             .map(|index| match self.display.get(index).copied() {
                 Some(Display::Tree(row)) => match &self.rows[row] {
-                    Row::Entry { entry, depth, expanded, .. } => self.render_entry(entry, *depth, *expanded, window, cx),
-                    Row::Note { depth, text, error, .. } => self.render_note(index, *depth, text, *error, cx),
+                    Row::Entry { entry, depth, expanded, .. } => self.render_entry(entry, *depth, *expanded, inside(&entry.path), window, cx),
+                    Row::Note { depth, text, error, parent } => self.render_note(index, *depth, text, *error, inside(parent), cx),
                 },
                 Some(Display::Edit { depth }) => self.render_edit(depth, cx),
                 Some(Display::EditError { depth }) => {
                     let text = self.edit.as_ref().and_then(|edit| edit.error.clone()).unwrap_or_default();
-                    self.render_note(index, depth, &text, true, cx)
+                    self.render_note(index, depth, &text, true, false, cx)
                 }
                 None => div().h(px(ROW_HEIGHT)).into_any_element(),
             })
@@ -1064,7 +1270,7 @@ impl Explorer {
         let theme = cx.theme();
         let message = |el: gpui_kit::Div| el.px_3().py_3().text_sm().text_color(theme.muted_foreground);
         let root_state = self.tree.dirs.get(root);
-        let body: AnyElement = if self.edit.is_some() || root_state.is_some_and(|state| state.entries.as_ref().is_some_and(|entries| !entries.is_empty())) {
+        let body: AnyElement = if self.list_shown() {
             uniform_list("explorer-rows", self.display.len(), cx.processor(|this, range: Range<usize>, window, cx| this.render_rows(range, window, cx)))
                 .track_scroll(&self.scroll)
                 .size_full()
@@ -1085,6 +1291,8 @@ impl Explorer {
             message(div()).child("Loading…").into_any_element()
         };
 
+        // Dilepas di akar proyek (latar pohon, atau baris berkas di akar): seluruh pohon disorot.
+        let root_target = self.active_drop_target(cx).is_some_and(|dir| same_path(root, dir));
         let this = cx.entity().downgrade();
         div()
             .id("explorer-tree")
@@ -1094,7 +1302,17 @@ impl Explorer {
             .min_h_0()
             .w_full()
             .overflow_hidden()
+            .when(root_target, |el| el.bg(theme.drop_target))
             .on_key_down(cx.listener(Self::on_key_down))
+            // Seret-lepas ditangani di satu tempat: baris di bawah penunjuk dihitung dari posisinya,
+            // sehingga latar kosong di bawah baris terakhir (akar proyek) ikut ditangani.
+            .on_drag_move::<DraggedEntry>(cx.listener(|this, event: &DragMoveEvent<DraggedEntry>, _, cx| {
+                let dragged = event.drag(cx).clone();
+                this.track_drop_target(Some(&dragged), event.bounds, event.event.position, cx);
+            }))
+            .on_drag_move::<ExternalPaths>(cx.listener(|this, event: &DragMoveEvent<ExternalPaths>, _, cx| this.track_drop_target(None, event.bounds, event.event.position, cx)))
+            .on_drop(cx.listener(|this, dragged: &DraggedEntry, window, cx| this.drop_entry(dragged, window, cx)))
+            .on_drop(cx.listener(|this, dropped: &ExternalPaths, window, cx| this.drop_external(dropped, window, cx)))
             // Menu konteks dibangun dari sasaran ini; baris di bawah penunjuk mengisinya kembali.
             .capture_any_mouse_down(cx.listener(|this, _, _, _| this.menu_target = None))
             .on_any_mouse_down(cx.listener(|this, _, window, cx| {

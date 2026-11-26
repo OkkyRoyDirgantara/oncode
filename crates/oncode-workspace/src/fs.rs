@@ -395,6 +395,88 @@ pub async fn rename(from: &Path, to: &Path) -> Result<()> {
     .await
 }
 
+/// Menyalin berkas atau folder (beserta isinya) ke dalam folder `dest_dir`, mis. hasil seret-lepas
+/// dari luar proyek. Sumbernya bebas; yang membatasi ke proyek adalah pemanggil, lewat `dest_dir`.
+///
+/// Tidak pernah menimpa: bila salah satu nama sudah ada di `dest_dir`, atau dua sumber bernama
+/// sama, tidak ada yang disalin dan hasilnya `AlreadyExists`. Folder tidak boleh disalin ke dalam
+/// dirinya sendiri. Di dalam folder sumber, symlink ke berkas disalin sebagai berkas biasa; symlink ke
+/// folder (dan berkas khusus seperti socket) dilewati agar penyalinan tidak berputar atau keluar
+/// dari folder sumber. Bila gagal di tengah jalan, salinan yang sudah dibuat dibuang lagi.
+///
+/// Mengembalikan path hasil salinan, menurut urutan `sources`.
+pub async fn copy_into(sources: &[PathBuf], dest_dir: &Path) -> Result<Vec<PathBuf>> {
+    let sources = sources.to_vec();
+    let dest_dir = dest_dir.to_path_buf();
+    blocking(move || {
+        match fs::metadata(&dest_dir) {
+            Ok(meta) if meta.is_dir() => {}
+            Ok(_) => return Err(WsError::invalid_path(format!("Not a folder: {}", dest_dir.display()))),
+            Err(err) => return Err(WsError::io(&dest_dir, err)),
+        }
+        let dest_real = fs::canonicalize(&dest_dir).map_err(|e| WsError::io(&dest_dir, e))?;
+
+        // Semua diperiksa dulu, supaya tidak ada salinan setengah jadi hanya karena nama kedua bentrok.
+        let mut targets: Vec<PathBuf> = Vec::with_capacity(sources.len());
+        for source in &sources {
+            let meta = fs::metadata(source).map_err(|e| WsError::io(source, e))?;
+            if !meta.is_dir() && !meta.is_file() {
+                return Err(WsError::invalid_path(format!("Only files and folders can be copied: {}", source.display())));
+            }
+            let name = source.file_name().ok_or_else(|| WsError::invalid_path(format!("Cannot copy: {}", source.display())))?;
+            if meta.is_dir() && fs::canonicalize(source).is_ok_and(|real| dest_real.starts_with(&real)) {
+                return Err(WsError::invalid_path(format!("A folder cannot be copied into itself: {}", source.display())));
+            }
+            let target = dest_dir.join(name);
+            if fs::symlink_metadata(&target).is_ok() || targets.contains(&target) {
+                return Err(WsError::already_exists(&target));
+            }
+            targets.push(target);
+        }
+
+        for (index, (source, target)) in sources.iter().zip(&targets).enumerate() {
+            if let Err(err) = copy_tree(source, target) {
+                // Nama yang keburu dipakai pihak lain bukan milik kita; jangan dihapus.
+                let created = if err.code == WsErrorCode::AlreadyExists { index } else { index + 1 };
+                for target in &targets[..created] {
+                    let _ = if target.is_dir() { fs::remove_dir_all(target) } else { fs::remove_file(target) };
+                }
+                return Err(err);
+            }
+        }
+        Ok(targets)
+    })
+    .await
+}
+
+/// Menyalin satu berkas atau folder ke `target` yang belum ada.
+fn copy_tree(source: &Path, target: &Path) -> Result<()> {
+    let meta = fs::metadata(source).map_err(|e| WsError::io(source, e))?;
+    if meta.is_dir() {
+        fs::create_dir(target).map_err(|e| WsError::io(target, e))?;
+        for entry in fs::read_dir(source).map_err(|e| WsError::io(source, e))? {
+            let entry = entry.map_err(|e| WsError::io(source, e))?;
+            let path = entry.path();
+            let is_link = entry.file_type().map_err(|e| WsError::io(&path, e))?.is_symlink();
+            if is_link && !fs::metadata(&path).is_ok_and(|meta| meta.is_file()) {
+                continue;
+            }
+            copy_tree(&path, &target.join(entry.file_name()))?;
+        }
+        Ok(())
+    } else if meta.is_file() {
+        // `create_new`: tidak pernah menimpa, bahkan bila nama itu baru dipakai setelah pemeriksaan.
+        let mut input = fs::File::open(source).map_err(|e| WsError::io(source, e))?;
+        let mut output = fs::OpenOptions::new().write(true).create_new(true).open(target).map_err(|e| WsError::io(target, e))?;
+        std::io::copy(&mut input, &mut output).map_err(|e| WsError::io(target, e))?;
+        // Hak akses (mis. bit eksekusi) ikut disalin, seperti `fs::copy`.
+        let _ = fs::set_permissions(target, meta.permissions());
+        Ok(())
+    } else {
+        Ok(())
+    }
+}
+
 /// Benar bila kedua path menunjuk entri yang sama dan hanya berbeda huruf besar-kecil
 /// (ganti nama `readme.md` → `README.md` pada sistem berkas yang tidak peka huruf).
 fn is_same_entry(from: &Path, to: &Path) -> bool {
@@ -928,6 +1010,96 @@ mod tests {
 
         let err = rename(&tmp.path().join("nope"), &tmp.path().join("x")).await.unwrap_err();
         assert_eq!(err.code, WsErrorCode::NotFound);
+    }
+
+    #[tokio::test]
+    async fn copy_into_copies_files_and_folders_with_their_contents() {
+        let tmp = tempfile::tempdir().unwrap();
+        let outside = tmp.path().join("outside");
+        let project = tmp.path().join("project");
+        write(&outside.join("a.txt"), "A");
+        write(&outside.join("tree/one.txt"), "1");
+        write(&outside.join("tree/deep/two.txt"), "2");
+        fs::create_dir_all(outside.join("tree/empty")).unwrap();
+        fs::create_dir_all(project.join("dest")).unwrap();
+
+        let copied = copy_into(&[outside.join("a.txt"), outside.join("tree")], &project.join("dest")).await.unwrap();
+        assert_eq!(copied, [project.join("dest/a.txt"), project.join("dest/tree")]);
+        assert_eq!(fs::read(project.join("dest/a.txt")).unwrap(), b"A");
+        assert_eq!(fs::read(project.join("dest/tree/one.txt")).unwrap(), b"1");
+        assert_eq!(fs::read(project.join("dest/tree/deep/two.txt")).unwrap(), b"2");
+        assert!(project.join("dest/tree/empty").is_dir());
+        // Sumbernya tidak disentuh.
+        assert_eq!(fs::read(outside.join("tree/one.txt")).unwrap(), b"1");
+
+        // Tidak ada yang disalin: daftar kosong berhasil begitu saja.
+        assert!(copy_into(&[], &project.join("dest")).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn copy_into_never_overwrites_and_copies_nothing_when_a_name_is_taken() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (source, dest) = (tmp.path().join("src"), tmp.path().join("dest"));
+        write(&source.join("new.txt"), "baru");
+        write(&source.join("taken.txt"), "dari luar");
+        write(&dest.join("taken.txt"), "asli");
+
+        // Berkas pertama bebas, tetapi yang kedua bentrok: berkas pertama pun tidak disalin.
+        let err = copy_into(&[source.join("new.txt"), source.join("taken.txt")], &dest).await.unwrap_err();
+        assert_eq!(err.code, WsErrorCode::AlreadyExists);
+        assert!(!dest.join("new.txt").exists());
+        assert_eq!(fs::read(dest.join("taken.txt")).unwrap(), b"asli");
+
+        // Dua sumber bernama sama dari folder berbeda juga bentrok satu sama lain.
+        write(&tmp.path().join("other/new.txt"), "lain");
+        let err = copy_into(&[source.join("new.txt"), tmp.path().join("other/new.txt")], &dest).await.unwrap_err();
+        assert_eq!(err.code, WsErrorCode::AlreadyExists);
+        assert!(!dest.join("new.txt").exists());
+    }
+
+    #[tokio::test]
+    async fn copy_into_rejects_missing_sources_bad_destinations_and_copying_a_folder_into_itself() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dest = tmp.path().join("dest");
+        fs::create_dir_all(&dest).unwrap();
+        write(&tmp.path().join("file.txt"), "x");
+        write(&tmp.path().join("tree/inner/leaf.txt"), "x");
+
+        let err = copy_into(&[tmp.path().join("nope")], &dest).await.unwrap_err();
+        assert_eq!(err.code, WsErrorCode::NotFound);
+        let err = copy_into(&[tmp.path().join("file.txt")], &tmp.path().join("missing")).await.unwrap_err();
+        assert_eq!(err.code, WsErrorCode::NotFound);
+        let err = copy_into(&[tmp.path().join("file.txt")], &tmp.path().join("file.txt")).await.unwrap_err();
+        assert_eq!(err.code, WsErrorCode::InvalidPath);
+
+        // Ke dalam dirinya sendiri atau turunannya akan berputar tanpa henti.
+        let err = copy_into(&[tmp.path().join("tree")], &tmp.path().join("tree")).await.unwrap_err();
+        assert_eq!(err.code, WsErrorCode::InvalidPath);
+        let err = copy_into(&[tmp.path().join("tree")], &tmp.path().join("tree/inner")).await.unwrap_err();
+        assert_eq!(err.code, WsErrorCode::InvalidPath);
+        assert!(!tmp.path().join("tree/inner/tree").exists());
+        // Menyalin ke induknya sendiri bukan masalah folder-ke-dirinya, melainkan nama yang sudah ada.
+        let err = copy_into(&[tmp.path().join("tree")], tmp.path()).await.unwrap_err();
+        assert_eq!(err.code, WsErrorCode::AlreadyExists);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn copy_into_follows_file_links_but_skips_folder_links_inside_a_folder() {
+        let tmp = tempfile::tempdir().unwrap();
+        let tree = tmp.path().join("tree");
+        write(&tree.join("real.txt"), "isi");
+        std::os::unix::fs::symlink(tree.join("real.txt"), tree.join("file-link")).unwrap();
+        // Tautan ke folder induknya akan membuat penyalinan berputar bila diikuti.
+        std::os::unix::fs::symlink(&tree, tree.join("loop")).unwrap();
+        std::os::unix::fs::symlink(tree.join("nowhere"), tree.join("broken")).unwrap();
+        let dest = tmp.path().join("dest");
+        fs::create_dir_all(&dest).unwrap();
+
+        copy_into(&[tree], &dest).await.unwrap();
+        assert_eq!(fs::read(dest.join("tree/file-link")).unwrap(), b"isi");
+        assert!(!fs::symlink_metadata(dest.join("tree/file-link")).unwrap().file_type().is_symlink(), "disalin sebagai berkas biasa");
+        assert!(!dest.join("tree/loop").exists() && !dest.join("tree/broken").exists());
     }
 
     #[tokio::test]

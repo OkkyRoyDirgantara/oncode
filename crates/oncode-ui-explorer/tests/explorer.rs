@@ -4,7 +4,11 @@
 use std::path::Path;
 
 use gpui_kit::test::{TestEventExt as _, TestQueryExt as _, TestWindowExt as _};
-use gpui_kit::{App, AppContext as _, Entity, Focusable, IntoElement, MouseButton, ParentElement as _, Render, Styled as _, TestAppContext, Window};
+use gpui_kit::component::WindowExt as _;
+use gpui_kit::{
+    point, App, AppContext as _, Entity, ExternalPaths, FileDropEvent, Focusable, InputEvent as _, IntoElement, MouseButton, ParentElement as _, Render, Styled as _, TestAppContext,
+    Window,
+};
 use oncode_ui::editor::{active_file, buffers, open_file, OpenFile};
 use oncode_ui::testing::{git, TestApp, TestWindow};
 use oncode_ui::{Command, OpenOptions, SidebarView, TabContent, TabData, TabKind, ViewTab, Workbench};
@@ -699,4 +703,314 @@ async fn a_trusted_repository_starts_on_source_control_by_default(cx: &mut TestA
     // Explorer tetap bisa dipanggil dan dipakai lewat command.
     f.focus_tree(cx);
     assert_eq!(cx.update(|cx| f.workbench.read(cx).active_sidebar().map(|id| id.to_string())), Some("explorer".to_string()));
+}
+
+// ----- Seret dan jatuhkan -----
+
+impl Fixture {
+    /// Menyeret dari tengah elemen `from` ke titik relatif (`fx`, `fy` dalam 0..1) di elemen `to`, lalu melepas.
+    fn drag(&self, cx: &mut TestAppContext, from: &str, to: &str, fx: f32, fy: f32) {
+        let (from, to) = (from.to_string(), to.to_string());
+        self.window.update(cx, |window, cx| {
+            window.render_frame(cx);
+            let start = window.find(from).bounds().center();
+            let area = window.find(to).bounds();
+            window.drag(start, point(area.origin.x + area.size.width * fx, area.origin.y + area.size.height * fy), cx);
+        });
+        cx.run_until_parked();
+    }
+
+    /// Menjatuhkan berkas dari OS ke titik relatif di elemen `to`, dengan urutan peristiwa platform.
+    fn drop_from_os(&self, cx: &mut TestAppContext, paths: &[&Path], to: &str, fx: f32, fy: f32) {
+        let to = to.to_string();
+        self.window.update(cx, |window, cx| {
+            window.render_frame(cx);
+            let area = window.find(to).bounds();
+            let position = point(area.origin.x + area.size.width * fx, area.origin.y + area.size.height * fy);
+            let external = ExternalPaths(paths.iter().map(|path| path.to_path_buf()).collect());
+            window.dispatch_event(FileDropEvent::Entered { position, paths: external }.to_platform_input(), cx);
+            window.render_frame(cx);
+            window.dispatch_event(FileDropEvent::Pending { position }.to_platform_input(), cx);
+            window.render_frame(cx);
+            window.dispatch_event(FileDropEvent::Submit { position }.to_platform_input(), cx);
+            window.render_frame(cx);
+            window.dispatch_event(FileDropEvent::Ended.to_platform_input(), cx);
+        });
+        cx.run_until_parked();
+    }
+
+    /// Membuka berkas di tab tetap dan menunggu sampai berkas itu terpilih di pohon.
+    async fn open_and_reveal(&self, cx: &mut TestAppContext, path: &Path) {
+        let text = text(path);
+        self.window.update(cx, |window, cx| self.workbench.update(cx, |workbench, cx| open_file(workbench, OpenFile::new(&text), window, cx)));
+        self.wait_for_active_file(cx, path).await;
+        let explorer = self.explorer.clone();
+        self.window.wait_until(cx, "berkas terpilih di pohon", move |_, cx| explorer.read(cx).selected() == Some(text.as_str())).await;
+    }
+
+    /// Jumlah pemberitahuan (toast) yang sedang tampil.
+    fn notifications(&self, cx: &mut TestAppContext) -> usize {
+        self.window.update(cx, |window, cx| window.notifications(cx).len())
+    }
+
+    /// Menunggu sampai tepat `count` pemberitahuan tampil (galat dari pekerjaan backend datang belakangan).
+    async fn wait_for_notifications(&self, cx: &mut TestAppContext, count: usize) {
+        for _ in 0..500 {
+            cx.run_until_parked();
+            if self.notifications(cx) == count {
+                return;
+            }
+            cx.executor().timer(std::time::Duration::from_millis(20)).await;
+        }
+        panic!("menunggu {count} pemberitahuan, yang tampil {}", self.notifications(cx));
+    }
+
+    fn is_expanded(&self, cx: &mut TestAppContext, path: &Path) -> bool {
+        let path = text(path);
+        cx.update(|cx| self.explorer.read(cx).is_expanded(&path))
+    }
+
+    /// Folder yang sedang disorot sebagai tujuan jatuh.
+    fn drop_target(&self, cx: &mut TestAppContext) -> Option<String> {
+        cx.update(|cx| self.explorer.read(cx).drop_target().map(String::from))
+    }
+
+    /// Baris pohon saat ini, dalam bentuk `shape`.
+    fn rows(&self, root: &Path, cx: &mut TestAppContext) -> Vec<String> {
+        let explorer = self.explorer.clone();
+        cx.update(|cx| shape(&explorer, root, cx))
+    }
+
+    /// Judul tab per grup editor, menurut urutan grup.
+    fn editor_layout(&self, cx: &mut TestAppContext) -> Vec<Vec<String>> {
+        cx.update(|cx| self.workbench.read(cx).model().groups.iter().map(|group| group.tabs.iter().map(|tab| tab.title.clone()).collect()).collect())
+    }
+}
+
+#[gpui_kit::test]
+async fn dragging_a_file_onto_a_folder_moves_it_and_its_open_tab_follows(cx: &mut TestAppContext) {
+    let app = setup(cx);
+    let project = app.project(&[("a.txt", "satu\n"), ("docs/readme.md", "# r\n"), ("src/main.rs", "fn main() {}\n")]);
+    let f = Fixture::open(&app, &project, cx).await;
+
+    // Isi yang belum disimpan ikut pindah ke path baru, seperti pada ganti nama.
+    f.double_click(cx, "explorer-row-a.txt");
+    f.wait_for_active_file(cx, &project.join("a.txt")).await;
+    f.input(cx, "dua ");
+    assert!(cx.update(|cx| f.workbench.read(cx).has_dirty_tabs(cx)));
+
+    f.drag(cx, "explorer-row-a.txt", "explorer-row-docs", 0.5, 0.5);
+    let moved = project.join("docs/a.txt");
+    f.wait_for_rows(cx, "berkas pindah dan folder tujuan terbuka", &project, |rows| rows == ["docs/", "  docs/a.txt", "  docs/readme.md", "src/"]).await;
+    assert!(moved.is_file() && !project.join("a.txt").exists(), "berkas dipindah di disk");
+    assert_eq!(f.selected(cx), Some(text(&moved)), "berkas yang dipindah terpilih");
+    assert_eq!(f.tab_ids(cx), [format!("file:{}", text(&moved))]);
+
+    f.wait_for_active_file(cx, &moved).await;
+    let (_, buffer, state) = cx.update(|cx| active_file(f.workbench.read(cx), cx).unwrap());
+    assert_eq!(cx.update(|cx| state.read(cx).value().to_string()), "dua satu\n");
+    assert!(cx.update(|cx| buffer.read(cx).is_dirty()));
+    assert_eq!(std::fs::read_to_string(&moved).unwrap(), "satu\n", "yang di disk belum berubah");
+    assert_eq!(f.drop_target(cx), None, "sorotan hilang setelah dilepas");
+}
+
+#[gpui_kit::test]
+async fn dropping_on_a_file_uses_its_folder_and_on_the_background_uses_the_project_root(cx: &mut TestAppContext) {
+    let app = setup(cx);
+    let project = app.project(&[("src/a.ts", "a\n"), ("src/b.ts", "b\n"), ("lib/c.ts", "c\n"), ("top.txt", "t\n")]);
+    let f = Fixture::open(&app, &project, cx).await;
+    f.click(cx, "explorer-row-src");
+    f.wait_for_rows(cx, "src terbuka", &project, |rows| rows.contains(&"  src/a.ts".to_string())).await;
+    f.click(cx, "explorer-row-lib");
+    f.wait_for_rows(cx, "lib terbuka", &project, |rows| rows == ["lib/", "  lib/c.ts", "src/", "  src/a.ts", "  src/b.ts", "top.txt"]).await;
+
+    // Di atas berkas: masuk ke folder tempat berkas itu berada.
+    f.drag(cx, "explorer-row-src/a.ts", "explorer-row-lib/c.ts", 0.5, 0.5);
+    f.wait_for_rows(cx, "a.ts pindah ke lib", &project, |rows| rows == ["lib/", "  lib/a.ts", "  lib/c.ts", "src/", "  src/b.ts", "top.txt"]).await;
+    assert!(project.join("lib/a.ts").is_file() && !project.join("src/a.ts").exists());
+
+    // Di latar kosong di bawah baris terakhir: akar proyek.
+    f.drag(cx, "explorer-row-lib/a.ts", "explorer-tree", 0.5, 0.95);
+    f.wait_for_rows(cx, "a.ts pindah ke akar", &project, |rows| rows == ["lib/", "  lib/c.ts", "src/", "  src/b.ts", "a.ts", "top.txt"]).await;
+    assert!(project.join("a.ts").is_file() && !project.join("lib/a.ts").exists());
+
+    // Berkas di akar dijatuhkan di atas berkas lain di akar: tempatnya tidak berubah, jadi tidak berbuat apa-apa.
+    f.drag(cx, "explorer-row-top.txt", "explorer-row-a.ts", 0.5, 0.5);
+    assert!(project.join("top.txt").is_file() && project.join("a.ts").is_file());
+}
+
+#[gpui_kit::test]
+async fn a_folder_moves_with_its_contents_and_the_tabs_of_files_inside_it(cx: &mut TestAppContext) {
+    let app = setup(cx);
+    let project = app.project(&[("src/deep/a.ts", "a\n"), ("src/b.ts", "b\n"), ("dest/keep.txt", "k\n")]);
+    let f = Fixture::open(&app, &project, cx).await;
+    f.open_and_reveal(cx, &project.join("src/deep/a.ts")).await;
+    f.wait_for_rows(cx, "pohon terbuka", &project, |rows| rows == ["dest/", "src/", "  src/deep/", "    src/deep/a.ts", "  src/b.ts"]).await;
+
+    f.drag(cx, "explorer-row-src", "explorer-row-dest", 0.5, 0.5);
+    f.wait_for_rows(cx, "folder pindah dengan isinya", &project, |rows| {
+        rows == ["dest/", "  dest/src/", "    dest/src/deep/", "      dest/src/deep/a.ts", "    dest/src/b.ts", "  dest/keep.txt"]
+    })
+    .await;
+    assert!(project.join("dest/src/deep/a.ts").is_file() && !project.join("src").exists());
+    assert_eq!(f.selected(cx), Some(text(&project.join("dest/src"))));
+    assert_eq!(f.tab_ids(cx), [format!("file:{}", text(&project.join("dest/src/deep/a.ts")))], "tab berkas di dalam folder ditulis ulang");
+    // Folder yang sudah terbuka tetap terbuka di tempat barunya.
+    assert!(f.is_expanded(cx, &project.join("dest/src/deep")));
+}
+
+#[gpui_kit::test]
+async fn drops_that_would_change_nothing_or_overwrite_something_are_ignored(cx: &mut TestAppContext) {
+    let app = setup(cx);
+    let project = app.project(&[("src/a.ts", "di src\n"), ("src/inner/b.ts", "b\n"), ("other/a.ts", "di other\n")]);
+    let f = Fixture::open(&app, &project, cx).await;
+    f.click(cx, "explorer-row-src");
+    f.wait_for_rows(cx, "src terbuka", &project, |rows| rows.contains(&"  src/a.ts".to_string())).await;
+    f.click(cx, "explorer-row-src/inner");
+    let initial = ["other/", "src/", "  src/inner/", "    src/inner/b.ts", "  src/a.ts"];
+    f.wait_for_rows(cx, "inner terbuka", &project, |rows| rows == initial).await;
+    let assert_unchanged = |cx: &mut TestAppContext| {
+        assert_eq!(f.rows(&project, cx), initial);
+        assert_eq!(std::fs::read_to_string(project.join("src/a.ts")).unwrap(), "di src\n");
+        assert_eq!(std::fs::read_to_string(project.join("other/a.ts")).unwrap(), "di other\n");
+        assert!(project.join("src/inner/b.ts").is_file());
+    };
+
+    // Ke dirinya sendiri, ke isinya, dan ke folder tempatnya sekarang berada. Menyeret ke baris yang sama
+    // harus bergeser beberapa piksel (fy 0.9), kalau tidak itu hanya klik yang melipat folder.
+    f.drag(cx, "explorer-row-src", "explorer-row-src", 0.5, 0.9);
+    f.drag(cx, "explorer-row-src", "explorer-row-src/inner", 0.5, 0.5);
+    f.drag(cx, "explorer-row-src", "explorer-row-src/inner/b.ts", 0.5, 0.5);
+    f.drag(cx, "explorer-row-src/a.ts", "explorer-row-src", 0.5, 0.5);
+    f.drag(cx, "explorer-row-src/a.ts", "explorer-row-src/a.ts", 0.5, 0.9);
+    assert_unchanged(cx);
+    assert_eq!(f.notifications(cx), 0, "tidak ada yang dicoba, jadi tidak ada yang gagal");
+
+    // Nama yang sudah ada di tujuan: ditolak dengan pesan, tidak menimpa.
+    f.drag(cx, "explorer-row-src/a.ts", "explorer-row-other", 0.5, 0.5);
+    f.wait_for_notifications(cx, 1).await;
+    assert!(!project.join("other/src").exists());
+    assert_unchanged(cx);
+}
+
+#[gpui_kit::test]
+async fn hovering_while_dragging_highlights_the_destination_and_opens_a_collapsed_folder(cx: &mut TestAppContext) {
+    let app = setup(cx);
+    let project = app.project(&[("a.txt", "a\n"), ("docs/readme.md", "# r\n"), ("docs/guide/intro.md", "i\n")]);
+    let f = Fixture::open(&app, &project, cx).await;
+    assert_eq!(f.rows(&project, cx), ["docs/", "a.txt"]);
+
+    let center = |cx: &mut TestAppContext, id: &str| {
+        let id = id.to_string();
+        f.window.update(cx, |window, cx| {
+            window.render_frame(cx);
+            window.find(id).bounds().center()
+        })
+    };
+    let (a_txt, docs) = (center(cx, "explorer-row-a.txt"), center(cx, "explorer-row-docs"));
+    f.window.update(cx, |window, cx| {
+        window.pointer_move(a_txt, None, cx);
+        window.pointer_down(a_txt, MouseButton::Left, cx);
+        window.pointer_move(point(a_txt.x + gpui_kit::px(8.), a_txt.y), Some(MouseButton::Left), cx);
+        window.pointer_move(docs, Some(MouseButton::Left), cx);
+    });
+    cx.run_until_parked();
+    assert_eq!(f.drop_target(cx), Some(text(&project.join("docs"))), "folder di bawah penunjuk disorot");
+    assert!(!f.is_expanded(cx, &project.join("docs")));
+
+    // Menetap sebentar di atas folder tertutup membukanya, tanpa melepas.
+    let (explorer, docs_path) = (f.explorer.clone(), text(&project.join("docs")));
+    f.window.wait_until(cx, "folder terbuka sendiri", move |_, cx| explorer.read(cx).is_expanded(&docs_path)).await;
+    f.wait_for_rows(cx, "isi folder tampil", &project, |rows| rows == ["docs/", "  docs/guide/", "  docs/readme.md", "a.txt"]).await;
+
+    // Folder asal berkas itu sendiri bukan tujuan yang berarti: tidak disorot.
+    let a_txt = center(cx, "explorer-row-a.txt");
+    f.window.update(cx, |window, cx| window.pointer_move(a_txt, Some(MouseButton::Left), cx));
+    cx.run_until_parked();
+    assert_eq!(f.drop_target(cx), None);
+
+    // Di atas berkas di dalam folder: yang disorot folder tempat berkas itu berada.
+    let readme = center(cx, "explorer-row-docs/readme.md");
+    f.window.update(cx, |window, cx| window.pointer_move(readme, Some(MouseButton::Left), cx));
+    cx.run_until_parked();
+    assert_eq!(f.drop_target(cx), Some(text(&project.join("docs"))));
+
+    // Dilepas di luar pohon (di tombol bilah alat): tidak ada yang berubah, dan sorotan hilang.
+    let toolbar = center(cx, "explorer-new-file");
+    f.window.update(cx, |window, cx| {
+        window.pointer_move(toolbar, Some(MouseButton::Left), cx);
+        window.pointer_up(toolbar, MouseButton::Left, cx);
+    });
+    cx.run_until_parked();
+    assert_eq!(f.drop_target(cx), None);
+    assert!(project.join("a.txt").is_file() && !project.join("docs/a.txt").exists());
+}
+
+#[gpui_kit::test]
+async fn dragging_a_file_to_the_editor_opens_it_and_edges_split_the_editor(cx: &mut TestAppContext) {
+    let app = setup(cx);
+    let project = app.project(&[("a.txt", "a\n"), ("b.txt", "b\n"), ("src/c.txt", "c\n")]);
+    let f = Fixture::open(&app, &project, cx).await;
+
+    // Area editor kosong: berkas dari Explorer dibuka sebagai tab tetap.
+    f.drag(cx, "explorer-row-a.txt", "editor-empty", 0.5, 0.5);
+    assert_eq!(f.editor_layout(cx), [["a.txt"]]);
+    assert!(cx.update(|cx| f.workbench.read(cx).model().all_tabs().all(|tab| !tab.preview)), "bukan tab pratinjau");
+
+    // Tepi kanan isi grup: grup baru di kanan.
+    f.drag(cx, "explorer-row-b.txt", "group-content-1", 0.95, 0.5);
+    assert_eq!(f.editor_layout(cx), [vec!["a.txt"], vec!["b.txt"]]);
+    f.wait_for_active_file(cx, &project.join("b.txt")).await;
+
+    // Folder tidak bisa dijatuhkan ke editor.
+    f.drag(cx, "explorer-row-src", "group-content-1", 0.5, 0.5);
+    assert_eq!(f.editor_layout(cx), [vec!["a.txt"], vec!["b.txt"]]);
+}
+
+#[gpui_kit::test]
+async fn files_dropped_from_the_os_are_copied_into_the_folder_under_the_pointer(cx: &mut TestAppContext) {
+    let app = setup(cx);
+    let project = app.project(&[("a.txt", "a\n"), ("docs/readme.md", "# r\n")]);
+    let outside = app.project(&[("logo.png", "png"), ("assets/site.css", "css")]);
+    let f = Fixture::open(&app, &project, cx).await;
+
+    // Di atas folder: disalin ke dalamnya, folder dibuka, dan hasilnya terpilih.
+    f.drop_from_os(cx, &[&outside.join("logo.png")], "explorer-row-docs", 0.5, 0.5);
+    f.wait_for_rows(cx, "salinan tampil di docs", &project, |rows| rows == ["docs/", "  docs/logo.png", "  docs/readme.md", "a.txt"]).await;
+    assert_eq!(std::fs::read(project.join("docs/logo.png")).unwrap(), b"png");
+    assert_eq!(f.selected(cx), Some(text(&project.join("docs/logo.png"))));
+    assert!(outside.join("logo.png").is_file(), "sumber tidak disentuh");
+
+    // Folder dari OS, dijatuhkan di atas berkas di akar: disalin ke akar beserta isinya.
+    f.drop_from_os(cx, &[&outside.join("assets")], "explorer-row-a.txt", 0.5, 0.5);
+    f.wait_for_rows(cx, "folder tersalin di akar", &project, |rows| rows.contains(&"assets/".to_string())).await;
+    assert_eq!(std::fs::read(project.join("assets/site.css")).unwrap(), b"css");
+
+    // Di latar kosong: akar proyek.
+    f.drop_from_os(cx, &[&outside.join("logo.png")], "explorer-tree", 0.5, 0.95);
+    f.wait_for_rows(cx, "salinan di akar tampil", &project, |rows| rows.contains(&"logo.png".to_string())).await;
+    assert_eq!(std::fs::read(project.join("logo.png")).unwrap(), b"png");
+
+    // Nama yang sudah ada: ditolak dengan pesan, tidak menimpa.
+    std::fs::write(project.join("docs/logo.png"), "diubah").unwrap();
+    f.drop_from_os(cx, &[&outside.join("logo.png")], "explorer-row-docs", 0.5, 0.5);
+    f.wait_for_notifications(cx, 1).await;
+    assert_eq!(std::fs::read(project.join("docs/logo.png")).unwrap(), b"diubah");
+}
+
+#[gpui_kit::test]
+async fn files_can_be_dropped_into_an_empty_project(cx: &mut TestAppContext) {
+    let app = setup(cx);
+    let project = app.project(&[]);
+    let outside = app.project(&[("hello.txt", "halo\n")]);
+    let window = app.open(Some(&project), cx).await;
+    let f = Fixture::current(window, cx);
+    let explorer = f.explorer.clone();
+    f.window.wait_until(cx, "pohon kosong termuat", move |_, cx| !explorer.read(cx).is_loading()).await;
+    assert!(cx.update(|cx| f.explorer.read(cx).rows().iter().all(|row| row.entry().is_none())), "hanya keterangan 'kosong', tanpa entri");
+
+    // Daftar tidak digambar untuk folder kosong, tetapi pohon tetap menerima drop sebagai akar.
+    f.drop_from_os(cx, &[&outside.join("hello.txt")], "explorer-tree", 0.5, 0.5);
+    f.wait_for_rows(cx, "salinan tampil", &project, |rows| rows == ["hello.txt"]).await;
+    assert_eq!(std::fs::read_to_string(project.join("hello.txt")).unwrap(), "halo\n");
 }

@@ -23,7 +23,7 @@ Rancangan lengkap ada di [docs/RANCANGAN.md](docs/RANCANGAN.md); panduan pengemb
 
 **Editor dan workspace**
 
-- Explorer dengan penanda status Git, tab dan split editor (tab bisa diseret untuk mengubah urutan, pindah grup, atau dijatuhkan di tepi grup untuk membelah ke kiri/kanan/atas/bawah), quick open (`Ctrl+P`), command palette (`Ctrl+Shift+P`), menu File/Edit/View/Go/Git/Terminal/Help di bilah judul
+- Explorer dengan penanda status Git, tab dan split editor (tab bisa diseret untuk mengubah urutan, pindah grup, atau dijatuhkan di tepi grup untuk membelah ke kiri/kanan/atas/bawah), seret-lepas di Explorer (seret berkas atau folder ke folder lain untuk memindahkannya, ke latar kosong untuk memindahkannya ke akar proyek, atau ke area editor untuk membuka berkas sebagai tab atau membelah grup; berkas dari file manager OS yang dijatuhkan ke Explorer disalin ke folder di bawah penunjuk, dan yang dijatuhkan ke area editor dibuka), quick open (`Ctrl+P`), command palette (`Ctrl+Shift+P`), menu File/Edit/View/Go/Git/Terminal/Help di bilah judul
 - Berkas baru tanpa judul (`Ctrl+N`, disimpan lewat Save As), pindah baris (`Ctrl+↑/↓` atau `Alt+↑/↓`)
 - Highlight sintaks (tree-sitter) termasuk Kotlin, Dart/Flutter, C#, PHP, Lua, Swift, GraphQL; cari/ganti, multi-kursor, lipat kode
 - Pencarian dan penggantian teks di seluruh proyek (menghormati `.gitignore`)

@@ -14,8 +14,8 @@ pub mod watcher;
 
 pub use error::{Result, WsError, WsErrorCode};
 pub use fs::{
-    create_dir, create_file, is_inside, open_file, read_dir, rename, save_file, stat, trash, DirEntry, Eol, FileStat,
-    OpenedFile, TextFile,
+    copy_into, create_dir, create_file, is_inside, open_file, read_dir, rename, save_file, stat, trash, DirEntry, Eol,
+    FileStat, OpenedFile, TextFile,
 };
 pub use index::{FileIndex, QuickOpenItem};
 pub use search::{replace_in_files, search, FileMatches, LineMatch, ReplaceSummary, SearchQuery, SearchSummary};

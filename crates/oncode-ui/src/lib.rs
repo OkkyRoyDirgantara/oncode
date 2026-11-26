@@ -26,7 +26,7 @@ pub use model::{OpenOptions, Orientation, SplitSide, TabData};
 pub use repos::{repos, FileMark, Repos, ReposEvent};
 pub use shell::{file_tab, Shell};
 pub use workbench::{
-    register_feature, register_tab_kind, DraggedTab, EditorAction, Env, PanelView, SidebarView, StatusAlign, StatusItem, TabContent, TabDragPreview, TabKind, ViewTab,
+    register_feature, register_tab_kind, DraggedEntry, DraggedTab, EditorAction, Env, PanelView, SidebarView, StatusAlign, StatusItem, TabContent, TabDragPreview, TabKind, ViewTab,
     Workbench, WorkbenchEvent,
 };
 
