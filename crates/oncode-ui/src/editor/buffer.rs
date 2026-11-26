@@ -206,8 +206,35 @@ impl Buffer {
                     this.on_changed(window, cx);
                 }
             }),
+            // The buffer can outlive its views (a Markdown preview holds it): when the last `EditorState` goes away,
+            // its content moves back into the buffer, so a view opened later does not start empty.
+            cx.observe_release(state, |this, released, _| this.keep_content_of(released.text())),
         ];
         self.states.push((state.downgrade(), subscriptions));
+    }
+
+    /// An `EditorState` was released. If it was the last one, the content it held becomes the buffer's own,
+    /// to be handed to the next view (see [`Buffer::attach`]).
+    fn keep_content_of(&mut self, text: &Rope) {
+        if self.is_ready() && self.primary().is_none() {
+            self.initial = Some(text.to_string());
+        }
+    }
+
+    /// "Don't Save" on the tab of the view with `view`: unless another view still shows this buffer, it goes back
+    /// to the last loaded or saved content. A buffer can outlive its views (a Markdown preview holds it), and would
+    /// otherwise keep the discarded changes for the next view that opens the file.
+    pub fn discard_changes(&mut self, view: &Entity<EditorState>, window: &mut Window, cx: &mut Context<Self>) {
+        let shared = self.states.iter().filter_map(|(state, _)| state.upgrade()).any(|state| state != *view);
+        if !self.is_ready() || shared {
+            return;
+        }
+        let saved = self.saved.to_string();
+        // `set_value` does not emit an event, so the dirty marker and the other observers are updated here.
+        view.update(cx, |state, cx| state.set_value(saved, window, cx));
+        self.dirty = false;
+        cx.emit(BufferEvent::Edited);
+        cx.notify();
     }
 
     /// Forwards edits from one state to the other states of this buffer.

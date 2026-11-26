@@ -47,6 +47,100 @@ async fn ctrl_shift_v_previews_beside_the_editor_and_follows_edits(cx: &mut Test
     window.wait_until(cx, "preview follows the edit", |_, cx| preview.read(cx).text() == "# New title\n").await;
 }
 
+const README: &str = "# Title\n\nInitial content.\n";
+
+/// Opens the preview beside the active README, then closes the README editor tab (answering the unsaved-changes dialog
+/// with "Don't Save" if there is one). The preview keeps the buffer alive while no editor shows it.
+async fn close_the_editor_but_keep_the_preview(window: &TestWindow, cx: &mut TestAppContext) -> gpui_kit::Entity<MarkdownPreview> {
+    let workbench = window.workbench(cx);
+    window.update(cx, |window, cx| {
+        window.render_frame(cx);
+        window.press("secondary-shift-v", cx);
+    });
+    cx.run_until_parked();
+    let preview = preview(window, cx).expect("preview tab is active");
+    window.wait_until(cx, "preview content", |_, cx| !preview.read(cx).text().is_empty()).await;
+
+    assert!(window.run_command(cx, "markdown.showSource"));
+    cx.run_until_parked();
+    assert!(window.run_command(cx, "workbench.closeTab"));
+    cx.run_until_parked();
+    window.update(cx, |window, cx| {
+        window.render_frame(cx);
+        if !window.find_all("choice-discard").is_empty() {
+            window.click("choice-discard", cx);
+        }
+    });
+    cx.run_until_parked();
+    window.wait_until(cx, "README editor closed", |_, cx| !workbench.read(cx).model().all_tabs().any(|tab| tab.title == "README.md")).await;
+    // As in the running app, frames are drawn after the tab is gone, which releases the closed editor's view.
+    for _ in 0..5 {
+        window.update(cx, |window, cx| window.render_frame(cx));
+        cx.run_until_parked();
+    }
+    // The window keeps the last focused input (the closed editor's state) alive until another input takes focus,
+    // e.g. when the user opens quick open or the command palette to open the file again.
+    assert!(window.run_command(cx, "workbench.commandPalette"));
+    cx.run_until_parked();
+    window.update(cx, |window, cx| {
+        window.render_frame(cx);
+        window.press("escape", cx);
+    });
+    cx.run_until_parked();
+    preview
+}
+
+/// Opens README.md again and returns its buffer and editor state once loaded.
+async fn reopen_readme(window: &TestWindow, project: &std::path::Path, cx: &mut TestAppContext) -> (gpui_kit::Entity<oncode_ui::editor::Buffer>, gpui_kit::Entity<gpui_kit::component::input::EditorState>) {
+    let workbench = window.workbench(cx);
+    let path = project.join("README.md").to_string_lossy().into_owned();
+    window.update(cx, |window, cx| workbench.update(cx, |workbench, cx| open_file(workbench, OpenFile::new(&path), window, cx)));
+    window.wait_until(cx, "README is open again", |_, cx| active_file(workbench.read(cx), cx).is_some_and(|(_, buffer, _)| buffer.read(cx).is_ready())).await;
+    let (_, buffer, editor) = cx.update(|cx| active_file(workbench.read(cx), cx).unwrap());
+    (buffer, editor)
+}
+
+/// The preview holds the buffer, so it outlives the editor tab. Opening the file again must show the file,
+/// not an empty editor (which a later save would write to disk).
+#[gpui_kit::test]
+async fn reopening_a_file_the_preview_keeps_alive_shows_its_content(cx: &mut TestAppContext) {
+    let app = TestApp::new(cx);
+    cx.update(oncode_ui_markdown::init);
+    let (window, project) = open_readme(&app, cx).await;
+    let _preview = close_the_editor_but_keep_the_preview(&window, cx).await;
+
+    let (buffer, editor) = reopen_readme(&window, &project, cx).await;
+    cx.update(|cx| {
+        assert_eq!(editor.read(cx).text().to_string(), README, "the editor shows the file, not an empty buffer");
+        assert!(!buffer.read(cx).is_dirty());
+    });
+    assert_eq!(std::fs::read_to_string(project.join("README.md")).unwrap(), README);
+}
+
+/// Closing with "Don't Save" discards the changes even though the preview keeps the buffer alive: reopening the
+/// file shows the saved content, and the buffer is not dirty (a dirty empty buffer would be auto-saved over the file).
+#[gpui_kit::test]
+async fn dont_save_discards_changes_even_when_the_preview_keeps_the_buffer(cx: &mut TestAppContext) {
+    let app = TestApp::new(cx);
+    cx.update(oncode_ui_markdown::init);
+    let (window, project) = open_readme(&app, cx).await;
+    let workbench = window.workbench(cx);
+    let (_, buffer, editor) = cx.update(|cx| active_file(workbench.read(cx), cx).unwrap());
+    window.update(cx, |window, cx| editor.update(cx, |state, cx| state.set_value("# Edited, not saved\n", window, cx)));
+    cx.update(|cx| editor.update(cx, |_, cx| cx.emit(gpui_kit::component::input::InputEvent::Change)));
+    window.wait_until(cx, "the buffer is dirty", |_, cx| buffer.read(cx).is_dirty()).await;
+
+    let preview = close_the_editor_but_keep_the_preview(&window, cx).await;
+    window.wait_until(cx, "preview follows the discard", |_, cx| preview.read(cx).text() == README).await;
+
+    let (buffer, editor) = reopen_readme(&window, &project, cx).await;
+    cx.update(|cx| {
+        assert_eq!(editor.read(cx).text().to_string(), README, "the discarded changes are gone");
+        assert!(!buffer.read(cx).is_dirty());
+    });
+    assert_eq!(std::fs::read_to_string(project.join("README.md")).unwrap(), README, "nothing was written to disk");
+}
+
 #[gpui_kit::test]
 async fn preview_is_only_offered_for_markdown_files_with_the_extension_on(cx: &mut TestAppContext) {
     let app = TestApp::new(cx);

@@ -373,12 +373,17 @@ impl TabContent for FileTab {
             cx,
         );
         let buffer = self.buffer.clone();
+        let state = self.view.read(cx).state.clone();
         window.spawn(cx, async move |cx| match answer.await {
             Some("save") => match buffer.update_in(cx, |buffer, window, cx| buffer.save(window, cx)) {
                 Ok(task) => task.await,
                 Err(_) => false,
             },
-            Some("discard") => true,
+            Some("discard") => {
+                // The buffer may outlive this tab (e.g. a Markdown preview holds it): it must not keep what was discarded.
+                let _ = buffer.update_in(cx, |buffer, window, cx| buffer.discard_changes(&state, window, cx));
+                true
+            }
             _ => false,
         })
     }
