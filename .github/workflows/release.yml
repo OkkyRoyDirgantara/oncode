@@ -23,10 +23,11 @@ jobs:
             formats: nsis
           # Apple Silicon and Intel are built separately on their own runners. `macos-13` has been
           # retired by GitHub; `macos-15-intel` is the last Intel runner (until August 2027).
+          # `app` keeps OnCode.app for the signature check; with `dmg` alone cargo-packager deletes it.
           - os: macos-latest
-            formats: dmg
+            formats: app,dmg
           - os: macos-15-intel
-            formats: dmg
+            formats: app,dmg
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
