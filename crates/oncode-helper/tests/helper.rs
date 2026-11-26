@@ -124,9 +124,18 @@ fn unauthorized_server() -> (u16, Arc<Mutex<Vec<String>>>) {
     (port, seen)
 }
 
+/// The start of a recorded credential request for the test server on `port`: the real host,
+/// whatever user name git passes along.
+fn credential_for(port: u16) -> String {
+    format!("credential:http 127.0.0.1:{port} ")
+}
+
 /// The `.gitmodules` attack from issue #2: the user name `github.com'x` makes the askpass prompt
 /// read `Password for 'http://github.com'x@127.0.0.1:…': `. The credential helper gets the real
-/// host as its own field, and its answer goes to that host with the URL's user name.
+/// host as its own field, and its answer goes to that host.
+///
+/// Git 2.40.0 loses the URL's user name after the first 401 and asks the helper without one, so
+/// the reply carries its own; newer versions pass it on, and the reply keeps it.
 #[tokio::test(flavor = "multi_thread")]
 async fn credential_helper_gets_the_real_host_and_its_answer_reaches_the_server() {
     isolate();
@@ -142,11 +151,16 @@ async fn credential_helper_gets_the_real_host_and_its_answer_reaches_the_server(
 
     let url = format!("http://github.com'x@127.0.0.1:{port}/owner/repo.git");
     assert!(g.run(dir.path(), Cmd::new(["ls-remote", "--end-of-options", &url])).await.is_err(), "the server rejects every login");
-    assert_eq!(seen.lock().unwrap().first().cloned(), Some(format!("credential:http 127.0.0.1:{port} github.com'x")));
+    let first = seen.lock().unwrap().first().cloned().unwrap_or_default();
+    let user = match first.strip_prefix(&credential_for(port)) {
+        Some("github.com'x") => "github.com'x",
+        Some("-") => "unused",
+        _ => panic!("the helper gets the real host and the URL's user name, if any: {first:?}"),
+    };
     // curl first tries the URL's user name with an empty password, then git asks for credentials.
-    let expected = format!("Basic {}", base64(b"github.com'x:SECRET"));
+    let expected = format!("Basic {}", base64(format!("{user}:SECRET").as_bytes()));
     let received = authorization.lock().unwrap().clone();
-    assert!(received.contains(&expected), "the URL's user name is kept, the password comes from the app: {received:?}");
+    assert!(received.contains(&expected), "the password from the app reaches the server as {user:?}: {received:?}");
 }
 
 /// Without a matching account, git moves on to askpass, which only the user answers.
@@ -161,10 +175,12 @@ async fn credential_helper_without_an_answer_falls_back_to_askpass() {
 
     let url = format!("http://github.com'x@127.0.0.1:{port}/owner/repo.git");
     assert!(g.run(dir.path(), Cmd::new(["ls-remote", "--end-of-options", &url])).await.is_err());
-    assert_eq!(
-        seen.lock().unwrap().as_slice(),
-        [format!("credential:http 127.0.0.1:{port} github.com'x"), format!("askpass:Password for 'http://github.com'x@127.0.0.1:{port}': ")]
-    );
+    let seen = seen.lock().unwrap().clone();
+    let [credential, askpass] = seen.as_slice() else { panic!("one credential request, then askpass: {seen:?}") };
+    assert!(credential.starts_with(&credential_for(port)), "the helper gets the real host: {credential:?}");
+    // The prompt text depends on the git version: newer ones write the user name's `'` as `%27`,
+    // and 2.40.0 has lost the user name and asks for one.
+    assert!(askpass.starts_with("askpass:") && askpass.contains(&format!("127.0.0.1:{port}")), "{askpass:?}");
     // Only curl's first try with the URL's user name and an empty password.
     let empty = format!("Basic {}", base64(b"github.com'x:"));
     let received = authorization.lock().unwrap().clone();
@@ -195,8 +211,8 @@ async fn credential_helper_reaches_submodule_clones() {
     let dest = dir.path().join("dest");
     let _ = g.clone_repo(parent.to_str().unwrap(), &dest, true, None, None).await;
     assert!(dest.join(".gitmodules").exists(), "the superproject itself was cloned");
-    let credential = format!("credential:http 127.0.0.1:{port} github.com'x");
-    assert!(seen.lock().unwrap().contains(&credential), "requests: {:?}", seen.lock().unwrap());
+    let requests = seen.lock().unwrap().clone();
+    assert!(requests.iter().any(|request| request.starts_with(&credential_for(port))), "requests: {requests:?}");
 }
 
 #[tokio::test(flavor = "multi_thread")]
