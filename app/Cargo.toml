@@ -84,3 +84,12 @@ Section un.ShellCommand
   Pop $0
 SectionEnd
 '''
+
+[package.metadata.packager.macos]
+# Ad-hoc signature, since there is no Apple Developer ID yet. Without any signature, macOS calls a
+# downloaded app "damaged" and offers no way to open it; with an ad-hoc one it says it could not
+# verify the app, and System Settings → Privacy & Security offers "Open Anyway". cargo-packager signs
+# with the hardened runtime and then notarizes only if APPLE_ID, APPLE_PASSWORD and APPLE_TEAM_ID are
+# set (empty values count as set), which ad-hoc builds must not do. A Developer ID's name replaces
+# "-" here: cargo-packager does not read APPLE_SIGNING_IDENTITY.
+signing-identity = "-"

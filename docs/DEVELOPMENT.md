@@ -45,7 +45,7 @@ Libraries that exist only in the sysroot (e.g. `libxkbcommon-x11.so.0`) must be 
 | NSIS installer from Linux | Requires `makensis` (package `nsis`). `cargo packager --release -f nsis --target x86_64-pc-windows-gnu` in `app/`, with `CARGO_TARGET_DIR` pointing at the Windows build folder: the tool ignores `--binaries-dir`. The Windows binary must be built with `--config "$ONCODE_WIN_PATCH"` (see `.dev-sysroot/env-win.sh`) |
 | DMG from Linux (unofficial) | See the comments in `.dev-sysroot/env-mac.sh`: zig + macOS SDK, a copy of `gpui-pre-apple` with shaders at app start, linking with `rust-lld`, then `.dev-sysroot/mac/make-dmg.sh`. Official releases are still built on macOS (`release.yml`) |
 | `oncode` command | The NSIS installer runs `oncode-helper install-shell-command` in `preinstall-section` (`app/Cargo.toml`) before the files are copied, and `uninstall-shell-command` on uninstall. The `.deb` package ships `app/packaging/linux/oncode` as `/usr/bin/oncode`; that file must stay executable in git. Debug builds use their own single-process endpoint (`app/src/single_instance.rs`), so they do not collide with an installed OnCode |
-| Release | Push a `v*` tag; `.github/workflows/release.yml` builds deb/AppImage, NSIS, and DMG (Apple Silicon and Intel), then uploads them as a draft release |
+| Release | Push a `v*` tag; `.github/workflows/release.yml` builds deb/AppImage, NSIS, and DMG (Apple Silicon and Intel, signed ad-hoc), then uploads them as a draft release. To try the installers first: Actions → Release → **Run workflow**; they become artifacts of that run |
 
 `oncode-helper` must sit next to the `oncode-app` binary (in `target/debug/`); without it the credential dialog and interactive rebase are unavailable.
 

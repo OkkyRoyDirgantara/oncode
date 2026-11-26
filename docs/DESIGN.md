@@ -575,9 +575,9 @@ The local servers used by the v0.2 tests (git smart-HTTP with Basic auth, a priv
 |---|---|---|
 | Linux | AppImage, `.deb` | |
 | Windows | NSIS installer | No longer depends on WebView2 |
-| macOS | `.dmg` | Signed and notarized |
+| macOS | `.dmg` | Signed ad-hoc, not notarized: the first launch needs **Open Anyway** in System Settings → Privacy & Security |
 
-`oncode-helper` is packaged next to the main binary, as in v0.2. Automatic updates and code signing still require keys and certificates owned by the project owner.
+`oncode-helper` is packaged next to the main binary, as in v0.2. Automatic updates, a Developer ID signature with notarization on macOS, and code signing on Windows still require keys and certificates owned by the project owner.
 
 ---
 

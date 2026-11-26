@@ -1,11 +1,13 @@
-# Builds installers for three OSes from a release tag with cargo-packager and uploads them
-# as a draft release. macOS signing uses the APPLE_* secrets; without them the installer is still
-# built but not signed.
+# Builds installers for three OSes with cargo-packager. From a release tag they are uploaded as a
+# draft release; a manual run (Actions → Release → Run workflow) keeps them as workflow artifacts,
+# for trying an installer before tagging. The macOS app is signed ad-hoc and not notarized (see
+# `[package.metadata.packager.macos]` in app/Cargo.toml).
 name: Release
 
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
 
 jobs:
   build:
@@ -44,25 +46,39 @@ jobs:
         run: cargo install cargo-packager --locked
 
       # The OAuth client ids are read at compile time (option_env!), so they must be in the build environment.
+      # No APPLE_* variables: cargo-packager would try to notarize the ad-hoc signed app with them.
       - name: Build installer
         working-directory: app
         env:
           ONCODE_GITHUB_CLIENT_ID: ${{ vars.ONCODE_GITHUB_CLIENT_ID }}
           ONCODE_GITLAB_CLIENT_ID: ${{ vars.ONCODE_GITLAB_CLIENT_ID }}
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: cargo packager --release --formats ${{ matrix.formats }}
 
+      # An app without a valid signature is "damaged" to macOS once downloaded: stop here instead of shipping it.
+      - name: Check macOS signature
+        if: runner.os == 'macOS'
+        run: |
+          codesign --verify --deep --strict --verbose=2 target/packages/OnCode.app
+          codesign --display --verbose=2 target/packages/OnCode.app
+
       - uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
         with:
           tag_name: ${{ github.ref_name }}
           name: "OnCode ${{ github.ref_name }}"
           draft: true
           files: |
+            target/packages/*.deb
+            target/packages/*.AppImage
+            target/packages/*.exe
+            target/packages/*.dmg
+
+      - uses: actions/upload-artifact@v4
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        with:
+          name: installers-${{ matrix.os }}
+          if-no-files-found: error
+          path: |
             target/packages/*.deb
             target/packages/*.AppImage
             target/packages/*.exe

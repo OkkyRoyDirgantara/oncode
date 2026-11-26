@@ -42,6 +42,12 @@ The full design is in [docs/DESIGN.md](docs/DESIGN.md); the development guide is
 
 **Deliberately not included:** an extension marketplace, debugger, remote development, notebooks, settings sync, an AI assistant in the editor.
 
+## Installing
+
+Installers are on the [Releases](https://github.com/OkkyRoyDirgantara/oncode/releases) page: `.deb` and AppImage for Linux, an installer for Windows, and a `.dmg` for Apple Silicon and Intel Macs.
+
+The macOS app is not notarized by Apple yet, so the first time you open it macOS refuses because it cannot verify the app. Open **System Settings → Privacy & Security** and click **Open Anyway** next to the message about OnCode.
+
 ## Running
 
 Prerequisites: Rust (stable), Git 2.40+, a C compiler, and the GPUI system libraries (see [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md#prerequisites)). At runtime a GPU with Vulkan (Linux), DirectX 11 (Windows), or Metal (macOS) is required.
