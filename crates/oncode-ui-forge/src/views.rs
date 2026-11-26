@@ -541,7 +541,7 @@ pub fn clone_repository(core: Shared, window: &mut Window, cx: &mut App) {
             let _ = cx.update(|window, cx| overlay::toast_info(format!("Cloning {url}…"), window, cx));
             let (clone_core, parent_text) = (core.clone(), parent.to_string_lossy().into_owned());
             let operation = format!("clone-{}", core.next_id());
-            let result = core_call(cx, async move { git_api::git_clone(&clone_core, url, parent_text, name, true, operation, Arc::new(|_| {})).await }).await;
+            let result = core_call(cx, async move { git_api::git_clone(&clone_core, url, parent_text, name, operation, Arc::new(|_| {})).await }).await;
             let _ = cx.update(|window, cx| match result {
                 Ok(dest) => {
                     if let Some(shell) = Shell::for_window(window, cx) {

@@ -74,7 +74,7 @@ docs/           Design and development guide
 
 ## Security
 
-A folder opened for the first time runs in **restricted mode**: Git, language servers, and project settings are disabled until you trust the folder, because an unknown repository can run code through its Git or language server configuration. Account tokens are stored only in the operating system's keychain.
+A folder opened for the first time runs in **restricted mode**: Git, language servers, and project settings are disabled until you trust the folder, because an unknown repository can run code through its Git or language server configuration. This includes a repository you just cloned; its submodules are fetched only after you trust it (Update Submodules). Even in a trusted folder, `.oncode/settings.json` cannot choose which programs OnCode runs (language servers, shell, Git) or change the AI and account settings. Account tokens are stored only in the operating system's keychain.
 
 ## License
 

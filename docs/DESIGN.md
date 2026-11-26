@@ -481,7 +481,7 @@ The file formats are **unchanged**, so v0.2 users need no migration:
 | File | Contents |
 |---|---|
 | `settings.json` | Nested settings: `editor`, `files`, `workbench`, `git`, `terminal`, `lsp`, `forge` |
-| `.oncode/settings.json` | Project-level overrides; applies only in trusted folders |
+| `.oncode/settings.json` | Project-level overrides; applies only in trusted folders and cannot set `lsp.servers`, `terminal.shell`, `git.path`, `ai`, or `forge` |
 | `keybindings.json` | `{ "<command id>": "<shortcut>" }`; an empty value removes the shortcut |
 | `state.json` | Last project, trusted folders, accounts, per-project session |
 | OS keychain | Tokens; an in-memory fallback when the keychain is unavailable |
@@ -494,7 +494,8 @@ The `Settings` and `Store` modules and their tests are moved from `src-tauri` to
 
 **Still applies:**
 
-- **Restricted mode.** An untrusted folder gets only the explorer, editor, and search. Git, LSP, and project settings that define commands are disabled.
+- **Restricted mode.** An untrusted folder gets only the explorer, editor, and search. Git, LSP, and project settings are disabled. A freshly cloned repository is no exception: it opens untrusted, and its submodules are not cloned until the user trusts it and runs Update Submodules.
+- **Project settings never choose programs or credential targets.** `.oncode/settings.json` comes from the repository (and a pull request from a fork can change it), so it cannot set language server commands, the terminal shell, the git path, or the AI and forge settings, even in a trusted folder.
 - **Running processes.** Only `git`, the terminal shell, and the configured language servers; arguments are always arrays; ref names and paths are validated.
 - **Secrets.** Tokens live only in the keychain or memory; they never become arguments, enter logs, or are displayed.
 - **The `oncode-helper` socket** is restricted to the same user and protected by a one-time token.

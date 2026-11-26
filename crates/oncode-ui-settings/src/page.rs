@@ -33,7 +33,7 @@ use oncode_ui::{commands, core_bus, spawn_core, Env, Lucide, WorkbenchEvent};
 use serde_json::Value;
 
 use crate::model::{
-    apply_default, command_line, count_non_default, default_label, differs_from_default, field_by_id, field_matches, field_text, is_overridden, is_server_overridden, join_args,
+    apply_default, command_line, count_non_default, default_label, differs_from_default, field_by_id, field_matches, field_text, is_overridden, join_args,
     matches_query, parse_number, set_server_override, split_args, validate_server_command, Field, FieldKind, OverrideContext, SectionId, FIELDS, SECTIONS,
 };
 
@@ -760,7 +760,7 @@ impl SettingsPage {
             .into_any_element()
     }
 
-    fn render_server_row(&self, info: &LspServerInfo, overridden: bool, cx: &mut Context<Self>) -> AnyElement {
+    fn render_server_row(&self, info: &LspServerInfo, cx: &mut Context<Self>) -> AnyElement {
         let theme = cx.theme();
         let (muted, border, mono, success, danger) = (theme.muted_foreground, theme.border, theme.mono_font_family.clone(), theme.success, theme.danger);
         let language = info.language.clone();
@@ -823,14 +823,7 @@ impl SettingsPage {
             .text_sm()
             .border_b_1()
             .border_color(border.opacity(0.5))
-            .child(
-                v_flex()
-                    .w(px(110.))
-                    .flex_none()
-                    .gap_1()
-                    .child(SharedString::from(language.clone()))
-                    .when(overridden, |el| el.child(self.render_override_marker(format!("server-{language}-override").into(), cx))),
-            )
+            .child(v_flex().w(px(110.)).flex_none().gap_1().child(SharedString::from(language.clone())))
             .child(div().flex_1().min_w_0().font_family(mono).text_xs().child(SharedString::from(command_line(&info.command, &info.args))))
             .child(div().w(px(200.)).flex_none().child(status))
             .child(div().w(px(240.)).flex_none().child(editor))
@@ -838,7 +831,7 @@ impl SettingsPage {
             .into_any_element()
     }
 
-    fn render_servers(&self, visible: &[&LspServerInfo], context: OverrideContext, cx: &mut Context<Self>) -> AnyElement {
+    fn render_servers(&self, visible: &[&LspServerInfo], cx: &mut Context<Self>) -> AnyElement {
         let (muted, border) = (cx.theme().muted_foreground, cx.theme().border);
         let body: AnyElement = match &self.servers {
             None => div().py_2().text_sm().text_color(muted).child("Loading language servers…").into_any_element(),
@@ -858,7 +851,7 @@ impl SettingsPage {
                         .child(div().w(px(200.)).flex_none().child("Status"))
                         .child(div().w(px(240.)).flex_none().child("Your override")),
                 )
-                .children(visible.iter().map(|info| self.render_server_row(info, is_server_overridden(&info.language, context), cx)))
+                .children(visible.iter().map(|info| self.render_server_row(info, cx)))
                 .into_any_element(),
         };
         v_flex()
@@ -949,7 +942,7 @@ impl SettingsPage {
         let scope = if self.env.root.is_none() {
             ""
         } else if self.env.trusted {
-            " A project can override them in .oncode/settings.json."
+            " A project can override them in .oncode/settings.json, except the programs to run (language servers, shell, Git) and the AI and account settings."
         } else {
             " Project settings are ignored in restricted mode."
         };
@@ -1007,7 +1000,7 @@ impl Render for SettingsPage {
                 .map(|field| self.render_field(field, is_overridden(field, context), cx))
                 .collect();
             match section {
-                SectionId::Lsp if table_matches || !visible_servers.is_empty() => rows.push(self.render_servers(&visible_servers, context, cx)),
+                SectionId::Lsp if table_matches || !visible_servers.is_empty() => rows.push(self.render_servers(&visible_servers, cx)),
                 SectionId::Accounts if matches_query(&query, &[ACCOUNTS_KEYWORDS]) => rows.extend(self.render_accounts(window, cx)),
                 SectionId::Keyboard if matches_query(&query, &[KEYBOARD_KEYWORDS]) => rows.push(self.render_keyboard(cx)),
                 _ => {}

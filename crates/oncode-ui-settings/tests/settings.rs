@@ -480,9 +480,10 @@ async fn project_override_marker_follows_effective_settings(cx: &mut TestAppCont
     search(&window, cx, "git.pullStrategy");
     assert!(exists(&window, cx, "st-git.pullStrategy-override"));
     assert_eq!(window.update(cx, |window, _| window.find("st-git.pullStrategy").value().map(str::to_owned)).as_deref(), Some("Fast-forward only"));
-    search(&window, cx, "ra-project");
-    assert!(exists(&window, cx, "server-rust-override"));
-    assert!(!exists(&window, cx, "server-go-override"));
+    // A project cannot choose language servers, so its `rust` server is not in effect.
+    assert!(effective(&window, cx).lsp.servers.is_empty());
+    let rust = cx.update(|cx| page.read(cx).servers().and_then(|servers| servers.iter().find(|s| s.language == "rust").cloned())).expect("rust row");
+    assert_ne!(rust.command, "ra-project");
 
     // The marker disappears when the user's value is made equal to the project's value.
     search(&window, cx, "editor.tabSize");

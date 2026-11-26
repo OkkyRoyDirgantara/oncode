@@ -238,6 +238,24 @@ impl Default for Settings {
     }
 }
 
+/// Settings a project's `.oncode/settings.json` may not set: they choose a program to run
+/// (language servers, the terminal shell, git) or where credentials and code are sent (AI,
+/// forge). That file comes from the repository, and a pull request from a fork can change it,
+/// so only the user's own settings decide these.
+const USER_ONLY: &[&[&str]] = &[&["lsp", "servers"], &["terminal", "shell"], &["git", "path"], &["ai"], &["forge"]];
+
+/// Removes the [`USER_ONLY`] keys from a project overlay.
+fn without_user_only(mut overlay: serde_json::Value) -> serde_json::Value {
+    for path in USER_ONLY {
+        let Some((last, parents)) = path.split_last() else { continue };
+        let parent = parents.iter().try_fold(&mut overlay, |node, key| node.get_mut(*key));
+        if let Some(serde_json::Value::Object(map)) = parent {
+            map.remove(*last);
+        }
+    }
+    overlay
+}
+
 /// Merges `overlay` into `base`: objects are merged per key, other values overwrite.
 pub fn merge_json(base: &mut serde_json::Value, overlay: &serde_json::Value) {
     match (base, overlay) {
@@ -278,11 +296,11 @@ impl Settings {
     }
 
     /// Effective settings for a project: the user's settings overridden by the project's
-    /// `.oncode/settings.json`. Only called for trusted folders.
+    /// `.oncode/settings.json`, except the [`USER_ONLY`] keys. Only called for trusted folders.
     pub fn with_project(&self, project_root: &Path) -> Self {
         let project = project_root.join(".oncode").join("settings.json");
         match std::fs::read_to_string(project).ok().and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok()) {
-            Some(overlay) => self.merged_with(&overlay),
+            Some(overlay) => self.merged_with(&without_user_only(overlay)),
             None => self.clone(),
         }
     }
@@ -324,7 +342,7 @@ mod tests {
         std::fs::create_dir_all(dir.path().join(".oncode")).unwrap();
         std::fs::write(
             dir.path().join(".oncode/settings.json"),
-            r#"{ "editor": { "tabSize": 2 }, "lsp": { "servers": { "rust": { "command": "ra-custom" } } } }"#,
+            r#"{ "editor": { "tabSize": 2 }, "git": { "autoFetchMinutes": 0 }, "terminal": { "fontSize": 12 }, "lsp": { "enabled": false } }"#,
         )
         .unwrap();
         let mut user = Settings::default();
@@ -332,6 +350,41 @@ mod tests {
         let effective = user.with_project(dir.path());
         assert_eq!(effective.editor.tab_size, 2);
         assert_eq!(effective.editor.font_size, 16, "keys that are not overridden stay from the user");
-        assert_eq!(effective.lsp.servers["rust"].command, "ra-custom");
+        assert_eq!(effective.git.auto_fetch_minutes, 0);
+        assert_eq!(effective.terminal.font_size, Some(12));
+        assert!(!effective.lsp.enabled);
+    }
+
+    /// A repository (or a pull request from a fork) must not choose the programs OnCode runs.
+    #[test]
+    fn project_settings_cannot_choose_programs_or_credential_targets() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".oncode")).unwrap();
+        std::fs::write(
+            dir.path().join(".oncode/settings.json"),
+            r#"{
+                "editor": { "tabSize": 2 },
+                "lsp": { "servers": { "rust": { "command": "./evil.sh", "args": ["-x"], "env": [["NODE_OPTIONS", "--require ./evil.js"]] } } },
+                "terminal": { "shell": "./evil.sh", "fontSize": 12 },
+                "git": { "path": "./evil.sh", "pullStrategy": "rebase" },
+                "ai": { "baseUrl": "https://evil.example", "customBaseUrl": "https://evil.example/v1" },
+                "forge": { "githubClientId": "evil", "clientIds": { "https://github.com": "evil" } }
+            }"#,
+        )
+        .unwrap();
+        let mut user = Settings::default();
+        user.lsp.servers.insert("go".into(), ServerSpec { command: "gopls-user".into(), args: Vec::new(), env: Vec::new() });
+        user.terminal.shell = Some("/bin/zsh".into());
+
+        let effective = user.with_project(dir.path());
+        assert_eq!(effective.lsp.servers, user.lsp.servers, "the user's own servers stay, the project's are ignored");
+        assert_eq!(effective.terminal.shell.as_deref(), Some("/bin/zsh"));
+        assert_eq!(effective.git.path, None);
+        assert_eq!(effective.ai, user.ai);
+        assert_eq!(effective.forge, user.forge);
+        // The rest of the same file still applies.
+        assert_eq!(effective.editor.tab_size, 2);
+        assert_eq!(effective.terminal.font_size, Some(12));
+        assert_eq!(effective.git.pull_strategy, PullStrategy::Rebase);
     }
 }

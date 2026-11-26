@@ -196,7 +196,7 @@ fn clone_flow(window: &mut Window, cx: &mut App) {
             let _ = cx.update(|window, cx| overlay::toast_info(format!("Cloning {url}…"), window, cx));
             let operation = format!("clone-{}", core.next_id());
             let (core2, parent_text) = (core.clone(), parent.to_string_lossy().into_owned());
-            let Ok(task) = cx.update(|_, cx| spawn_core(cx, async move { api::git::git_clone(&core2, url, parent_text, name, true, operation, Arc::new(|_| {})).await })) else { return };
+            let Ok(task) = cx.update(|_, cx| spawn_core(cx, async move { api::git::git_clone(&core2, url, parent_text, name, operation, Arc::new(|_| {})).await })) else { return };
             let result = task.await;
             let _ = cx.update(|window, cx| match result {
                 Ok(dest) => {

@@ -818,14 +818,6 @@ pub fn is_overridden(field: &Field, context: OverrideContext) -> bool {
     }
 }
 
-/// The server for this language is overridden by the project settings.
-pub fn is_server_overridden(language: &str, context: OverrideContext) -> bool {
-    match context.effective {
-        Some(effective) if context.trusted => context.user.lsp.servers.get(language) != effective.lsp.servers.get(language),
-        _ => false,
-    }
-}
-
 /// A search query matches if each of its words appears in one of the texts.
 pub fn matches_query(query: &str, texts: &[&str]) -> bool {
     let query = query.to_lowercase();
@@ -1189,20 +1181,6 @@ mod tests {
         let marked: Vec<&str> =
             FIELDS.iter().filter(|f| is_overridden(f, OverrideContext { trusted: true, user: &user, effective: Some(&effective) })).map(|f| f.id).collect();
         assert_eq!(marked, ["editor.tabSize"]);
-    }
-
-    #[test]
-    fn override_marker_per_language_server() {
-        let user = defaults();
-        let effective = project_effective();
-        let trusted = OverrideContext { trusted: true, user: &user, effective: Some(&effective) };
-        assert!(is_server_overridden("rust", trusted));
-        assert!(!is_server_overridden("go", trusted));
-        assert!(!is_server_overridden("rust", OverrideContext { trusted: false, ..trusted }));
-        // `args: []` and args not written in the file are considered the same.
-        let mut user = defaults();
-        set_server_override(&mut user, "rust", serde_json::from_str(r#"{ "command": "ra-custom" }"#).ok());
-        assert!(!is_server_overridden("rust", OverrideContext { trusted: true, user: &user, effective: Some(&effective) }));
     }
 
     #[test]

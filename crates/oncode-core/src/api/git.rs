@@ -62,16 +62,12 @@ pub async fn git_init(core: &Shared, path: String) -> AppResult<()> {
     Ok(())
 }
 
-/// Clones a repository; the resulting folder is trusted right away. Returns the destination path.
-pub async fn git_clone(
-    core: &Shared,
-    url: String,
-    parent_dir: String,
-    name: String,
-    recurse_submodules: bool,
-    operation_id: String,
-    on_progress: ProgressFn,
-) -> AppResult<String> {
+/// Clones a repository and returns the destination path. The result is not trusted: it opens in
+/// restricted mode like any other new folder, because its Git config, language servers and
+/// project settings come from whoever published it. Submodules are not cloned either, since
+/// their URLs come from the same untrusted `.gitmodules`; after trusting the folder they can
+/// be fetched with Update Submodules.
+pub async fn git_clone(core: &Shared, url: String, parent_dir: String, name: String, operation_id: String, on_progress: ProgressFn) -> AppResult<String> {
     if name.is_empty() || name.contains(['/', '\\']) || name == "." || name == ".." {
         return Err(AppError::invalid("Invalid destination folder name"));
     }
@@ -81,12 +77,10 @@ pub async fn git_clone(
     }
     let git = core.git().await?;
     let cancel = core.begin_operation(&operation_id);
-    let result = git.clone_repo(&url, &dest, recurse_submodules, Some(cancel), Some(on_progress)).await;
+    let result = git.clone_repo(&url, &dest, false, Some(cancel), Some(on_progress)).await;
     core.end_operation(&operation_id);
     result?;
-    let dest = dest.to_string_lossy().into_owned();
-    core.store.set_trusted(&dest, true);
-    Ok(dest)
+    Ok(dest.to_string_lossy().into_owned())
 }
 
 // ----- Staging -----
@@ -602,11 +596,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn clone_validates_the_destination_and_trusts_the_result() {
+    async fn clone_validates_the_destination_and_leaves_the_result_untrusted() {
         let t = TestCore::new();
         let source = t.trusted_repo("source");
         let parent = t.project("target");
-        let clone = |name: &str| git_clone(&t.core, text(&source), text(&parent), name.to_string(), false, "op-clone".into(), Arc::new(|_| {}));
+        let clone = |name: &str| git_clone(&t.core, text(&source), text(&parent), name.to_string(), "op-clone".into(), Arc::new(|_| {}));
 
         for name in ["", ".", "..", "a/b", "a\\b"] {
             assert_eq!(clone(name).await.unwrap_err().code, "invalidInput", "name {name:?}");
@@ -618,8 +612,27 @@ mod tests {
         let dest = clone("clone").await.unwrap();
         assert_eq!(Path::new(&dest), parent.join("clone"));
         assert_eq!(std::fs::read_to_string(parent.join("clone/README.md")).unwrap(), "# Project\n");
-        assert!(t.core.store.is_trusted(&parent.join("clone")));
+        // A cloned repository opens in restricted mode like any other new folder.
+        assert!(!t.core.store.is_trusted(&parent.join("clone")));
         assert!(!t.core.store.is_trusted(&parent));
+        t.core.set_workspace("w1", parent.join("clone"));
+        assert_eq!(git_open(&t.core, "w1", dest).await.unwrap_err().code, "untrusted");
+    }
+
+    /// Submodule URLs come from the untrusted `.gitmodules`, so a clone does not fetch them.
+    #[tokio::test]
+    async fn clone_does_not_fetch_submodules() {
+        let t = TestCore::new();
+        let library = t.trusted_repo("library");
+        let source = t.trusted_repo("source");
+        git(&source, &["submodule", "add", "-q", &text(&library), "lib"]);
+        git(&source, &["commit", "-q", "-m", "Add submodule"]);
+        let parent = t.project("target");
+
+        git_clone(&t.core, text(&source), text(&parent), "clone".into(), "op-clone".into(), Arc::new(|_| {})).await.unwrap();
+        assert!(parent.join("clone/.gitmodules").exists());
+        assert!(parent.join("clone/lib").is_dir(), "git still creates the empty submodule folder");
+        assert!(!parent.join("clone/lib/README.md").exists(), "the submodule is not fetched");
     }
 
     #[tokio::test]
