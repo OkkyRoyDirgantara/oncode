@@ -84,6 +84,31 @@ async fn command_palette_runs_the_selected_command(cx: &mut TestAppContext) {
     assert!(tab_titles(&workbench, cx).is_empty(), "the picked command must be run");
 }
 
+/// Opening the palette again (its shortcut pressed twice, or quick open and then the palette) replaces the open
+/// quick pick instead of stacking another dialog on top of it.
+#[gpui_kit::test]
+async fn opening_a_quick_pick_again_replaces_the_open_one(cx: &mut TestAppContext) {
+    let app = TestApp::new(cx);
+    let project = app.project(&[("a.txt", "a\n")]);
+    let window = app.open(Some(&project), cx).await;
+    let open_lists = |cx: &mut TestAppContext| {
+        window.update(cx, |window, cx| {
+            window.render_frame(cx);
+            window.find_all(("quick-pick-item", 0usize)).len()
+        })
+    };
+
+    for command in ["workbench.commandPalette", "workbench.commandPalette", "workbench.quickOpen", "workbench.commandPalette"] {
+        assert!(window.run_command(cx, command));
+        cx.run_until_parked();
+    }
+    assert_eq!(open_lists(cx), 1, "the quick picks must not stack");
+
+    window.update(cx, |window, cx| window.press("escape", cx));
+    cx.run_until_parked();
+    assert_eq!(open_lists(cx), 0, "one Escape closes the only quick pick");
+}
+
 #[gpui_kit::test]
 async fn keybindings_json_overrides_default_shortcuts(cx: &mut TestAppContext) {
     let app = TestApp::new(cx);

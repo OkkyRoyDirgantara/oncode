@@ -1,6 +1,7 @@
 //! Quick pick: a search box with a list of choices, used by the command palette, quick open,
 //! the branch picker, and the like.
 
+use std::collections::HashMap;
 use std::rc::Rc;
 
 use gpui_kit::component::input::{Input, InputEvent, InputState};
@@ -8,8 +9,8 @@ use gpui_kit::component::{h_flex, v_flex, ActiveTheme as _, WindowExt as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::{
-    div, px, App, AppContext as _, Context, Entity, InteractiveElement as _, IntoElement, KeyDownEvent, ParentElement as _, Render, ScrollHandle, SharedString,
-    StatefulInteractiveElement as _, Styled as _, Subscription, Task, Window,
+    div, px, App, AppContext as _, Context, Entity, Global, InteractiveElement as _, IntoElement, KeyDownEvent, ParentElement as _, Render, ScrollHandle, SharedString,
+    StatefulInteractiveElement as _, Styled as _, Subscription, Task, WeakEntity, Window, WindowId,
 };
 
 #[derive(Clone, Debug, PartialEq)]
@@ -132,6 +133,13 @@ pub fn filter_items(items: &[PickItem], query: &str, limit: usize) -> Vec<PickIt
 
 const LIMIT: usize = 80;
 
+/// The quick pick that is open in each window. Opening another one replaces it: shortcuts such as the command
+/// palette's stay active while a quick pick has focus, and without this every press stacked another dialog.
+#[derive(Default)]
+struct OpenPicks(HashMap<WindowId, WeakEntity<QuickPick>>);
+
+impl Global for OpenPicks {}
+
 pub struct QuickPick {
     input: Entity<InputState>,
     options: QuickPickOptions,
@@ -238,6 +246,12 @@ impl QuickPick {
             return;
         }
         self.done = true;
+        // Forget this quick pick, unless a newer one has already replaced it.
+        let (window_id, this) = (window.window_handle().window_id(), cx.entity_id());
+        let open = &mut cx.default_global::<OpenPicks>().0;
+        if open.get(&window_id).is_some_and(|open| open.entity_id() == this) {
+            open.remove(&window_id);
+        }
         window.close_dialog(cx);
         let on_pick = self.on_pick.clone();
         // Runs after the dialog has closed, so the handler may open another dialog.
@@ -331,7 +345,13 @@ impl Render for QuickPick {
 /// Opens a quick pick. `on_pick` receives the choice, or `None` if canceled with Escape.
 pub fn quick_pick(options: QuickPickOptions, on_pick: impl Fn(Option<PickItem>, &mut Window, &mut App) + 'static, window: &mut Window, cx: &mut App) {
     let on_pick: Rc<dyn Fn(Option<PickItem>, &mut Window, &mut App)> = Rc::new(on_pick);
+    // Only one quick pick per window: close the open one first, as Escape would (its owner is told nothing was picked).
+    let window_id = window.window_handle().window_id();
+    if let Some(previous) = cx.default_global::<OpenPicks>().0.remove(&window_id).and_then(|open| open.upgrade()) {
+        previous.update(cx, |previous, cx| previous.finish(None, window, cx));
+    }
     let picker = cx.new(|cx| QuickPick::new(options, on_pick, window, cx));
+    cx.default_global::<OpenPicks>().0.insert(window_id, picker.downgrade());
     let focus = picker.read(cx).input.clone();
     // Enter does not close the dialog through its built-in Confirm action: the quick pick closes it itself
     // when picking. Without this, Enter while a search is running closes the dialog without picking anything.
