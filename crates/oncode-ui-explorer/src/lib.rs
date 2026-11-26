@@ -17,7 +17,7 @@ use oncode_core::settings::StartupView;
 use oncode_ui::{Command, Lucide, SidebarView, StatusAlign, StatusItem, Workbench, WorkbenchEvent};
 use serde_json::Value;
 
-pub use explorer::{EntryKind, Explorer};
+pub use explorer::{EntryKind, Explorer, RevealHandler, REVEAL_ACTIVE_LABEL, REVEAL_LABEL};
 pub use restricted::{RestrictedStatus, RESTRICTED_MESSAGE};
 pub use welcome::Welcome;
 
@@ -178,6 +178,14 @@ fn register_commands(workbench: &mut Workbench, explorer: &Entity<Explorer>, wea
     );
     workbench.register_command(
         Command::new("explorer.copyRelativePath", "Copy Relative Path", run(false, |explorer, _, cx| explorer.copy_selected_path(true, cx))).category("Explorer").when(has_selection),
+    );
+    // Berkas di tab aktif; tidak aktif untuk tab non-berkas dan berkas `untitled:`.
+    let has_active_file = {
+        let weak = weak.clone();
+        move |_: &Window, cx: &App| weak.upgrade().is_some_and(|explorer| explorer.read(cx).active_file().is_some())
+    };
+    workbench.register_command(
+        Command::new("explorer.revealActiveFile", REVEAL_ACTIVE_LABEL, run(false, |explorer, _, cx| explorer.reveal_active_in_file_manager(cx))).category("Explorer").when(has_active_file),
     );
     workbench.register_command(Command::new("explorer.collapseAll", "Collapse All", run(false, |explorer, _, cx| explorer.collapse_all(cx))).category("Explorer").when(move |_, _| has_root));
     workbench.register_command(Command::new("explorer.refresh", "Refresh", run(false, |explorer, _, cx| explorer.refresh(cx))).category("Explorer").when(move |_, _| has_root));

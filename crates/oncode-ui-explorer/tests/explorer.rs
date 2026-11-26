@@ -13,7 +13,7 @@ use oncode_ui::editor::{active_file, buffers, open_file, OpenFile};
 use oncode_ui::testing::{git, TestApp, TestWindow};
 use oncode_ui::{Command, OpenOptions, SidebarView, TabContent, TabData, TabKind, ViewTab, Workbench};
 use oncode_ui_explorer::tree::Row;
-use oncode_ui_explorer::Explorer;
+use oncode_ui_explorer::{Explorer, RevealHandler, REVEAL_LABEL};
 
 /// Path sebagai teks dalam bentuk yang dipakai tab dan buffer (`\` di Windows), sehingga
 /// `project.join("src/app")` sama dengan path yang dibuat explorer.
@@ -503,6 +503,84 @@ async fn the_context_menu_acts_on_the_row_under_the_pointer(cx: &mut TestAppCont
         (window.try_find_by_label("New File…").is_some(), window.try_find_by_label("Open").is_some())
     });
     assert!(has_new_file && !has_open);
+}
+
+// ----- Reveal in File Explorer / Finder -----
+
+/// Memasang pengganti pembuka file manager (platform uji GPUI tidak mengimplementasikannya) dan
+/// mengembalikan daftar path yang diminta dibuka.
+fn capture_reveals(cx: &mut TestAppContext) -> std::rc::Rc<std::cell::RefCell<Vec<String>>> {
+    let revealed = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let sink = revealed.clone();
+    cx.update(|cx| cx.set_global(RevealHandler(std::rc::Rc::new(move |path: &Path, _: &mut App| sink.borrow_mut().push(text(path))))));
+    revealed
+}
+
+impl Fixture {
+    /// Klik kanan baris `id`, lalu pilih item menu berlabel `label`.
+    fn context_menu(&self, cx: &mut TestAppContext, id: &str, label: &str) {
+        let id = id.to_string();
+        self.window.update(cx, |window, cx| {
+            window.render_frame(cx);
+            window.right_click(gpui_kit::SharedString::from(id), cx);
+        });
+        cx.run_until_parked();
+        let item = self.window.update(cx, |window, cx| {
+            window.render_frame(cx);
+            window.find_by_label(label).bounds().center()
+        });
+        self.window.update(cx, |window, cx| {
+            window.pointer_move(item, None, cx);
+            window.pointer_down(item, MouseButton::Left, cx);
+            window.pointer_up(item, MouseButton::Left, cx);
+        });
+        cx.run_until_parked();
+    }
+}
+
+#[gpui_kit::test]
+async fn the_context_menu_reveals_a_file_or_a_folder_in_the_system_file_manager(cx: &mut TestAppContext) {
+    let app = setup(cx);
+    // Folder baru belum dipercaya: reveal harus tetap jalan di mode terbatas.
+    let project = app.project(&[("src/a.ts", "a"), ("README.md", "# r\n")]);
+    let f = Fixture::open(&app, &project, cx).await;
+    assert!(!cx.update(|cx| f.workbench.read(cx).env().trusted));
+    let revealed = capture_reveals(cx);
+
+    f.context_menu(cx, "explorer-row-README.md", REVEAL_LABEL);
+    assert_eq!(*revealed.borrow(), [text(&project.join("README.md"))]);
+
+    f.context_menu(cx, "explorer-row-src", REVEAL_LABEL);
+    assert_eq!(*revealed.borrow(), [text(&project.join("README.md")), text(&project.join("src"))], "folder juga bisa dibuka");
+
+    // Latar pohon bukan berkas atau folder: tidak ada item reveal.
+    f.window.update(cx, |window, cx| {
+        window.render_frame(cx);
+        window.right_click("explorer-tree", cx);
+    });
+    cx.run_until_parked();
+    let (has_background_menu, has_reveal) = f.window.update(cx, |window, cx| {
+        window.render_frame(cx);
+        (window.try_find_by_label("Refresh").is_some(), window.try_find_by_label(REVEAL_LABEL).is_some())
+    });
+    assert!(has_background_menu, "menu latar pohon terbuka");
+    assert!(!has_reveal);
+}
+
+#[gpui_kit::test]
+async fn the_command_reveals_the_active_file_and_is_off_without_one(cx: &mut TestAppContext) {
+    let app = setup(cx);
+    let project = app.project(&[("src/a.ts", "a")]);
+    let f = Fixture::open(&app, &project, cx).await;
+    let revealed = capture_reveals(cx);
+    assert!(!f.window.run_command(cx, "explorer.revealActiveFile"), "tanpa tab berkas aktif command tidak aktif");
+    assert!(revealed.borrow().is_empty());
+
+    f.click(cx, "explorer-row-src");
+    f.wait_for_rows(cx, "src terbuka", &project, |rows| rows.contains(&"  src/a.ts".to_string())).await;
+    f.open_and_reveal(cx, &project.join("src/a.ts")).await;
+    assert!(f.window.run_command(cx, "explorer.revealActiveFile"));
+    assert_eq!(*revealed.borrow(), [text(&project.join("src/a.ts"))]);
 }
 
 // ----- Skenario e2e v0.2: layar awal tanpa folder; Settings tetap bisa dibuka -----

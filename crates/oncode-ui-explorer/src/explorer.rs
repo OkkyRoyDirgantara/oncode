@@ -7,6 +7,8 @@
 
 use std::collections::{HashMap, HashSet};
 use std::ops::Range;
+use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use std::time::Duration;
 
 use gpui_kit::component::button::{Button, ButtonVariants as _};
@@ -22,7 +24,7 @@ use gpui_kit::{
 };
 use oncode_core::api::fs;
 use oncode_core::AppError;
-use oncode_ui::editor::{buffers, open_file, OpenFile};
+use oncode_ui::editor::{buffers, file_path, is_untitled, open_file, OpenFile};
 use oncode_ui::file_icons::{file_icon, folder_icon};
 use oncode_ui::overlay::{self, Confirm};
 use oncode_ui::{repos, spawn_core, DraggedEntry, Env, FileMark, Lucide, TabDragPreview, WorkbenchEvent};
@@ -77,6 +79,34 @@ enum Display {
 struct TreeMemory(HashMap<(String, String), (HashSet<String>, Option<String>)>);
 
 impl Global for TreeMemory {}
+
+/// Label item menu dan command yang membuka berkas di file manager OS, sesuai platform.
+pub const REVEAL_LABEL: &str = if cfg!(target_os = "macos") {
+    "Reveal in Finder"
+} else if cfg!(windows) {
+    "Reveal in File Explorer"
+} else {
+    "Open Containing Folder"
+};
+
+/// Label command palette untuk berkas di tab aktif.
+pub const REVEAL_ACTIVE_LABEL: &str = if cfg!(target_os = "macos") {
+    "Reveal Active File in Finder"
+} else if cfg!(windows) {
+    "Reveal Active File in File Explorer"
+} else {
+    "Open Active File's Containing Folder"
+};
+
+/// Pembuka file manager OS. Bawaannya `App::reveal_path`; tes memasang pengganti lewat global ini
+/// karena platform uji GPUI tidak mengimplementasikan `reveal_path` (memanggilnya langsung panik).
+#[derive(Clone)]
+pub struct RevealHandler(pub RevealFn);
+
+/// Fungsi yang membuka `path` di file manager OS.
+pub type RevealFn = Rc<dyn Fn(&Path, &mut App)>;
+
+impl Global for RevealHandler {}
 
 pub struct Explorer {
     env: Env,
@@ -851,6 +881,31 @@ impl Explorer {
         cx.write_to_clipboard(ClipboardItem::new_string(text));
     }
 
+    /// Membuka `path` di file manager OS: berkas terpilih di folder induknya (Windows/macOS), atau
+    /// folder induknya dibuka (Linux). Hanya meminta OS menampilkan path itu, tidak menjalankan isi
+    /// folder proyek, jadi aman juga di mode terbatas. Berkas `untitled:` belum ada di disk: diabaikan.
+    pub fn reveal_in_file_manager(&self, path: &str, cx: &mut Context<Self>) {
+        if is_untitled(path) {
+            return;
+        }
+        let path = PathBuf::from(file_path(path));
+        match cx.try_global::<RevealHandler>().cloned() {
+            Some(RevealHandler(handler)) => handler(&path, cx),
+            None => cx.reveal_path(&path),
+        }
+    }
+
+    /// Berkas di tab aktif yang sudah ada di disk; `None` untuk tab non-berkas dan berkas `untitled:`.
+    pub fn active_file(&self) -> Option<&str> {
+        self.active_path.as_deref().filter(|path| !is_untitled(path))
+    }
+
+    pub fn reveal_active_in_file_manager(&self, cx: &mut Context<Self>) {
+        if let Some(path) = self.active_file().map(String::from) {
+            self.reveal_in_file_manager(&path, cx);
+        }
+    }
+
     // ----- Seret dan jatuhkan -----
 
     /// Daftar baris digambar: akar punya isi, atau masukan nama sedang terbuka. Selain itu yang tampil
@@ -1051,13 +1106,14 @@ impl Explorer {
                 let dir = if entry.is_dir { entry.path.clone() } else { dir_name(&entry.path).to_string() };
                 let (new_file_dir, new_folder_dir) = (dir.clone(), dir);
                 let (rename, delete) = (entry.clone(), entry.clone());
-                let (copy, copy_relative) = (entry.path.clone(), entry.path.clone());
+                let (copy, copy_relative, reveal) = (entry.path.clone(), entry.path.clone(), entry.path.clone());
                 menu.item(item("New File…", Box::new(move |this, window, cx| this.new_entry(EntryKind::File, Some(new_file_dir.clone()), window, cx))))
                     .item(item("New Folder…", Box::new(move |this, window, cx| this.new_entry(EntryKind::Folder, Some(new_folder_dir.clone()), window, cx))))
                     .separator()
                     .item(item("Rename…", Box::new(move |this, window, cx| this.rename_entry(rename.clone(), window, cx))))
                     .item(item("Delete (Move to Trash)…", Box::new(move |this, window, cx| this.delete_entry(delete.clone(), window, cx))))
                     .separator()
+                    .item(item(REVEAL_LABEL, Box::new(move |this, _, cx| this.reveal_in_file_manager(&reveal, cx))))
                     .item(item("Copy Path", Box::new(move |this, _, cx| this.copy_path(&copy, false, cx))))
                     .item(item("Copy Relative Path", Box::new(move |this, _, cx| this.copy_path(&copy_relative, true, cx))))
             }
