@@ -305,12 +305,12 @@ pub struct ReviewInput {
 pub enum MergeState {
     /// Ready to merge.
     Clean,
-    /// Required reviews or other rules are not met yet.
+    /// Required reviews, required checks, or other rules are not met yet.
     Blocked,
     /// The source branch must be updated with the target first.
     Behind,
     Conflicts,
-    /// Can be merged, but checks are failing or still running.
+    /// Can be merged, but checks that are not required are failing or still running.
     Unstable,
     Draft,
     /// The provider is still working it out.
@@ -328,6 +328,15 @@ pub enum MergeMethod {
     Squash,
     /// Rebase the commits onto the target (GitHub).
     Rebase,
+}
+
+/// What a merge did besides merging.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MergeOutcome {
+    /// Why the source branch is still there although deleting it was asked for. The merge itself went
+    /// through: GitHub deletes the branch with a second request, which can fail on its own.
+    pub branch_kept: Option<String>,
 }
 
 /// Input for merging a PR/MR.

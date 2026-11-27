@@ -21,7 +21,7 @@ pub mod store;
 pub use auth::{device_poll, device_start, refresh_token, DeviceCode, DevicePoll, TokenSet};
 pub use error::{ForgeError, ForgeErrorCode, Result};
 pub use model::{
-    parse_remote_url, Account, Check, CheckState, ForgeHost, ForgeKind, MergeInput, MergeMethod, MergeState, NewPullRequest, Page, PrFilter, PrState,
+    parse_remote_url, Account, Check, CheckState, ForgeHost, ForgeKind, MergeInput, MergeMethod, MergeOutcome, MergeState, NewPullRequest, Page, PrFilter, PrState,
     NewReviewComment, PullRequest, PullRequestDetail, RemoteRepo, RepoRef, ReviewComment, ReviewEvent, ReviewInput, ReviewSide, Timestamp,
 };
 pub use provider::{git_credentials, provider, pull_request_ref, ForgeProvider};

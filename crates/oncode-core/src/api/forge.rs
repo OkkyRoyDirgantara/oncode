@@ -286,7 +286,7 @@ pub async fn forge_pr_create(core: &Shared, account_id: String, repo: RepoRef, i
 }
 
 /// Merges a PR/MR on the server.
-pub async fn forge_pr_merge(core: &Shared, account_id: String, repo: RepoRef, number: u32, input: oncode_forge::MergeInput) -> AppResult<()> {
+pub async fn forge_pr_merge(core: &Shared, account_id: String, repo: RepoRef, number: u32, input: oncode_forge::MergeInput) -> AppResult<oncode_forge::MergeOutcome> {
     let (_, provider) = client(core, &account_id).await?;
     Ok(provider.merge_pull_request(&repo, number, &input).await?)
 }

@@ -386,15 +386,17 @@ impl Shell {
         };
         let core = self.core.clone();
         let expected = root.clone();
-        let hot_exit = self.workbench.read(cx).settings().files.hot_exit;
+        // Backups left while hot exit was on are only restored while it still is; otherwise they are removed.
+        // The clear takes its place among the backup writes here, on the UI thread.
+        let clear = (!self.workbench.read(cx).settings().files.hot_exit).then(|| backup_api::backup_clear(&core, root.clone()));
         let task = spawn_core(cx, async move {
             let session = SessionData::parse(app::session_get(&core, root.clone()).await.ok().flatten().as_deref());
-            // Backups left while hot exit was on are only restored while it still is; otherwise they are removed.
-            let backups = if hot_exit {
-                backup_api::backup_list(&core, root).await.unwrap_or_default()
-            } else {
-                let _ = backup_api::backup_clear(&core, root).await;
-                Vec::new()
+            let backups = match clear {
+                None => backup_api::backup_list(&core, root).await.unwrap_or_default(),
+                Some(clear) => {
+                    let _ = clear.await;
+                    Vec::new()
+                }
             };
             let backed_up = |path: &str| backups.iter().any(|backup| crate::editor::file_path(&backup.path) == crate::editor::file_path(path));
             // Files that no longer exist are skipped; new files only come back with their backup.

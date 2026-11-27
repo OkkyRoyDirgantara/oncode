@@ -791,7 +791,20 @@ async fn merge_pull_request_sends_the_method_and_deletes_the_branch() {
     Mock::given(method("DELETE")).and(path("/repos/octo/hello/git/refs/heads/feature")).respond_with(ResponseTemplate::new(204)).expect(1).mount(&server).await;
 
     let input = MergeInput { method: MergeMethod::Squash, sha: Some("6dcb09b5b57875f334f61aebed695e2e4193db5e".into()), title: Some("Feature (#7)".into()), message: None, delete_branch: true };
-    client(&server).merge_pull_request(&hello(), 7, &input).await.expect("merged");
+    let outcome = client(&server).merge_pull_request(&hello(), 7, &input).await.expect("merged");
+    assert_eq!(outcome.branch_kept, None);
+
+    // Merged, but the branch cannot be deleted (no permission): still a merge, with the reason.
+    let kept = MockServer::start().await;
+    Mock::given(method("GET")).and(path("/repos/octo/hello/pulls/7")).respond_with(ResponseTemplate::new(200).set_body_json(pull_json(7, "Feature"))).mount(&kept).await;
+    Mock::given(method("PUT")).and(path("/repos/octo/hello/pulls/7/merge")).respond_with(ResponseTemplate::new(200).set_body_json(json!({ "merged": true, "sha": "abc" }))).expect(1).mount(&kept).await;
+    Mock::given(method("DELETE"))
+        .and(path("/repos/octo/hello/git/refs/heads/feature"))
+        .respond_with(ResponseTemplate::new(403).set_body_json(json!({ "message": "Resource not accessible by integration" })))
+        .mount(&kept)
+        .await;
+    let outcome = client(&kept).merge_pull_request(&hello(), 7, &input).await.expect("merged although the branch stays");
+    assert!(outcome.branch_kept.is_some_and(|reason| !reason.is_empty()));
 
     let refused = MockServer::start().await;
     Mock::given(method("PUT"))

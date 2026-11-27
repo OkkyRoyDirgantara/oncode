@@ -58,17 +58,21 @@ fn io_error(error: std::io::Error) -> AppError {
 /// number when it is made, on the caller's thread; one that reaches the disk after a newer request for
 /// the same file is dropped. The requests run on the backend's thread pool, where an older one could
 /// otherwise finish last: a delayed backup still being written when the window closes and writes the
-/// newest text, or a backup written just before a save removes it.
+/// newest text, a backup written just before a save removes it, or one written just before all of the
+/// folder's backups are cleared.
 #[derive(Debug, Default)]
 pub struct BackupQueue {
     last_ticket: AtomicU64,
-    /// The newest request handled per backup file. Held while a file is written, so writes take turns.
+    /// The newest request handled per backup file, and per folder for clears. Held while a file is
+    /// written, so writes take turns.
     handled: tokio::sync::Mutex<HashMap<PathBuf, u64>>,
 }
 
 enum Change {
     Write(Vec<u8>),
     Delete,
+    /// Removes the whole folder of backups (`target` is the folder).
+    Clear,
 }
 
 impl BackupQueue {
@@ -76,12 +80,16 @@ impl BackupQueue {
         self.last_ticket.fetch_add(1, Ordering::Relaxed) + 1
     }
 
-    async fn apply(&self, file: PathBuf, ticket: u64, change: Change) -> AppResult<()> {
+    async fn apply(&self, target: PathBuf, ticket: u64, change: Change) -> AppResult<()> {
         let mut handled = self.handled.lock().await;
-        if handled.get(&file).is_some_and(|newest| *newest > ticket) {
+        // Dropped if a newer request for this file, or a newer clear of its folder, was handled already.
+        let folder = if matches!(change, Change::Clear) { None } else { target.parent().map(Path::to_path_buf) };
+        let superseded = |key: &Path| handled.get(key).is_some_and(|newest| *newest > ticket);
+        if superseded(&target) || folder.as_deref().is_some_and(superseded) {
             return Ok(());
         }
-        handled.insert(file.clone(), ticket);
+        handled.insert(target.clone(), ticket);
+        let file = target;
         tokio::task::spawn_blocking(move || -> std::io::Result<()> {
             match change {
                 // Written to a temporary file first, then renamed, so a crash in the middle never leaves half a backup.
@@ -94,6 +102,10 @@ impl BackupQueue {
                     std::fs::rename(&temporary, &file)
                 }
                 Change::Delete => match std::fs::remove_file(&file) {
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                    result => result,
+                },
+                Change::Clear => match std::fs::remove_dir_all(&file) {
                     Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
                     result => result,
                 },
@@ -130,15 +142,13 @@ pub fn backup_delete(core: &Shared, root: String, path: String) -> impl Future<O
 }
 
 /// Removes all backups of the folder `root`: with hot exit off they are not restored, and kept they
-/// could come back with outdated content once it is turned on again.
-pub async fn backup_clear(core: &Shared, root: String) -> AppResult<()> {
+/// could come back with outdated content once it is turned on again. Ordered with [`backup_write`]
+/// the same way: a write asked for before this cannot bring a backup back afterwards.
+pub fn backup_clear(core: &Shared, root: String) -> impl Future<Output = AppResult<()>> + Send + 'static {
     let dir = folder_dir(core, &root);
-    let _turn = core.backup_queue.handled.lock().await;
-    match tokio::fs::remove_dir_all(&dir).await {
-        Ok(()) => Ok(()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(io_error(error)),
-    }
+    let ticket = core.backup_queue.ticket();
+    let core = core.clone();
+    async move { core.backup_queue.apply(dir, ticket, Change::Clear).await }
 }
 
 /// All backups of the folder `root`. Unreadable files are skipped.
@@ -194,6 +204,20 @@ mod tests {
         backup_clear(&t.core, "/never".into()).await.unwrap();
         assert!(backup_list(&t.core, "/a".into()).await.unwrap().is_empty());
         assert_eq!(backup_list(&t.core, "/b".into()).await.unwrap().len(), 1, "other folders keep theirs");
+    }
+
+    #[tokio::test]
+    async fn a_write_asked_for_before_a_clear_does_not_bring_the_backup_back() {
+        let t = TestCore::new();
+        backup_write(&t.core, "/a".into(), backup("/a/x.txt", "kept")).await.unwrap();
+        let late = backup_write(&t.core, "/a".into(), backup("/a/y.txt", "late"));
+        backup_clear(&t.core, "/a".into()).await.unwrap();
+        late.await.unwrap();
+        assert!(backup_list(&t.core, "/a".into()).await.unwrap().is_empty());
+
+        // A write asked for after the clear is kept.
+        backup_write(&t.core, "/a".into(), backup("/a/x.txt", "new")).await.unwrap();
+        assert_eq!(backup_list(&t.core, "/a".into()).await.unwrap().len(), 1);
     }
 
     #[tokio::test]

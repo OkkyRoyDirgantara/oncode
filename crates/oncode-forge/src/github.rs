@@ -8,7 +8,7 @@ use crate::http::{
     encode_segment, next_page_from_link, non_empty, timestamp_or_zero, Api, Flavor, PER_PAGE, SCAN_PER_PAGE,
 };
 use crate::model::{
-    Account, Check, CheckState, ForgeHost, MergeInput, MergeMethod, MergeState, NewPullRequest, Page, PrFilter, PrState, PullRequest, PullRequestDetail,
+    Account, Check, CheckState, ForgeHost, MergeInput, MergeMethod, MergeOutcome, MergeState, NewPullRequest, Page, PrFilter, PrState, PullRequest, PullRequestDetail,
     RemoteRepo, RepoRef, ReviewComment, ReviewEvent, ReviewInput, ReviewSide,
 };
 use crate::provider::ForgeProvider;
@@ -249,7 +249,7 @@ impl ForgeProvider for GitHubProvider {
             .ok_or_else(|| ForgeError::invalid_response("This repository has no default branch yet"))
     }
 
-    async fn merge_pull_request(&self, repo: &RepoRef, number: u32, input: &MergeInput) -> Result<()> {
+    async fn merge_pull_request(&self, repo: &RepoRef, number: u32, input: &MergeInput) -> Result<MergeOutcome> {
         let base = repo_path(repo)?;
         // The source branch, to delete afterwards; only when it lives in this repository.
         let pull = if input.delete_branch { Some(self.fetch_pull(repo, number).await?) } else { None };
@@ -267,10 +267,13 @@ impl ForgeProvider for GitHubProvider {
         if let Some(pull) = pull {
             let same_repo = pull.head.repo.as_ref().map(|r| r.full_name.as_str()) == pull.base.repo.as_ref().map(|r| r.full_name.as_str());
             if same_repo {
-                self.api.delete(&format!("{base}/git/refs/heads/{}", encode_segment(&pull.head.name))).await?;
+                // Merged already: a failure here (e.g. no permission to delete branches) is not a failed merge.
+                if let Err(error) = self.api.delete(&format!("{base}/git/refs/heads/{}", encode_segment(&pull.head.name))).await {
+                    return Ok(MergeOutcome { branch_kept: Some(error.message) });
+                }
             }
         }
-        Ok(())
+        Ok(MergeOutcome::default())
     }
 
     async fn list_review_comments(&self, repo: &RepoRef, number: u32) -> Result<Vec<ReviewComment>> {

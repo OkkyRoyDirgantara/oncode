@@ -8,7 +8,7 @@ use crate::http::{
     encode_segment, next_page_from_gitlab, non_empty, timestamp_or_zero, Api, Flavor, PER_PAGE, SCAN_PER_PAGE,
 };
 use crate::model::{
-    Account, Check, CheckState, ForgeHost, MergeInput, MergeMethod, MergeState, NewPullRequest, Page, PrFilter, PrState, PullRequest, PullRequestDetail,
+    Account, Check, CheckState, ForgeHost, MergeInput, MergeMethod, MergeOutcome, MergeState, NewPullRequest, Page, PrFilter, PrState, PullRequest, PullRequestDetail,
     RemoteRepo, RepoRef, ReviewComment, ReviewEvent, ReviewInput, ReviewSide,
 };
 use crate::provider::ForgeProvider;
@@ -273,7 +273,7 @@ impl ForgeProvider for GitLabProvider {
             .ok_or_else(|| ForgeError::invalid_response("This repository has no default branch yet"))
     }
 
-    async fn merge_pull_request(&self, repo: &RepoRef, number: u32, input: &MergeInput) -> Result<()> {
+    async fn merge_pull_request(&self, repo: &RepoRef, number: u32, input: &MergeInput) -> Result<MergeOutcome> {
         if input.method == MergeMethod::Rebase {
             return Err(ForgeError::invalid("GitLab merges with the project's own merge method; choose Merge or Squash"));
         }
@@ -292,7 +292,8 @@ impl ForgeProvider for GitLabProvider {
         };
         let path = format!("{}/merge_requests/{number}/merge", project_path(repo)?);
         let _: serde_json::Value = self.api.put(&path, &body).await?;
-        Ok(())
+        // The branch is removed by GitLab as part of the merge (`should_remove_source_branch`).
+        Ok(MergeOutcome::default())
     }
 
     async fn list_review_comments(&self, repo: &RepoRef, number: u32) -> Result<Vec<ReviewComment>> {
@@ -436,18 +437,24 @@ fn gitlab_merge_methods(project: Option<&GlProject>) -> Vec<MergeMethod> {
 
 /// GitLab's `detailed_merge_status` (or the older `merge_status`).
 fn gitlab_merge_state(mr: &GlMergeRequest) -> MergeState {
-    if mr.has_conflicts == Some(true) {
+    merge_state_from(mr.has_conflicts, mr.detailed_merge_status.as_deref(), mr.merge_status.as_deref())
+}
+
+fn merge_state_from(has_conflicts: Option<bool>, detailed: Option<&str>, merge_status: Option<&str>) -> MergeState {
+    if has_conflicts == Some(true) {
         return MergeState::Conflicts;
     }
-    match mr.detailed_merge_status.as_deref() {
+    match detailed {
         Some("mergeable") => MergeState::Clean,
         Some("conflict") | Some("broken_status") => MergeState::Conflicts,
         Some("need_rebase") => MergeState::Behind,
         Some("draft_status") => MergeState::Draft,
-        Some("ci_must_pass") | Some("ci_still_running") => MergeState::Unstable,
         Some("checking") | Some("unchecked") | Some("preparing") | Some("approvals_syncing") => MergeState::Checking,
+        // Everything else GitLab refuses to merge, including `ci_must_pass` and `ci_still_running` (the
+        // project requires a successful pipeline first). A failing pipeline that is not required leaves
+        // the status `mergeable`.
         Some(_) => MergeState::Blocked,
-        None => match mr.merge_status.as_deref() {
+        None => match merge_status {
             Some("can_be_merged") => MergeState::Clean,
             Some("cannot_be_merged") => MergeState::Conflicts,
             _ => MergeState::Checking,
@@ -633,6 +640,20 @@ mod tests {
         assert_eq!(project_path(&repo).expect("path"), "/projects/group%2Fsubgroup%2Fproject");
         let empty = RepoRef { host: "gitlab.com".into(), owner: String::new(), name: "project".into() };
         assert!(project_path(&empty).is_err());
+    }
+
+    #[test]
+    fn merge_states() {
+        assert_eq!(merge_state_from(None, Some("mergeable"), None), MergeState::Clean);
+        assert_eq!(merge_state_from(Some(true), Some("mergeable"), None), MergeState::Conflicts);
+        assert_eq!(merge_state_from(None, Some("need_rebase"), None), MergeState::Behind);
+        assert_eq!(merge_state_from(None, Some("checking"), None), MergeState::Checking);
+        // A required pipeline that has not passed yet: GitLab refuses the merge.
+        assert_eq!(merge_state_from(None, Some("ci_must_pass"), None), MergeState::Blocked);
+        assert_eq!(merge_state_from(None, Some("ci_still_running"), None), MergeState::Blocked);
+        assert_eq!(merge_state_from(None, Some("not_approved"), None), MergeState::Blocked);
+        assert_eq!(merge_state_from(None, None, Some("can_be_merged")), MergeState::Clean);
+        assert_eq!(merge_state_from(None, None, None), MergeState::Checking);
     }
 
     #[test]

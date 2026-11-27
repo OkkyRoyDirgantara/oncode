@@ -183,6 +183,46 @@ fn utf16_range(text: &str, start: u32, end: u32) -> Option<std::ops::Range<usize
     Some(from?..to?)
 }
 
+/// Where the last of `parameters` is in `label`. A label given as offsets is used as is. One given as
+/// text is searched after the opening parenthesis (so a parameter named like the function is not taken
+/// for it) and after the parameters before it, at token boundaries: a parameter `a` is not the `a`
+/// inside `data`.
+fn parameter_range(label: &str, parameters: &[lsp_types::ParameterInformation]) -> Option<std::ops::Range<usize>> {
+    let mut from = label.find('(').map_or(0, |at| at + 1);
+    let mut found = None;
+    for parameter in parameters {
+        found = match &parameter.label {
+            ParameterLabel::LabelOffsets([start, end]) => utf16_range(label, *start, *end),
+            ParameterLabel::Simple(name) => find_token(label, from, name),
+        };
+        if let Some(range) = &found {
+            from = from.max(range.end);
+        }
+    }
+    found
+}
+
+/// The first `name` in `text` at or after `from` that is not part of a longer identifier.
+fn find_token(text: &str, from: usize, name: &str) -> Option<std::ops::Range<usize>> {
+    if name.is_empty() {
+        return None;
+    }
+    let word = |c: char| c.is_alphanumeric() || c == '_';
+    let (starts_word, ends_word) = (name.chars().next().is_some_and(word), name.chars().last().is_some_and(word));
+    let mut at = from;
+    while let Some(offset) = text.get(at..)?.find(name) {
+        let start = at + offset;
+        let end = start + name.len();
+        let before = text[..start].chars().next_back();
+        let after = text[end..].chars().next();
+        if !(starts_word && before.is_some_and(word)) && !(ends_word && after.is_some_and(word)) {
+            return Some(start..end);
+        }
+        at = start + name.chars().next().map_or(1, char::len_utf8);
+    }
+    None
+}
+
 /// What the editor shows for a server's signature help; `None` when there is no signature.
 pub(crate) fn popup_from(help: SignatureHelp) -> Option<SignaturePopup> {
     let count = help.signatures.len();
@@ -192,16 +232,10 @@ pub(crate) fn popup_from(help: SignatureHelp) -> Option<SignaturePopup> {
     let index = (help.active_signature.unwrap_or(0) as usize).min(count - 1);
     let signature = &help.signatures[index];
     let parameter_index = signature.active_parameter.or(help.active_parameter).unwrap_or(0) as usize;
-    let parameter = signature.parameters.as_ref().and_then(|parameters| parameters.get(parameter_index));
+    let parameters = signature.parameters.as_deref().unwrap_or_default();
+    let parameter = parameters.get(parameter_index);
     let label = signature.label.clone();
-    let active = parameter.and_then(|parameter| match &parameter.label {
-        ParameterLabel::Simple(name) => {
-            // Searched after the opening parenthesis, so a parameter named like the function is not taken for it.
-            let open = label.find('(').map_or(0, |at| at + 1);
-            label[open..].find(name.as_str()).map(|at| open + at..open + at + name.len())
-        }
-        ParameterLabel::LabelOffsets([start, end]) => utf16_range(&label, *start, *end),
-    });
+    let active = parameter.and_then(|_| parameter_range(&label, &parameters[..=parameter_index]));
     let documentation = parameter.and_then(|parameter| parameter.documentation.as_ref()).or(signature.documentation.as_ref()).map(documentation_text);
     Some(SignaturePopup { label, active, documentation, overload: (count > 1).then_some((index, count)) })
 }
@@ -218,6 +252,21 @@ mod tests {
             parameters: Some(parameters.into_iter().map(|label| ParameterInformation { label, documentation: None }).collect()),
             active_parameter: None,
         }
+    }
+
+    #[test]
+    fn a_parameter_given_as_text_is_found_as_a_whole_token_after_the_ones_before() {
+        let active = |label: &str, names: &[&str], index: u32| {
+            let help = SignatureHelp { signatures: vec![signature(label, names.iter().map(|n| ParameterLabel::Simple((*n).into())).collect())], active_signature: None, active_parameter: Some(index) };
+            let popup = popup_from(help).unwrap();
+            popup.active.map(|range| (range.start, popup.label[range].to_string()))
+        };
+        // Not the `a` inside `data`.
+        assert_eq!(active("foo(data, a)", &["data", "a"], 1), Some((10, "a".into())));
+        // Not the `x` in the first parameter's type.
+        assert_eq!(active("f(m: Map<x>, x)", &["m: Map<x>", "x"], 1), Some((13, "x".into())));
+        assert_eq!(active("g(*args, **kwargs)", &["*args", "**kwargs"], 1), Some((9, "**kwargs".into())));
+        assert_eq!(active("h(a)", &["b"], 0), None);
     }
 
     #[test]

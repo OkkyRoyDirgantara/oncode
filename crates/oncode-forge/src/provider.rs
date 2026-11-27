@@ -4,7 +4,7 @@ use crate::error::{ForgeError, Result};
 use crate::github::GitHubProvider;
 use crate::gitlab::GitLabProvider;
 use crate::model::{
-    Account, Check, ForgeHost, ForgeKind, MergeInput, NewPullRequest, Page, PrFilter, PullRequest, PullRequestDetail, RemoteRepo,
+    Account, Check, ForgeHost, ForgeKind, MergeInput, MergeOutcome, NewPullRequest, Page, PrFilter, PullRequest, PullRequestDetail, RemoteRepo,
     RepoRef, ReviewComment, ReviewInput,
 };
 
@@ -41,8 +41,9 @@ pub trait ForgeProvider: Send + Sync {
     /// The repository's default branch (to pre-fill the target branch).
     async fn default_branch(&self, repo: &RepoRef) -> Result<String>;
 
-    /// Merges a PR/MR (and deletes its source branch if asked and possible).
-    async fn merge_pull_request(&self, repo: &RepoRef, number: u32, input: &MergeInput) -> Result<()>;
+    /// Merges a PR/MR (and deletes its source branch if asked and possible). An error means it was not
+    /// merged; a branch that could not be deleted afterwards is reported in the outcome instead.
+    async fn merge_pull_request(&self, repo: &RepoRef, number: u32, input: &MergeInput) -> Result<MergeOutcome>;
 
     /// The line comments of a PR/MR, oldest first.
     async fn list_review_comments(&self, repo: &RepoRef, number: u32) -> Result<Vec<ReviewComment>>;

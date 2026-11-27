@@ -444,7 +444,7 @@ impl PullRequestTab {
             message: None,
             delete_branch: self.delete_branch && !pr.is_cross_repo,
         };
-        let (core, params) = (self.env.core.clone(), self.params.clone());
+        let (core, params, source_branch) = (self.env.core.clone(), self.params.clone(), pr.source_branch.clone());
         cx.spawn_in(window, async move |this, cx| {
             if !question.await {
                 return;
@@ -458,8 +458,11 @@ impl PullRequestTab {
             let _ = this.update_in(cx, |this, window, cx| {
                 this.sending = false;
                 match result {
-                    Ok(()) => {
+                    Ok(outcome) => {
                         overlay::toast_success(format!("The {noun} was merged."), window, cx);
+                        if let Some(reason) = outcome.branch_kept {
+                            overlay::toast_warning(format!("The branch {source_branch} was not deleted: {reason}"), window, cx);
+                        }
                         this.reload(cx);
                         oncode_ui::commands::execute("forge.refresh", serde_json::Value::Null, window, cx);
                     }
@@ -595,7 +598,7 @@ const MERGE_STATE_POLL_DELAY: std::time::Duration = std::time::Duration::from_se
 fn merge_state_text(state: MergeState) -> &'static str {
     match state {
         MergeState::Clean => "Ready to merge.",
-        MergeState::Blocked => "Blocked: required reviews or rules are not met yet.",
+        MergeState::Blocked => "Blocked: required reviews, checks, or other rules are not met yet.",
         MergeState::Behind => "The source branch is behind the target and must be updated first.",
         MergeState::Conflicts => "There are conflicts with the target branch.",
         MergeState::Unstable => "Checks are failing or still running.",
