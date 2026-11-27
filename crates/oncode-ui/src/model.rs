@@ -185,7 +185,9 @@ impl Model {
         let group = self.group_mut(group_id).expect("the group exists");
         if let Some(existing) = group.tabs.iter_mut().find(|t| t.id == id) {
             let keep_preview = existing.preview && tab.preview;
-            *existing = TabData { preview: keep_preview, ..tab };
+            // Parameters the opener does not mention (e.g. whether a file is shown as an image or as text) stay as they were.
+            let params = merge_params(std::mem::take(&mut existing.params), tab.params);
+            *existing = TabData { preview: keep_preview, params, ..tab };
             if !background {
                 group.active = Some(id);
             }
@@ -233,6 +235,14 @@ impl Model {
             }
         }
         changed
+    }
+
+    /// Changes one tab of one group (its id stays the same). `false` if the group does not hold that tab.
+    pub fn update_tab(&mut self, group_id: u32, id: &str, change: impl FnOnce(&mut TabData)) -> bool {
+        let Some(tab) = self.group_mut(group_id).and_then(|g| g.tabs.iter_mut().find(|t| t.id == id)) else { return false };
+        change(tab);
+        tab.id = id.to_string();
+        true
     }
 
     /// Changes tabs in all groups (e.g. after a file is renamed). The active id is updated too.
@@ -382,6 +392,19 @@ pub enum DropZone {
     Split(SplitSide),
 }
 
+/// `new` with the keys of `old` that `new` does not have.
+fn merge_params(old: Value, new: Value) -> Value {
+    match (old, new) {
+        (Value::Object(old), Value::Object(mut new)) => {
+            for (key, value) in old {
+                new.entry(key).or_insert(value);
+            }
+            Value::Object(new)
+        }
+        (_, new) => new,
+    }
+}
+
 /// The drop zone by the pointer's relative position over the group content (`x`, `y` in 0..1): near an edge
 /// means splitting toward that side (if that direction is allowed), otherwise it goes into the group.
 pub fn drop_zone(x: f32, y: f32, horizontal: bool, vertical: bool) -> DropZone {
@@ -432,6 +455,22 @@ mod tests {
         m.open(file("a"), &OpenOptions::default());
         assert_eq!(ids(&m, 1), ["a", "b"]);
         assert_eq!(m.active().unwrap().1.title, "a");
+    }
+
+    #[test]
+    fn reopening_a_tab_keeps_parameters_the_opener_does_not_mention() {
+        let mut m = Model::default();
+        m.open(file("a.svg"), &OpenOptions::default());
+        assert!(m.update_tab(1, &file("a.svg").id, |tab| tab.params["view"] = json!("text")));
+        m.open(file("a.svg"), &OpenOptions::default());
+        assert_eq!(m.group(1).unwrap().tabs[0].param_str("view"), Some("text"));
+        // A parameter the opener does mention wins.
+        let mut image = file("a.svg");
+        image.params["view"] = json!("image");
+        m.open(image, &OpenOptions::default());
+        assert_eq!(m.group(1).unwrap().tabs[0].param_str("view"), Some("image"));
+        assert!(!m.update_tab(2, &file("a.svg").id, |_| {}), "no such group");
+        assert!(!m.update_tab(1, "missing", |_| {}), "no such tab");
     }
 
     #[test]

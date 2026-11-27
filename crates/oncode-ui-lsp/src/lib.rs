@@ -21,7 +21,7 @@ use oncode_lsp::position::position_at;
 use oncode_lsp::uri::{path_to_lsp_uri, uri_to_path};
 use oncode_lsp::Feature;
 use oncode_ui::commands::Command;
-use oncode_ui::editor::{active_file, language_for_path, open_file, Buffer, FormatOutcome, OpenFile};
+use oncode_ui::editor::{active_file, active_text_file, language_for_path, open_file, Buffer, FormatOutcome, OpenFile};
 use oncode_ui::overlay::{self, TextPrompt};
 use oncode_ui::quick_pick::{quick_pick, PickItem, QuickPickOptions};
 use oncode_ui::{spawn_core, Lucide, PanelView, StatusAlign, StatusItem, Workbench};
@@ -108,13 +108,13 @@ fn setup(workbench: &mut Workbench, window: &mut Window, cx: &mut Context<Workbe
         let hub = hub.clone();
         move |window: &Window, cx: &App| {
             let Some(workbench) = Workbench::for_window(window, cx) else { return false };
-            let Some((_, buffer, _)) = active_file(workbench.read(cx), cx) else { return false };
+            let Some((_, buffer, _)) = active_text_file(workbench.read(cx), cx) else { return false };
             hub.read(cx).server_for_path(buffer.read(cx).path()).is_some()
         }
     };
     let editor_focused = |window: &Window, cx: &App| {
         let Some(workbench) = Workbench::for_window(window, cx) else { return false };
-        active_file(workbench.read(cx), cx).is_some_and(|(_, _, state)| state.focus_handle(cx).is_focused(window))
+        active_text_file(workbench.read(cx), cx).is_some_and(|(_, _, state)| state.focus_handle(cx).is_focused(window))
     };
     // "Go to Definition" (F12) and "Format Document" are registered by the editor: both also work
     // without a server (project search, the Formatters extension); this server is one of their providers.
@@ -148,7 +148,7 @@ struct Active {
 fn active(feature: Feature, unsupported: &str, window: &mut Window, cx: &mut App) -> Option<Active> {
     let workbench = Workbench::for_window(window, cx)?;
     let hub = hub(workbench.read(cx))?;
-    let (_, buffer, state) = active_file(workbench.read(cx), cx)?;
+    let (_, buffer, state) = active_text_file(workbench.read(cx), cx)?;
     let path = buffer.read(cx).path().to_string();
     let language = language_for_path(&path).lsp.to_string();
     let text = state.read(cx).text().clone();
@@ -454,7 +454,7 @@ impl LspStatus {
 
 impl Render for LspStatus {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let Some(path) = self.workbench.upgrade().and_then(|w| active_file(w.read(cx), cx)).map(|(_, buffer, _)| buffer.read(cx).path().to_string()) else {
+        let Some(path) = self.workbench.upgrade().and_then(|w| active_text_file(w.read(cx), cx)).map(|(_, buffer, _)| buffer.read(cx).path().to_string()) else {
             return div().into_any_element();
         };
         let language = language_for_path(&path).lsp;

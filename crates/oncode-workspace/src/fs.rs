@@ -149,6 +149,22 @@ fn open_file_sync(path: &Path, max_bytes: u64) -> Result<OpenedFile> {
     }
 }
 
+/// Reads a whole file as bytes (e.g. an image to show). Fails if it is larger than `max_bytes`.
+pub async fn read_bytes(path: &Path, max_bytes: u64) -> Result<Vec<u8>> {
+    let path = path.to_path_buf();
+    blocking(move || {
+        let meta = fs::metadata(&path).map_err(|e| WsError::io(&path, e))?;
+        if !meta.is_file() {
+            return Err(WsError::invalid_path(format!("Not a regular file: {}", path.display())));
+        }
+        if meta.len() > max_bytes {
+            return Err(WsError::other(format!("File is too large to read: {}", path.display())));
+        }
+        fs::read(&path).map_err(|e| WsError::io(&path, e))
+    })
+    .await
+}
+
 struct Decoded {
     text: String,
     encoding: &'static Encoding,
@@ -766,6 +782,17 @@ mod tests {
         write(&path, "a\rb\n");
         let file = text_of(open_file(&path, MAX).await.unwrap());
         assert_eq!((file.text.as_str(), file.eol), ("a\nb\n", Eol::Lf));
+    }
+
+    #[tokio::test]
+    async fn reads_bytes_up_to_the_limit() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("image.png");
+        write(&path, b"\x89PNG\r\n\x1a\n\0\0");
+        assert_eq!(read_bytes(&path, 10).await.unwrap(), b"\x89PNG\r\n\x1a\n\0\0");
+        assert_eq!(read_bytes(&path, 9).await.unwrap_err().code, WsErrorCode::Io, "larger than the limit");
+        assert_eq!(read_bytes(&tmp.path().join("missing.png"), 10).await.unwrap_err().code, WsErrorCode::NotFound);
+        assert_eq!(read_bytes(tmp.path(), 10).await.unwrap_err().code, WsErrorCode::InvalidPath, "a folder");
     }
 
     #[tokio::test]

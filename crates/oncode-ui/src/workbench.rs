@@ -112,6 +112,11 @@ pub trait TabKind: 'static {
     fn split_copy(&self, tab: &TabData) -> Option<TabData> {
         Some(tab.clone())
     }
+    /// The tab's content must be built again because its data changed from `built` (what the content
+    /// was built from) to `now`, e.g. a file shown as an image is now shown as text. Default: never.
+    fn rebuild(&self, _built: &TabData, _now: &TabData) -> bool {
+        false
+    }
 }
 
 /// A tab being dragged. Other features may create it to drag something into the editor area
@@ -337,6 +342,8 @@ pub fn register_tab_kind(cx: &mut App, kind: &str, builder: impl TabKind) {
 
 struct Slot {
     content: Box<dyn TabContent>,
+    /// The tab's data as of the last sync (see [`TabKind::rebuild`]).
+    tab: TabData,
     _subscription: Option<Subscription>,
 }
 
@@ -625,6 +632,21 @@ impl Workbench {
         }
     }
 
+    /// Changes one tab in one group (not its id), e.g. how its content is shown. Its content is built
+    /// again if its kind asks for that (see [`TabKind::rebuild`]).
+    pub fn update_tab(&mut self, group: u32, id: &str, change: impl FnOnce(&mut TabData), window: &mut Window, cx: &mut Context<Self>) {
+        if !self.model.update_tab(group, id, change) {
+            return;
+        }
+        self.sync_slots(window, cx);
+        if self.model.active().is_some_and(|(g, tab)| g.id == group && tab.id == id) {
+            self.focus_active(window, cx);
+        }
+        cx.emit(WorkbenchEvent::TabsChanged);
+        cx.emit(WorkbenchEvent::ActiveTabChanged);
+        cx.notify();
+    }
+
     /// Changes tabs in all groups (e.g. after a file is renamed).
     pub fn update_tabs(&mut self, change: impl FnMut(&TabData) -> Option<TabData>, window: &mut Window, cx: &mut Context<Self>) {
         self.model.update_tabs(change);
@@ -854,10 +876,15 @@ impl Workbench {
         self.slots.retain(|(group, id), _| wanted.iter().any(|(g, t)| g == group && &t.id == id));
         for (group, tab) in wanted {
             let key = (group, tab.id.clone());
-            if self.slots.contains_key(&key) {
-                continue;
-            }
             let kind = cx.global::<TabKinds>().0.get(&tab.kind).cloned();
+            if let Some(slot) = self.slots.get_mut(&key) {
+                if !kind.as_ref().is_some_and(|kind| kind.rebuild(&slot.tab, &tab)) {
+                    slot.tab = tab;
+                    continue;
+                }
+                // Built again below; the old content is dropped only after the new one exists, so state they
+                // share (e.g. a file's buffer) stays alive.
+            }
             for prepare in self.before_build.clone() {
                 prepare(cx);
             }
@@ -872,7 +899,7 @@ impl Workbench {
                 }),
                 cx,
             );
-            self.slots.insert(key, Slot { content, _subscription: subscription });
+            self.slots.insert(key, Slot { content, tab, _subscription: subscription });
         }
     }
 

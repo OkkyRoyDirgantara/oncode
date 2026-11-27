@@ -456,6 +456,10 @@ impl Buffer {
                         (tab.kind == "file" && tab.param_str("path") == Some(from.as_str())).then(|| {
                             let mut next = crate::shell::file_tab(&to);
                             next.preview = false;
+                            // It was being edited as text; it stays that way even if the new name is an image's (e.g. an SVG).
+                            if super::image::is_image(&to) {
+                                super::image::set_file_mode(&mut next, super::image::FileMode::Text);
+                            }
                             next
                         })
                     },

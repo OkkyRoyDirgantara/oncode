@@ -32,6 +32,10 @@ serde_json.workspace = true
 tokio.workspace = true
 # Same version gpui-component uses for the editor's LSP hooks.
 lsp-types = { version = "0.97", features = ["proposed"] }
+# Image files (`editor/image.rs`): the same versions GPUI decodes and rasterizes with, so nothing extra is
+# compiled. `image` scales oversized pictures down; `usvg` reads an SVG's own size.
+image = { version = "0.25", default-features = false }
+usvg = { version = "0.46", default-features = false }
 
 # Only used by the test helpers (`testing.rs`).
 tempfile = { workspace = true, optional = true }

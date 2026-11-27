@@ -5474,6 +5474,7 @@ name = "oncode-ui"
 version = "0.2.0"
 dependencies = [
  "gpui-kit",
+ "image",
  "lsp-types",
  "oncode-core",
  "oncode-forge",
@@ -5486,6 +5487,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "tree-sitter-dart",
+ "usvg 0.46.0",
 ]
 
 [[package]]

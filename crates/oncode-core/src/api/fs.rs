@@ -25,6 +25,12 @@ pub async fn fs_open(core: &Shared, window: &str, path: String) -> AppResult<Ope
     Ok(oncode_workspace::open_file(&path, MAX_OPEN_BYTES).await?)
 }
 
+/// The raw bytes of a file (e.g. an image to show), within the same size limit as [`fs_open`].
+pub async fn fs_read_bytes(core: &Shared, window: &str, path: String) -> AppResult<Vec<u8>> {
+    let path = core.resolve(window, &path)?;
+    Ok(oncode_workspace::read_bytes(&path, MAX_OPEN_BYTES).await?)
+}
+
 pub async fn fs_save(
     core: &Shared,
     window: &str,

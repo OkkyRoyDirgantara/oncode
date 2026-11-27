@@ -1,4 +1,4 @@
-//! The file tab view: a code editor on top of a [`Buffer`].
+//! The file tab view: a code editor on top of a [`Buffer`], or the picture of an image file.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -14,6 +14,7 @@ use gpui_kit::{
 use oncode_core::settings::EditorSettings;
 
 use super::buffer::{Buffer, BufferEvent, BufferStatus, Buffers, BuffersEvent, Reveal};
+use super::image::ImageView;
 use super::language::language_for_path;
 use crate::overlay::{self, Choice};
 use crate::workbench::{Env, TabContent, WorkbenchEvent};
@@ -39,7 +40,7 @@ fn resolve_font(setting: &str, cx: &mut App) -> Option<SharedString> {
     found
 }
 
-fn format_size(bytes: u32) -> String {
+pub(crate) fn format_size(bytes: u32) -> String {
     if bytes >= 1024 * 1024 {
         format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
     } else if bytes >= 1024 {
@@ -54,6 +55,8 @@ pub struct FileView {
     buffers: Entity<Buffers>,
     buffer: Entity<Buffer>,
     state: Entity<EditorState>,
+    /// Shown instead of the editor when the tab shows the file as a picture.
+    image: Option<Entity<ImageView>>,
     settings: EditorSettings,
     /// The end-of-line hint painted in the last frame, with its position (for tests).
     painted_hint: Rc<RefCell<Option<(SharedString, Bounds<Pixels>)>>>,
@@ -98,8 +101,10 @@ fn line_end(state: &mut EditorState, row: usize, window: &mut Window, cx: &mut C
 }
 
 impl FileView {
-    pub fn new(path: &str, env: Env, buffers: Entity<Buffers>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    /// `as_image`: show the file as a picture (see [`super::image::file_mode`]).
+    pub fn new(path: &str, env: Env, buffers: Entity<Buffers>, as_image: bool, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let buffer = buffers.update(cx, |buffers, cx| buffers.open(path, window, cx));
+        let image = as_image.then(|| cx.new(|cx| ImageView::new(path, env.clone(), buffer.clone(), window, cx)));
         let settings = EditorSettings::default();
         // The effective settings are read from the core: `Workbench` is borrowed while tabs are built.
         let extra_languages = env.core.effective_settings(&env.window).extensions.extra_languages;
@@ -114,9 +119,12 @@ impl FileView {
                 .tab_size(TabSize { tab_size: settings.tab_size as usize, hard_tabs: !settings.insert_spaces })
         });
         buffer.update(cx, |buffer, cx| buffer.attach(&state, window, cx));
-        // Ctrl+click/F12 without a language server; the LSP hub overrides it on `editor_created` if there is a server.
-        super::symbols::attach(&state, &env, path, cx);
-        buffers.update(cx, |buffers, cx| buffers.editor_created(buffer.clone(), state.clone(), cx));
+        // A picture has no visible editor: no language server, definitions, or change markers for it.
+        if image.is_none() {
+            // Ctrl+click/F12 without a language server; the LSP hub overrides it on `editor_created` if there is a server.
+            super::symbols::attach(&state, &env, path, cx);
+            buffers.update(cx, |buffers, cx| buffers.editor_created(buffer.clone(), state.clone(), cx));
+        }
 
         let mut subscriptions = vec![
             cx.observe(&buffer, |_, _, cx| cx.notify()),
@@ -152,7 +160,7 @@ impl FileView {
             }));
         }
 
-        let mut this = Self { env, buffers, buffer, state, settings, painted_hint: Rc::default(), _subscriptions: subscriptions };
+        let mut this = Self { env, buffers, buffer, state, image, settings, painted_hint: Rc::default(), _subscriptions: subscriptions };
         // `Workbench` is borrowed while tabs are built; the settings are read afterwards.
         cx.defer_in(window, |this, window, cx| {
             if let Some(workbench) = this.env.workbench.upgrade() {
@@ -173,6 +181,11 @@ impl FileView {
         &self.state
     }
 
+    /// The picture, when this tab shows the file as an image rather than as text.
+    pub fn image(&self) -> Option<&Entity<ImageView>> {
+        self.image.as_ref()
+    }
+
     fn apply_settings(&mut self, settings: EditorSettings, window: &mut Window, cx: &mut Context<Self>) {
         if settings == self.settings {
             return;
@@ -188,7 +201,8 @@ impl FileView {
 
     /// Jumps to the pending position for this file, if there is one and its content has been loaded.
     fn apply_reveal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.buffer.read(cx).is_ready() {
+        // A position belongs to a view showing the text.
+        if self.image.is_some() || !self.buffer.read(cx).is_ready() {
             return;
         }
         let path = self.buffer.read(cx).path().to_string();
@@ -277,7 +291,10 @@ impl FileView {
 
 impl Focusable for FileView {
     fn focus_handle(&self, cx: &App) -> FocusHandle {
-        self.state.focus_handle(cx)
+        match &self.image {
+            Some(image) => image.focus_handle(cx),
+            None => self.state.focus_handle(cx),
+        }
     }
 }
 
@@ -291,27 +308,32 @@ impl Render for FileView {
         let font = resolve_font(&self.settings.font_family, cx).unwrap_or_else(|| cx.theme().mono_font_family.clone());
         let font_size = px(self.settings.font_size.clamp(8, 40) as f32);
 
-        let body = match status {
-            BufferStatus::Loading => v_flex().size_full().items_center().justify_center().child(Spinner::new()).into_any_element(),
-            BufferStatus::Binary { size } => self.render_message(format!("{name} is a binary file ({}) and cannot be shown in the editor.", format_size(size)), None, cx),
-            BufferStatus::TooLarge { size } => self.render_message(format!("{name} is too large to open ({}).", format_size(size)), None, cx),
-            BufferStatus::Error(message) => {
-                let retry = Button::new("file-retry").label("Try Again").outline().on_click(cx.listener(|this, _, window, cx| {
-                    this.buffer.update(cx, |buffer, cx| buffer.reload(window, cx));
-                }));
-                self.render_message(format!("Could not open {name}: {message}"), Some(retry), cx)
-            }
-            BufferStatus::Ready => {
-                *self.painted_hint.borrow_mut() = None;
-                let color = cx.theme().muted_foreground.opacity(0.6);
-                let hint = self.cursor_line_hint(cx).map(|(row, text)| self.line_hint_layer(row, text, font.clone(), font_size, color));
-                div()
-                    .relative()
-                    .size_full()
-                    .child(Editor::new(&self.state).readonly(read_only).bordered(false).p_0().h(relative(1.)).font_family(font).text_size(font_size))
-                    .children(hint)
-                    .into_any_element()
-            }
+        // An image file is shown by its picture view, which reads the file itself (it is usually not text).
+        let picture = self.image.clone().filter(|_| matches!(status, BufferStatus::Ready | BufferStatus::Binary { .. }));
+        let body = match picture {
+            Some(picture) => picture.into_any_element(),
+            None => match status {
+                BufferStatus::Loading => v_flex().size_full().items_center().justify_center().child(Spinner::new()).into_any_element(),
+                BufferStatus::Binary { size } => self.render_message(format!("{name} is a binary file ({}) and cannot be shown in the editor.", format_size(size)), None, cx),
+                BufferStatus::TooLarge { size } => self.render_message(format!("{name} is too large to open ({}).", format_size(size)), None, cx),
+                BufferStatus::Error(message) => {
+                    let retry = Button::new("file-retry").label("Try Again").outline().on_click(cx.listener(|this, _, window, cx| {
+                        this.buffer.update(cx, |buffer, cx| buffer.reload(window, cx));
+                    }));
+                    self.render_message(format!("Could not open {name}: {message}"), Some(retry), cx)
+                }
+                BufferStatus::Ready => {
+                    *self.painted_hint.borrow_mut() = None;
+                    let color = cx.theme().muted_foreground.opacity(0.6);
+                    let hint = self.cursor_line_hint(cx).map(|(row, text)| self.line_hint_layer(row, text, font.clone(), font_size, color));
+                    div()
+                        .relative()
+                        .size_full()
+                        .child(Editor::new(&self.state).readonly(read_only).bordered(false).p_0().h(relative(1.)).font_family(font).text_size(font_size))
+                        .children(hint)
+                        .into_any_element()
+                }
+            },
         };
 
         v_flex()
@@ -352,6 +374,10 @@ impl TabContent for FileTab {
     }
 
     fn focus(&self, window: &mut Window, cx: &mut App) {
+        if let Some(image) = self.view.read(cx).image.clone() {
+            image.focus_handle(cx).focus(window, cx);
+            return;
+        }
         let state = self.view.read(cx).state.clone();
         state.update(cx, |state, cx| state.focus(window, cx));
     }

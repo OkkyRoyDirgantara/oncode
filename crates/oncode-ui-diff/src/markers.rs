@@ -13,7 +13,7 @@ use gpui_kit::component::{h_flex, ActiveTheme as _, Icon, Sizable as _};
 use gpui_kit::{div, App, AppContext as _, Context, Entity, EventEmitter, InteractiveElement as _, StatefulInteractiveElement as _, IntoElement, ParentElement as _, Render, Styled as _, Subscription, Task, TestSupportExt as _, WeakEntity, Window};
 use oncode_core::api::git as git_api;
 use oncode_git::{BlameRange, DiffSource};
-use oncode_ui::editor::{active_file, buffers, Buffer, BufferEvent, Buffers, BuffersEvent};
+use oncode_ui::editor::{active_file, active_text_file, buffers, Buffer, BufferEvent, Buffers, BuffersEvent};
 use oncode_ui::{overlay, repos, spawn_core, Env, Lucide, ReposEvent, StatusAlign, StatusItem, Workbench, WorkbenchEvent};
 
 use crate::gutter::{blame_at, blame_label, blame_summary, gutter_ranges, inline_blame_text, repo_for_path, ChangeKind};
@@ -377,7 +377,7 @@ impl BlameStatus {
         if let Some(entity) = workbench.upgrade() {
             subscriptions.push(cx.subscribe_in(&entity, window, |this: &mut Self, workbench, event: &WorkbenchEvent, _, cx| {
                 if matches!(event, WorkbenchEvent::ActiveTabChanged | WorkbenchEvent::TabsChanged) {
-                    this._state = active_file(workbench.read(cx), cx).map(|(_, _, state)| cx.observe(&state, |_, _, cx| cx.notify()));
+                    this._state = active_text_file(workbench.read(cx), cx).map(|(_, _, state)| cx.observe(&state, |_, _, cx| cx.notify()));
                     cx.notify();
                 }
             }));
@@ -388,7 +388,7 @@ impl BlameStatus {
 
 impl Render for BlameStatus {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let Some((view, buffer, _)) = self.workbench.upgrade().and_then(|w| active_file(w.read(cx), cx)) else { return div().into_any_element() };
+        let Some((view, buffer, _)) = self.workbench.upgrade().and_then(|w| active_text_file(w.read(cx), cx)) else { return div().into_any_element() };
         let path = buffer.read(cx).path().to_string();
         let (line, _, _) = view.read(cx).cursor_info(cx);
         let now = now();

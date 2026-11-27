@@ -114,7 +114,7 @@ The v0.2 end-to-end tests (34 scenarios in `e2e/`) become the **parity checklist
 - Hot exit: unsaved changes are not backed up when the app is closed.
 - In the Graph: dragging a branch onto a branch, hash search, date filters.
 - Inline review comments and merging pull requests from the app.
-- Bisect, `git log -L`, dedicated LFS support, `.editorconfig`, image and Markdown previews.
+- Bisect, `git log -L`, dedicated LFS support, `.editorconfig`. (Image and Markdown previews were listed here at first; both exist now: the `oncode-ui-markdown` extension, and image files in the editor, see [4.6](#46-file-buffers).)
 - Splitting the editor in more than one direction at once.
 
 ---
@@ -301,6 +301,8 @@ sequenceDiagram
 In GPUI, editor state is an entity (`Entity<EditorState>`) and the view is just an element that refers to it. For that reason one file needs only **one** state entity, shared by all tabs and splits that show it. The cross-editor synchronization mechanism of v0.2 is no longer needed.
 
 The buffer registry (in `app/features/editor`) maps paths to entities, counts usage, and keeps the last saved content, encoding, and line endings. The v0.2 rules remain: a clean buffer is reloaded when the file changes on disk; a buffer with changes is marked as conflicting and the user chooses.
+
+**Image files** (`crates/oncode-ui/src/editor/image.rs`) are still `file` tabs, so the Explorer, quick open, drag and drop, renames, deletes, and the session treat them like any other file. The tab's `view` parameter (`"image"` or `"text"`) says how it is shown; without it, an image extension means a picture. The file view then shows an `ImageView` instead of the editor, on top of the same buffer: a raster image is read from disk (through `fs_read_bytes`, confined to the project folder like `fs_open`) and decoded off the UI thread, an SVG is drawn from the buffer text, so its picture follows unsaved edits. A buffer reload (the file changed on disk) reloads the picture. Switching an SVG between picture and text (**Open as Text** / **Open as Image**, also tab bar buttons) changes only that group's tab; `TabKind::rebuild` builds its content again, and reopening the tab keeps the parameter (`Model::open` keeps parameters the opener does not mention). Opening at a position (search result, definition) shows the text. A picture creates no editor for the language servers or change markers (`BuffersEvent::EditorCreated` is not sent), so opening an SVG does not start an XML server. Pictures longer than 8192 px on a side are scaled down before they go to the GPU; an SVG is rasterized again at a higher scale when zooming in needs it.
 
 ---
 
@@ -679,6 +681,7 @@ All feature crates are wired into the app (`app/src/main.rs`) and have headless 
 | LSP and Problems | `oncode-lsp`, `oncode-ui-lsp` | diagnostics and Problems; go to definition across files; rename in open and closed files |
 | GitHub/GitLab | `oncode-ui-forge` | GitLab token login, MR list and details; GitHub device-flow login; push using the account token |
 | Settings | `oncode-ui-settings` | settings persist; settings without a folder |
+| Image files: picture with zoom, SVG picture/text | `oncode-ui` (`editor/image.rs`) | none in v0.2 (new); tests in `crates/oncode-ui/tests/image.rs` |
 
 ### 15.4 Different from v0.2 or not yet done
 

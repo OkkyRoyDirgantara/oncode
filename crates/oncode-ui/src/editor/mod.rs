@@ -1,15 +1,17 @@
-//! The editor feature: the `file` tab kind, saving, the status bar, and reacting to file
-//! changes from outside.
+//! The editor feature: the `file` tab kind (text, or the picture of an image file), saving, the status bar,
+//! and reacting to file changes from outside.
 
 mod buffer;
 pub mod format;
+pub mod image;
 mod language;
 pub mod lines;
 pub mod symbols;
 mod view;
 
 use gpui_kit::component::input::{EditorState, RopeExt as _};
-use gpui_kit::component::{h_flex, ActiveTheme as _};
+use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::{h_flex, ActiveTheme as _, Sizable as _};
 use gpui_kit::{div, App, AppContext as _, ClipboardItem, Context, Entity, Focusable as _, IntoElement, ParentElement as _, Render, SharedString, Styled as _, Subscription, WeakEntity, Window};
 use oncode_core::settings::AutoSave;
 use oncode_workspace::Eol;
@@ -17,6 +19,7 @@ use serde_json::Value;
 
 pub use buffer::{file_path, is_untitled, Buffer, BufferEvent, BufferStatus, Buffers, BuffersEvent, ExternalChange, LineHintProvider, Reveal, LARGE_FILE_BYTES, UNTITLED_PREFIX};
 pub use format::{format_buffer, register_format_provider, save_with_format, FormatOutcome, EXTERNAL_PRIORITY, LSP_PRIORITY};
+pub use image::{file_mode, is_image, is_svg, set_file_mode, FileMode, ImageInfo, ImageView, Zoom};
 pub use language::{language_for_path, LanguageInfo};
 pub use symbols::{same_path, show_document_handler, symbol_definition_links, SymbolSearchProvider};
 pub use view::{FileTab, FileView};
@@ -68,7 +71,12 @@ pub fn open_file(workbench: &mut Workbench, mut options: OpenFile, window: &mut 
         let path = options.path.clone();
         buffers.update(cx, |buffers, cx| buffers.set_reveal(&path, reveal, cx));
     }
-    workbench.open_tab(file_tab(&options.path), OpenOptions { preview: options.preview, to_side: options.to_side, ..Default::default() }, window, cx);
+    let mut tab = file_tab(&options.path);
+    // Going to a position (a search match, a definition) needs the text of an SVG, not its picture.
+    if options.reveal.is_some() && is_svg(&options.path) {
+        set_file_mode(&mut tab, FileMode::Text);
+    }
+    workbench.open_tab(tab, OpenOptions { preview: options.preview, to_side: options.to_side, ..Default::default() }, window, cx);
 }
 
 /// The buffer registry of this window.
@@ -76,7 +84,20 @@ pub fn buffers(workbench: &Workbench) -> Option<Entity<Buffers>> {
     workbench.extension::<Entity<Buffers>>()
 }
 
-/// The file in the active tab: its view, buffer, and editor state.
+/// Like [`active_file`], but only while the file is shown as text, not as a picture: for features that work
+/// on the editor (language servers, blame, editing commands).
+pub fn active_text_file(workbench: &Workbench, cx: &App) -> Option<(Entity<FileView>, Entity<Buffer>, Entity<EditorState>)> {
+    active_file(workbench, cx).filter(|(view, _, _)| view.read(cx).image().is_none())
+}
+
+/// The picture in the active tab, if it shows an image file as an image.
+pub fn active_image(workbench: &Workbench, cx: &App) -> Option<Entity<ImageView>> {
+    let (view, _, _) = active_file(workbench, cx)?;
+    view.read(cx).image().cloned()
+}
+
+/// The file in the active tab: its view, buffer, and editor state. Also for a file shown as a picture
+/// (see [`active_image`]); its editor state is then not visible (see [`active_text_file`]).
 pub fn active_file(workbench: &Workbench, cx: &App) -> Option<(Entity<FileView>, Entity<Buffer>, Entity<EditorState>)> {
     let tab = workbench.active_content()?.as_any().downcast_ref::<FileTab>()?;
     let state = tab.view.read(cx).state().clone();
@@ -91,7 +112,8 @@ impl TabKind for FileKind {
         // The buffer registry is installed by `setup` before any tab is built.
         let buffers = cx.global::<PendingBuffers>().0.clone().expect("buffer registry is not installed yet");
         let env = env.clone();
-        let view = cx.new(|cx| FileView::new(&path, env, buffers, window, cx));
+        let as_image = file_mode(tab) == FileMode::Image;
+        let view = cx.new(|cx| FileView::new(&path, env, buffers, as_image, window, cx));
         let buffer = view.read(cx).buffer().clone();
         Box::new(FileTab { view, buffer })
     }
@@ -102,6 +124,11 @@ impl TabKind for FileKind {
 
     fn image(&self, tab: &TabData) -> Option<SharedString> {
         Some(crate::file_icons::file_icon_path(tab.param_str("path").unwrap_or_default()))
+    }
+
+    /// Switching between the picture and the text of an image file builds the view again.
+    fn rebuild(&self, built: &TabData, now: &TabData) -> bool {
+        file_mode(built) != file_mode(now)
     }
 }
 
@@ -149,6 +176,11 @@ fn setup(workbench: &mut Workbench, window: &mut Window, cx: &mut Context<Workbe
         let weak = weak.clone();
         move |_: &Window, cx: &App| weak.upgrade().is_some_and(|w| active_file(w.read(cx), cx).is_some())
     };
+    // The file is shown as text (not as a picture): editing commands apply.
+    let has_text = {
+        let weak = weak.clone();
+        move |_: &Window, cx: &App| weak.upgrade().is_some_and(|w| active_text_file(w.read(cx), cx).is_some())
+    };
     let with_file = |f: fn(Entity<FileView>, Entity<Buffer>, Entity<EditorState>, &mut Window, &mut App)| {
         let weak = weak.clone();
         move |_: &Value, window: &mut Window, cx: &mut App| {
@@ -192,7 +224,7 @@ fn setup(workbench: &mut Workbench, window: &mut Window, cx: &mut Context<Workbe
             state.focus(window, cx);
         })))
         .category("Edit")
-        .when(has_file.clone()),
+        .when(has_text.clone()),
     );
     workbench.register_command(
         Command::new("editor.gotoLine", "Go to Line…", with_file(|view, _, _, window, cx| {
@@ -210,7 +242,7 @@ fn setup(workbench: &mut Workbench, window: &mut Window, cx: &mut Context<Workbe
         }))
         .category("Edit")
         .key("Mod+G")
-        .when(has_file.clone()),
+        .when(has_text.clone()),
     );
     // Only when the editor is actually focused: in other inputs (terminal, commit message) the keys stay with that input.
     let editor_focused = {
@@ -226,14 +258,14 @@ fn setup(workbench: &mut Workbench, window: &mut Window, cx: &mut Context<Workbe
         }))
         .category("Edit")
         .key("F12")
-        .when(has_file.clone())
+        .when(has_text.clone())
         .keys_when(editor_focused.clone()),
     );
     workbench.register_command(
         Command::new("editor.format", "Format Document", with_file(|_, buffer, state, window, cx| format_buffer(&buffer, &state, false, window, cx).detach()))
             .category("Edit")
             .key("Shift+Alt+F")
-            .when(has_file.clone())
+            .when(has_text.clone())
             .keys_when(editor_focused.clone()),
     );
     workbench.register_command(
@@ -241,7 +273,7 @@ fn setup(workbench: &mut Workbench, window: &mut Window, cx: &mut Context<Workbe
             .category("Edit")
             .key("Ctrl+Up")
             .key("Alt+Up")
-            .when(has_file.clone())
+            .when(has_text.clone())
             .keys_when(editor_focused.clone()),
     );
     workbench.register_command(
@@ -249,7 +281,7 @@ fn setup(workbench: &mut Workbench, window: &mut Window, cx: &mut Context<Workbe
             .category("Edit")
             .key("Ctrl+Down")
             .key("Alt+Down")
-            .when(has_file.clone())
+            .when(has_text.clone())
             .keys_when(editor_focused),
     );
     workbench.register_command(
@@ -260,6 +292,8 @@ fn setup(workbench: &mut Workbench, window: &mut Window, cx: &mut Context<Workbe
         .category("File")
         .when(has_file),
     );
+
+    image::register_commands(workbench, cx);
 
     workbench.register_status(StatusItem::new("editor.cursor", StatusAlign::Right, 10, |env, window, cx| cx.new(|cx| EditorStatus::new(env.workbench.clone(), window, cx)).into()), window, cx);
 
@@ -340,7 +374,8 @@ impl ExternalChanges {
     }
 }
 
-/// Status bar item: cursor position, encoding, line ending, and language of the active file.
+/// Status bar item: cursor position, encoding, line ending, and language of the active file; for a picture,
+/// its size in pixels, file size, and zoom.
 struct EditorStatus {
     workbench: WeakEntity<Workbench>,
     _subscriptions: Vec<Subscription>,
@@ -353,8 +388,11 @@ impl EditorStatus {
         if let Some(entity) = workbench.upgrade() {
             subscriptions.push(cx.subscribe_in(&entity, window, |this, workbench, event: &WorkbenchEvent, _, cx| {
                 if matches!(event, WorkbenchEvent::ActiveTabChanged | WorkbenchEvent::TabsChanged) {
-                    // Observe the active editor's state so the cursor position follows along.
-                    this._state_subscription = active_file(workbench.read(cx), cx).map(|(_, _, state)| cx.observe(&state, |_, _, cx| cx.notify()));
+                    // Observe the active editor's state (or picture) so the cursor position (or zoom) follows along.
+                    this._state_subscription = active_file(workbench.read(cx), cx).map(|(view, _, state)| match view.read(cx).image().cloned() {
+                        Some(image) => cx.observe(&image, |_, _, cx| cx.notify()),
+                        None => cx.observe(&state, |_, _, cx| cx.notify()),
+                    });
                     cx.notify();
                 }
             }));
@@ -366,6 +404,9 @@ impl EditorStatus {
 impl Render for EditorStatus {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let Some((view, buffer, _)) = self.workbench.upgrade().and_then(|w| active_file(w.read(cx), cx)) else { return div().into_any_element() };
+        if let Some(image) = view.read(cx).image().cloned() {
+            return image_status(&image, cx);
+        }
         let (line, column, selected) = view.read(cx).cursor_info(cx);
         let buffer = buffer.read(cx);
         let position = if selected > 0 { format!("Ln {line}, Col {column} ({selected} selected)") } else { format!("Ln {line}, Col {column}") };
@@ -378,6 +419,25 @@ impl Render for EditorStatus {
             .child(div().child(language_for_path(buffer.path()).name))
             .into_any_element()
     }
+}
+
+/// The status of a picture: "1920 × 1080", "245.3 KB", and its zoom, which switches between fitting the view and the actual size.
+fn image_status(image: &Entity<ImageView>, cx: &mut Context<EditorStatus>) -> gpui_kit::AnyElement {
+    let picture = image.read(cx);
+    let Some(info) = picture.info() else { return div().into_any_element() };
+    let zoom = picture.scale().map(|scale| format!("{:.0}%", scale * 100.)).unwrap_or_default();
+    let tooltip = if picture.zoom() == Zoom::Fit { "Show at Actual Size" } else { "Zoom to Fit" };
+    let image = image.clone();
+    h_flex()
+        .gap_3()
+        .text_color(cx.theme().muted_foreground)
+        .child(div().child(format!("{} × {}", info.width, info.height)))
+        .child(div().child(view::format_size(u32::try_from(info.bytes).unwrap_or(u32::MAX))))
+        .child(div().child(info.format))
+        .child(Button::new("image-zoom").ghost().xsmall().label(zoom).tooltip(tooltip).on_click(move |_, window, cx| {
+            image.update(cx, |image, cx| image.toggle_actual_size(window, cx));
+        }))
+        .into_any_element()
 }
 
 #[cfg(test)]
