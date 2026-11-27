@@ -12,6 +12,7 @@ oncode-ui = { path = "../oncode-ui" }
 gpui-kit = "=0.10.0"
 serde.workspace = true
 serde_json.workspace = true
+similar = "2"
 tokio.workspace = true
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 oncode-git = { path = "../oncode-git" }

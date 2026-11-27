@@ -8,8 +8,8 @@ use crate::http::{
     encode_segment, next_page_from_link, non_empty, timestamp_or_zero, Api, Flavor, PER_PAGE, SCAN_PER_PAGE,
 };
 use crate::model::{
-    Account, Check, CheckState, ForgeHost, NewPullRequest, Page, PrFilter, PrState, PullRequest, PullRequestDetail,
-    RemoteRepo, RepoRef,
+    Account, Check, CheckState, ForgeHost, MergeInput, MergeMethod, MergeOutcome, MergeState, NewPullRequest, Page, PrFilter, PrState, PullRequest, PullRequestDetail,
+    RemoteRepo, RepoRef, ReviewComment, ReviewEvent, ReviewInput, ReviewSide,
 };
 use crate::provider::ForgeProvider;
 
@@ -183,10 +183,13 @@ impl ForgeProvider for GitHubProvider {
         // is fetched too so that reviewers who have finished still show up.
         let reviews_path = format!("{}/pulls/{number}/reviews", repo_path(repo)?);
         let reviews_query = [("per_page", SCAN_PER_PAGE.to_string())];
-        let (pull, (reviews, _)) = tokio::try_join!(
-            self.fetch_pull(repo, number),
-            self.api.get::<Vec<GhReview>>(&reviews_path, &reviews_query),
-        )?;
+        let main = async { tokio::try_join!(self.fetch_pull(repo, number), self.api.get::<Vec<GhReview>>(&reviews_path, &reviews_query)) };
+        // The allowed merge methods; not essential, so a failure (e.g. no access to the settings) is ignored.
+        let settings = async { self.api.get::<GhRepo>(&repo_path(repo)?, &[]).await.map(|(found, _)| found) };
+        let (main, settings) = tokio::join!(main, settings);
+        let (pull, (reviews, _)) = main?;
+        let merge_methods = github_merge_methods(settings.ok().as_ref());
+        let merge_state = github_merge_state(&pull);
 
         let author = pull.user.as_ref().map(|u| u.login.clone());
         let mut reviewers: Vec<String> = Vec::new();
@@ -208,6 +211,8 @@ impl ForgeProvider for GitHubProvider {
             changed_files: pull.changed_files.unwrap_or(0),
             additions: pull.additions.unwrap_or(0),
             deletions: pull.deletions.unwrap_or(0),
+            merge_state,
+            merge_methods,
             pull_request: PullRequest::from(pull),
         })
     }
@@ -242,6 +247,159 @@ impl ForgeProvider for GitHubProvider {
         let (found, _) = self.api.get::<GhRepo>(&repo_path(repo)?, &[]).await?;
         non_empty(found.default_branch)
             .ok_or_else(|| ForgeError::invalid_response("This repository has no default branch yet"))
+    }
+
+    async fn merge_pull_request(&self, repo: &RepoRef, number: u32, input: &MergeInput) -> Result<MergeOutcome> {
+        let base = repo_path(repo)?;
+        // The source branch, to delete afterwards; only when it lives in this repository.
+        let pull = if input.delete_branch { Some(self.fetch_pull(repo, number).await?) } else { None };
+        let body = GhMerge {
+            merge_method: match input.method {
+                MergeMethod::Merge => "merge",
+                MergeMethod::Squash => "squash",
+                MergeMethod::Rebase => "rebase",
+            },
+            sha: input.sha.as_deref(),
+            commit_title: input.title.as_deref().filter(|t| !t.trim().is_empty()),
+            commit_message: input.message.as_deref().filter(|m| !m.trim().is_empty()),
+        };
+        let _: serde_json::Value = self.api.put(&format!("{base}/pulls/{number}/merge"), &body).await?;
+        if let Some(pull) = pull {
+            let same_repo = pull.head.repo.as_ref().map(|r| r.full_name.as_str()) == pull.base.repo.as_ref().map(|r| r.full_name.as_str());
+            if same_repo {
+                // Merged already: a failure here (e.g. no permission to delete branches) is not a failed merge.
+                if let Err(error) = self.api.delete(&format!("{base}/git/refs/heads/{}", encode_segment(&pull.head.name))).await {
+                    return Ok(MergeOutcome { branch_kept: Some(error.message) });
+                }
+            }
+        }
+        Ok(MergeOutcome::default())
+    }
+
+    async fn list_review_comments(&self, repo: &RepoRef, number: u32) -> Result<Vec<ReviewComment>> {
+        let path = format!("{}/pulls/{number}/comments", repo_path(repo)?);
+        let mut comments = Vec::new();
+        for page in 1..=10u32 {
+            let (batch, headers) = self.api.get::<Vec<GhReviewComment>>(&path, &[("per_page", SCAN_PER_PAGE.to_string()), ("page", page.to_string())]).await?;
+            let more = next_page_from_link(&headers).is_some();
+            comments.extend(batch.into_iter().map(|c| {
+                let thread = c.in_reply_to_id.unwrap_or(c.id).to_string();
+                ReviewComment {
+                    id: c.id.to_string(),
+                    thread,
+                    path: c.path,
+                    line: c.line,
+                    side: if c.side.as_deref() == Some("LEFT") { ReviewSide::Left } else { ReviewSide::Right },
+                    body: c.body,
+                    author: c.user.map(|u| u.login).unwrap_or_default(),
+                    created_at: timestamp_or_zero(c.created_at.as_deref()),
+                    is_reply: c.in_reply_to_id.is_some(),
+                }
+            }));
+            if !more {
+                break;
+            }
+        }
+        Ok(comments)
+    }
+
+    async fn submit_review(&self, repo: &RepoRef, number: u32, input: &ReviewInput) -> Result<()> {
+        let path = format!("{}/pulls/{number}/reviews", repo_path(repo)?);
+        let event = match input.event {
+            ReviewEvent::Comment => "COMMENT",
+            ReviewEvent::Approve => "APPROVE",
+            ReviewEvent::RequestChanges => "REQUEST_CHANGES",
+        };
+        if input.event != ReviewEvent::Approve && input.body.trim().is_empty() && input.comments.is_empty() {
+            return Err(ForgeError::invalid("Write a comment first"));
+        }
+        let comments: Vec<GhNewComment> = input
+            .comments
+            .iter()
+            .map(|c| GhNewComment { path: &c.path, line: c.line, side: if c.side == ReviewSide::Left { "LEFT" } else { "RIGHT" }, body: &c.body })
+            .collect();
+        let body = GhNewReview { commit_id: &input.commit_id, body: &input.body, event, comments };
+        let _: serde_json::Value = self.api.post(&path, &body).await?;
+        Ok(())
+    }
+
+    async fn reply_to_review_comment(&self, repo: &RepoRef, number: u32, thread: &str, body: &str) -> Result<()> {
+        if body.trim().is_empty() {
+            return Err(ForgeError::invalid("Write a reply first"));
+        }
+        let path = format!("{}/pulls/{number}/comments/{}/replies", repo_path(repo)?, encode_segment(thread));
+        let _: serde_json::Value = self.api.post(&path, &serde_json::json!({ "body": body })).await?;
+        Ok(())
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct GhReviewComment {
+    id: u64,
+    path: String,
+    #[serde(default)]
+    line: Option<u32>,
+    #[serde(default)]
+    side: Option<String>,
+    #[serde(default)]
+    body: String,
+    #[serde(default)]
+    user: Option<GhActor>,
+    #[serde(default)]
+    created_at: Option<String>,
+    #[serde(default)]
+    in_reply_to_id: Option<u64>,
+}
+
+#[derive(Debug, Serialize)]
+struct GhNewComment<'a> {
+    path: &'a str,
+    line: u32,
+    side: &'a str,
+    body: &'a str,
+}
+
+#[derive(Debug, Serialize)]
+struct GhNewReview<'a> {
+    commit_id: &'a str,
+    body: &'a str,
+    event: &'a str,
+    comments: Vec<GhNewComment<'a>>,
+}
+
+#[derive(Debug, Serialize)]
+struct GhMerge<'a> {
+    merge_method: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    sha: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    commit_title: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    commit_message: Option<&'a str>,
+}
+
+/// The merge methods the repository allows; all of them when its settings are not visible to this account.
+fn github_merge_methods(settings: Option<&GhRepo>) -> Vec<MergeMethod> {
+    let allowed = |value: Option<bool>| value.unwrap_or(true);
+    let Some(settings) = settings else { return vec![MergeMethod::Merge, MergeMethod::Squash, MergeMethod::Rebase] };
+    [(settings.allow_merge_commit, MergeMethod::Merge), (settings.allow_squash_merge, MergeMethod::Squash), (settings.allow_rebase_merge, MergeMethod::Rebase)]
+        .into_iter()
+        .filter(|(flag, _)| allowed(*flag))
+        .map(|(_, method)| method)
+        .collect()
+}
+
+/// GitHub's `mergeable_state` (and `mergeable` while it is still computed).
+fn github_merge_state(pull: &GhPull) -> MergeState {
+    match pull.mergeable_state.as_deref() {
+        Some("clean") | Some("has_hooks") => MergeState::Clean,
+        Some("blocked") => MergeState::Blocked,
+        Some("behind") => MergeState::Behind,
+        Some("dirty") => MergeState::Conflicts,
+        Some("unstable") => MergeState::Unstable,
+        Some("draft") => MergeState::Draft,
+        _ if pull.mergeable.is_none() => MergeState::Checking,
+        _ => MergeState::Unknown,
     }
 }
 
@@ -311,6 +469,12 @@ struct GhRepo {
     updated_at: Option<String>,
     #[serde(default)]
     html_url: Option<String>,
+    #[serde(default)]
+    allow_merge_commit: Option<bool>,
+    #[serde(default)]
+    allow_squash_merge: Option<bool>,
+    #[serde(default)]
+    allow_rebase_merge: Option<bool>,
 }
 
 impl From<GhRepo> for RemoteRepo {
@@ -383,6 +547,8 @@ struct GhPull {
     labels: Vec<GhLabel>,
     #[serde(default)]
     mergeable: Option<bool>,
+    #[serde(default)]
+    mergeable_state: Option<String>,
     #[serde(default)]
     commits: Option<u32>,
     #[serde(default)]

@@ -341,6 +341,8 @@ pub struct CommitRequest {
     pub amend: bool,
     pub signoff: bool,
     pub no_verify: bool,
+    /// Sign the commit (`-S`, with the GPG or SSH key from git's configuration).
+    pub sign: bool,
     pub then: Option<AfterCommit>,
 }
 
@@ -394,7 +396,7 @@ pub async fn commit(git: &Git, request: CommitRequest, cx: &mut AsyncWindowConte
         }
     }
     let (core, root, message) = (git.core.clone(), git.root.clone(), request.message.clone());
-    let options = CommitOptions { amend: request.amend, signoff: request.signoff, no_verify: request.no_verify, ..Default::default() };
+    let options = CommitOptions { amend: request.amend, signoff: request.signoff, no_verify: request.no_verify, gpg_sign: request.sign, ..Default::default() };
     if run_shown(git, "Commit", cx, async move { backend::git_commit(&core, root, message, options).await }).await.is_none() {
         return false;
     }
@@ -745,6 +747,31 @@ pub async fn operation(git: &Git, action: OperationAction, cx: &mut AsyncWindowC
     };
     let (core, root) = (git.core.clone(), git.root.clone());
     run_shown(git, &format!("{verb} {pretty}"), cx, async move { backend::git_operation(&core, root, action).await }).await;
+}
+
+/// Good / Bad / Skip during a bisect: git checks out the next commit to test, or reports the first bad one.
+pub async fn bisect_mark(git: &Git, mark: oncode_git::BisectMark, cx: &mut AsyncWindowContext) {
+    let label = match mark {
+        oncode_git::BisectMark::Good => "Mark good",
+        oncode_git::BisectMark::Bad => "Mark bad",
+        oncode_git::BisectMark::Skip => "Skip commit",
+    };
+    let (core, root) = (git.core.clone(), git.root.clone());
+    if let Some(message) = run_shown(git, label, cx, async move { backend::git_bisect_mark(&core, root, mark, None).await }).await {
+        let summary = bisect_summary(&message);
+        ui(cx, |window, cx| prompts::toast(NoticeLevel::Info, "bisect-step", summary, Vec::new(), window, cx));
+    }
+}
+
+/// Ends the bisect and returns to where it started.
+pub async fn bisect_reset(git: &Git, cx: &mut AsyncWindowContext) {
+    let (core, root) = (git.core.clone(), git.root.clone());
+    run_shown(git, "Stop bisect", cx, async move { backend::git_bisect_reset(&core, root).await }).await;
+}
+
+/// The line of git's bisect output worth showing: the steps left, or which commit is the first bad one.
+pub fn bisect_summary(message: &str) -> String {
+    message.lines().map(str::trim).find(|line| line.starts_with("Bisecting:") || oncode_git::status::bisect_found(line)).or_else(|| message.lines().next()).unwrap_or("").to_string()
 }
 
 // ----- Tag -----

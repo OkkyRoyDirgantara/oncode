@@ -138,7 +138,7 @@ impl MarkdownPreview {
         self._subscriptions = vec![cx.subscribe_in(&buffer, window, |this, _, event: &BufferEvent, window, cx| match event {
             BufferEvent::Loaded => this.refresh(cx),
             BufferEvent::Edited => this.schedule_refresh(window, cx),
-            BufferEvent::Saved => {}
+            BufferEvent::Saved | BufferEvent::ConfigChanged => {}
         })];
         self.buffer = Some(buffer);
         self.refresh(cx);

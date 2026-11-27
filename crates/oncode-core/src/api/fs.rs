@@ -25,6 +25,12 @@ pub async fn fs_open(core: &Shared, window: &str, path: String) -> AppResult<Ope
     Ok(oncode_workspace::open_file(&path, MAX_OPEN_BYTES).await?)
 }
 
+/// Opens a file decoding it with `encoding` instead of detecting it (Reopen with Encoding).
+pub async fn fs_open_with_encoding(core: &Shared, window: &str, path: String, encoding: String) -> AppResult<OpenedFile> {
+    let path = core.resolve(window, &path)?;
+    Ok(oncode_workspace::open_file_with_encoding(&path, MAX_OPEN_BYTES, &encoding).await?)
+}
+
 /// The raw bytes of a file (e.g. an image to show), within the same size limit as [`fs_open`].
 pub async fn fs_read_bytes(core: &Shared, window: &str, path: String) -> AppResult<Vec<u8>> {
     let path = core.resolve(window, &path)?;
@@ -47,6 +53,17 @@ pub async fn fs_save(
 pub async fn fs_stat(core: &Shared, window: &str, path: String) -> AppResult<Option<FileStat>> {
     let path = core.resolve(window, &path)?;
     Ok(oncode_workspace::stat(&path).await?)
+}
+
+/// The `.editorconfig` properties for a file (see `oncode_workspace::editorconfig`). Read in untrusted
+/// folders too: it cannot run programs. Empty for a path that cannot be resolved.
+pub async fn fs_editorconfig(core: &Shared, window: &str, path: String) -> AppResult<oncode_workspace::editorconfig::EditorConfig> {
+    let Ok(path) = core.resolve(window, &path) else { return Ok(Default::default()) };
+    let root = core.workspace_root(window).ok();
+    core.runtime()
+        .spawn_blocking(move || oncode_workspace::editorconfig::resolve(&path, root.as_deref()))
+        .await
+        .map_err(|e| AppError::new("io", e.to_string()))
 }
 
 pub async fn fs_create_file(core: &Shared, window: &str, path: String) -> AppResult<()> {

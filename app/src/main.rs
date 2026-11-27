@@ -84,6 +84,8 @@ fn main() {
         oncode_ui_settings::init(cx);
         oncode_ui_markdown::init(cx);
         cx.activate(true);
+        // Without a folder on the command line, the last folder is opened again (and with it, hot exit's unsaved changes).
+        let folder = folder.or_else(|| oncode_ui::startup_folder(cx));
         if let Err(error) = oncode_ui::try_open_window(folder, cx) {
             // Without a window, the application would never receive "last window closed";
             // log the cause and then exit so it does not linger as an invisible process.

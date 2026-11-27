@@ -297,7 +297,7 @@ impl Git {
         let logger = self.logger.read().unwrap().clone();
         if let Some(logger) = logger {
             let (code, text) = match &result {
-                Ok(out) => (out.code, out.stderr.trim().to_string()),
+                Ok(out) => (out.code, log_text(&String::from_utf8_lossy(&out.stdout), &out.stderr)),
                 Err(e) => (-1, e.message.clone()),
             };
             if cmd.log || code != 0 && cmd.write {
@@ -441,6 +441,37 @@ fn clean_stderr(raw: &str) -> String {
         .to_string()
 }
 
+/// Most stdout kept in a Git Output entry; enough for a summary such as bisect's verdict or a merge's
+/// file list, without copying a large listing into the panel.
+const LOG_STDOUT_LIMIT: usize = 16 * 1024;
+
+/// The text of a Git Output entry: what git printed to stdout (results such as "is the first bad
+/// commit" or a commit summary) followed by stderr (progress and messages).
+fn log_text(stdout: &str, stderr: &str) -> String {
+    let mut out = stdout.trim();
+    let mut cut = false;
+    if out.len() > LOG_STDOUT_LIMIT {
+        let mut end = LOG_STDOUT_LIMIT;
+        while !out.is_char_boundary(end) {
+            end -= 1;
+        }
+        out = &out[..end];
+        cut = true;
+    }
+    let mut text = out.to_string();
+    if cut {
+        text.push_str("\n…");
+    }
+    let err = stderr.trim();
+    if !err.is_empty() {
+        if !text.is_empty() {
+            text.push('\n');
+        }
+        text.push_str(err);
+    }
+    text
+}
+
 fn shell_join(args: &[String]) -> String {
     args.iter()
         .map(|a| {
@@ -480,6 +511,17 @@ pub fn check_path(value: &str) -> Result<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn log_text_keeps_stdout_before_stderr_and_caps_it() {
+        assert_eq!(log_text("abc1234 is the first bad commit\n", ""), "abc1234 is the first bad commit");
+        assert_eq!(log_text("[main 1a2b3c4] Fix\n", "warning: x\n"), "[main 1a2b3c4] Fix\nwarning: x");
+        assert_eq!(log_text("", "  fatal: no\n"), "fatal: no");
+        let long = "é".repeat(LOG_STDOUT_LIMIT);
+        let text = log_text(&long, "");
+        assert!(text.len() <= LOG_STDOUT_LIMIT + "\n…".len());
+        assert!(text.ends_with("\n…"));
+    }
 
     #[test]
     fn parses_versions() {

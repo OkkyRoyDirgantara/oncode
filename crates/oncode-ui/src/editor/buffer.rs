@@ -9,15 +9,37 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use gpui_kit::component::input::{EditorState, InputEditsEvent, InputEvent, Rope, RopeExt as _};
-use gpui_kit::{App, AppContext as _, Context, Entity, EventEmitter, SharedString, Subscription, Task, WeakEntity, Window};
+use gpui_kit::{App, AppContext as _, Context, Entity, EntityId, EventEmitter, SharedString, Subscription, Task, WeakEntity, Window};
+use oncode_core::api::backup::{self as backup_api, BufferBackup};
 use oncode_core::api::fs;
 use oncode_core::settings::AutoSave;
 use oncode_core::AppError;
+use oncode_workspace::editorconfig::EditorConfig;
 use oncode_workspace::{Eol, OpenedFile};
 
 use crate::overlay::Choice;
 use crate::spawn_core;
 use crate::workbench::{Env, WorkbenchEvent};
+
+/// Whether a file's modification time and size are the same as recorded earlier. The time is compared to the
+/// microsecond: one that went through JSON (a hot exit backup) can come back off by the last bit, since
+/// serde_json's default float parsing is not exact.
+fn same_stat(mtime_ms: f64, size: u32, other_mtime_ms: f64, other_size: u32) -> bool {
+    size == other_size && (mtime_ms - other_mtime_ms).abs() < 0.001
+}
+
+/// The encoding name and BOM for an `.editorconfig` `charset` that OnCode can write.
+fn charset_encoding(charset: &str) -> Option<(&'static str, bool)> {
+    match charset {
+        "utf-8" => Some(("UTF-8", false)),
+        "utf-8-bom" => Some(("UTF-8", true)),
+        "latin1" => Some(("windows-1252", false)),
+        _ => None,
+    }
+}
+
+/// How long after the last edit the hot exit backup is written.
+const BACKUP_DELAY: Duration = Duration::from_secs(1);
 
 /// Size limit for heavy features (highlighting, folding, LSP).
 pub const LARGE_FILE_BYTES: u32 = 5 * 1024 * 1024;
@@ -57,6 +79,8 @@ pub enum BufferEvent {
     /// The content was edited.
     Edited,
     Saved,
+    /// The file's `.editorconfig` properties were read (again); views re-apply their indentation.
+    ConfigChanged,
 }
 
 /// What a save does when the file changed on disk since it was loaded or last saved.
@@ -68,6 +92,16 @@ enum OnDiskChange {
     Keep,
     /// Write without checking.
     Overwrite,
+}
+
+/// Whether the "before save" step ([`super::format::before_save`]: Format on Save, `.editorconfig`
+/// whitespace rules) runs for a save.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Participants {
+    Run,
+    /// The content is written as it is: a programmatic write such as Replace in Files, or auto-save
+    /// after a delay (formatting text while the user is still typing would move it under the cursor).
+    Skip,
 }
 
 pub struct Buffer {
@@ -92,8 +126,17 @@ pub struct Buffer {
     revision: u64,
     /// Held by the save that is running (see [`Buffer::save`]).
     save_turn: Arc<tokio::sync::Mutex<()>>,
+    /// A hot exit backup of this buffer exists on disk, or has been asked for (see [`Buffer::write_backup`]).
+    backed_up: bool,
+    /// A backup to apply once the file has loaded (hot exit restore).
+    pending_restore: Option<BufferBackup>,
+    /// The `.editorconfig` properties for this file.
+    editorconfig: EditorConfig,
+    /// The line ending or encoding was changed and not saved yet (the text itself may be unchanged).
+    format_changed: bool,
     _load: Task<()>,
     _auto_save: Task<()>,
+    _backup: Task<()>,
 }
 
 impl EventEmitter<BufferEvent> for Buffer {}
@@ -117,8 +160,13 @@ impl Buffer {
             conflict: false,
             revision: 0,
             save_turn: Arc::default(),
+            backed_up: false,
+            pending_restore: None,
+            editorconfig: EditorConfig::default(),
+            format_changed: false,
             _load: Task::ready(()),
             _auto_save: Task::ready(()),
+            _backup: Task::ready(()),
         };
         if is_untitled(&this.path) {
             // A new file: ready right away, empty, without reading the disk.
@@ -175,6 +223,11 @@ impl Buffer {
 
     pub fn eol(&self) -> Eol {
         self.eol
+    }
+
+    /// The file starts with a byte order mark.
+    pub fn has_bom(&self) -> bool {
+        self.bom
     }
 
     pub fn is_read_only(&self) -> bool {
@@ -249,6 +302,7 @@ impl Buffer {
         // `set_value` does not emit an event, so the dirty marker and the other observers are updated here.
         view.update(cx, |state, cx| state.set_value(saved, window, cx));
         self.dirty = false;
+        self.delete_backup(cx);
         cx.emit(BufferEvent::Edited);
         cx.notify();
     }
@@ -288,7 +342,7 @@ impl Buffer {
             return;
         }
         let Some(primary) = self.primary() else { return };
-        let dirty = {
+        let dirty = self.format_changed || {
             let text = primary.read(cx).text();
             // Compare the whole content only if its length equals that of the saved content.
             text.len() != self.saved.len() || *text != self.saved
@@ -300,6 +354,107 @@ impl Buffer {
             cx.notify();
         }
         self.schedule_auto_save(window, cx);
+        self.schedule_backup(window, cx);
+    }
+
+    /// The folder whose hot exit backups this buffer belongs to, if hot exit is on.
+    fn hot_exit_root(&self, cx: &App) -> Option<String> {
+        let enabled = self.env.workbench.upgrade().map(|w| w.read(cx).settings().files.hot_exit).unwrap_or(false);
+        enabled.then(|| self.env.root_string()).flatten()
+    }
+
+    /// Keeps a backup of the unsaved content a moment after the last edit; removes it when the content
+    /// is back to what is on disk.
+    fn schedule_backup(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.dirty {
+            self._backup = Task::ready(());
+            self.delete_backup(cx);
+            return;
+        }
+        if self.hot_exit_root(cx).is_none() {
+            return;
+        }
+        self._backup = cx.spawn_in(window, async move |this, cx| {
+            cx.background_executor().timer(BACKUP_DELAY).await;
+            let Ok(write) = this.update(cx, |this, cx| this.write_backup(cx)) else { return };
+            write.await;
+        });
+    }
+
+    /// Writes the backup of the current content now. Resolves to `true` when it is on disk (or there is
+    /// nothing to keep), `false` if hot exit is off or the write failed.
+    pub fn write_backup(&mut self, cx: &mut Context<Self>) -> Task<bool> {
+        if !self.dirty {
+            return Task::ready(true);
+        }
+        let Some(root) = self.hot_exit_root(cx) else { return Task::ready(false) };
+        let Some(text) = self.text(cx) else { return Task::ready(false) };
+        let backup = BufferBackup {
+            path: self.path.clone(),
+            text: text.to_string(),
+            encoding: self.encoding.clone(),
+            bom: self.bom,
+            eol: match self.eol {
+                Eol::Lf => "lf".into(),
+                Eol::Crlf => "crlf".into(),
+            },
+            mtime_ms: self.mtime_ms,
+            size: self.size,
+        };
+        // Marked now rather than once written: a save or discard right after this must still remove the
+        // backup, and the backend applies the two in the order they were asked for.
+        self.backed_up = true;
+        let task = spawn_core(cx, backup_api::backup_write(&self.env.core, root, backup));
+        cx.background_spawn(async move { task.await.is_ok() })
+    }
+
+    /// Removes this buffer's backup, if it has one (saved, reverted, or its changes discarded).
+    fn delete_backup(&mut self, cx: &mut Context<Self>) {
+        self.delete_backup_of(self.path.clone(), cx);
+    }
+
+    fn delete_backup_of(&mut self, path: String, cx: &mut Context<Self>) {
+        if !std::mem::take(&mut self.backed_up) {
+            return;
+        }
+        let Some(root) = self.env.root_string() else { return };
+        spawn_core(cx, backup_api::backup_delete(&self.env.core, root, path)).detach();
+    }
+
+    /// Hot exit restore: shows the backed-up content as unsaved changes, now or once the file has loaded.
+    /// If the file changed on disk after the backup was made, the buffer is marked as conflicted, which
+    /// asks the user to keep their version or reload.
+    pub fn restore_backup(&mut self, backup: BufferBackup, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.is_ready() {
+            self.pending_restore = Some(backup);
+            return;
+        }
+        self.apply_backup(backup, window, cx);
+    }
+
+    fn apply_backup(&mut self, backup: BufferBackup, window: &mut Window, cx: &mut Context<Self>) {
+        self.backed_up = true;
+        if self.is_untitled() {
+            self.encoding = backup.encoding.clone();
+            self.bom = backup.bom;
+            self.eol = if backup.eol == "crlf" { Eol::Crlf } else { Eol::Lf };
+        } else if !same_stat(backup.mtime_ms, backup.size, self.mtime_ms, self.size) {
+            self.conflict = true;
+        }
+        let states: Vec<Entity<EditorState>> = self.states.iter().filter_map(|(state, _)| state.upgrade()).collect();
+        if states.is_empty() {
+            self.initial = Some(backup.text.clone());
+        } else {
+            for state in states {
+                state.update(cx, |state, cx| state.set_value(backup.text.clone(), window, cx));
+            }
+        }
+        self.dirty = backup.text.len() != self.saved.len() || Rope::from(backup.text.as_str()) != self.saved;
+        if !self.dirty {
+            self.delete_backup(cx);
+        }
+        cx.emit(BufferEvent::Edited);
+        cx.notify();
     }
 
     fn auto_save_mode(&self, cx: &App) -> AutoSave {
@@ -322,6 +477,7 @@ impl Buffer {
     }
 
     fn load(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.reload_editorconfig(cx);
         let (core, label, path) = (self.env.core.clone(), self.env.window.to_string(), self.path.clone());
         let task = spawn_core(cx, async move { fs::fs_open(&core, &label, path).await });
         self._load = cx.spawn_in(window, async move |this, cx| {
@@ -363,9 +519,111 @@ impl Buffer {
         }
         self.dirty = false;
         self.conflict = false;
+        self.format_changed = false;
         self.revision += 1;
+        self.apply_editorconfig_defaults();
         cx.emit(BufferEvent::Loaded);
+        match self.pending_restore.take().filter(|_| self.is_ready()) {
+            Some(backup) => self.apply_backup(backup, window, cx),
+            // A reload from disk drops the unsaved changes, and with them their backup.
+            None => self.delete_backup(cx),
+        }
         cx.notify();
+    }
+
+    /// The `.editorconfig` properties for this file (empty until read, and for new files).
+    pub fn editorconfig(&self) -> &EditorConfig {
+        &self.editorconfig
+    }
+
+    /// The tab size and whether to indent with spaces: `.editorconfig` first, then the settings.
+    pub fn indentation(&self, settings: &oncode_core::settings::EditorSettings) -> (u32, bool) {
+        let tab_size = self.editorconfig.tab_size().unwrap_or(settings.tab_size);
+        let spaces = self.editorconfig.indent_with_tabs.map(|tabs| !tabs).unwrap_or(settings.insert_spaces);
+        (tab_size, spaces)
+    }
+
+    /// Reads this file's `.editorconfig` properties (again, e.g. after an `.editorconfig` changed).
+    pub fn reload_editorconfig(&mut self, cx: &mut Context<Self>) {
+        if self.is_untitled() {
+            return;
+        }
+        let (core, label, path) = (self.env.core.clone(), self.env.window.to_string(), self.path.clone());
+        let task = spawn_core(cx, async move { fs::fs_editorconfig(&core, &label, path).await });
+        cx.spawn(async move |this, cx| {
+            let config = task.await.unwrap_or_default();
+            let _ = this.update(cx, |this, cx| {
+                if this.editorconfig != config {
+                    this.editorconfig = config;
+                    this.apply_editorconfig_defaults();
+                    cx.emit(BufferEvent::ConfigChanged);
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
+    /// A file without any line break (e.g. a new, empty file) cannot show which line ending it uses, and an
+    /// empty one has no encoding yet: `.editorconfig` decides them.
+    fn apply_editorconfig_defaults(&mut self) {
+        if !self.is_ready() || self.saved.to_string().contains('\n') {
+            return;
+        }
+        match self.editorconfig.end_of_line.as_deref() {
+            Some("crlf") => self.eol = Eol::Crlf,
+            Some("lf") => self.eol = Eol::Lf,
+            _ => {}
+        }
+        if self.saved.len() == 0 {
+            if let Some((encoding, bom)) = self.editorconfig.charset.as_deref().and_then(charset_encoding) {
+                self.encoding = encoding.into();
+                self.bom = bom;
+            }
+        }
+    }
+
+    /// Change End of Line Sequence: the file is written with `eol` from the next save on.
+    pub fn set_eol(&mut self, eol: Eol, cx: &mut Context<Self>) {
+        if self.eol == eol {
+            return;
+        }
+        self.eol = eol;
+        self.mark_format_changed(cx);
+    }
+
+    /// Save with Encoding: the file is written with `encoding` (a WHATWG label) and `bom` from the next save on.
+    pub fn set_encoding(&mut self, encoding: String, bom: bool, cx: &mut Context<Self>) {
+        if self.encoding == encoding && self.bom == bom {
+            return;
+        }
+        self.encoding = encoding;
+        self.bom = bom;
+        self.mark_format_changed(cx);
+    }
+
+    fn mark_format_changed(&mut self, cx: &mut Context<Self>) {
+        if self.is_untitled() {
+            return;
+        }
+        self.format_changed = true;
+        self.dirty = true;
+        cx.emit(BufferEvent::Edited);
+        cx.notify();
+    }
+
+    /// Reopen with Encoding: reads the file again, decoded with `encoding` (a WHATWG label) instead of the
+    /// detected one. Unsaved changes are discarded; the caller asks first.
+    pub fn reopen_with_encoding(&mut self, encoding: String, window: &mut Window, cx: &mut Context<Self>) {
+        if self.is_untitled() {
+            return;
+        }
+        let (core, label, path) = (self.env.core.clone(), self.env.window.to_string(), self.path.clone());
+        let task = spawn_core(cx, async move { fs::fs_open_with_encoding(&core, &label, path, encoding).await });
+        self._load = cx.spawn_in(window, async move |this, cx| {
+            let result = task.await;
+            let _ = this.update_in(cx, |this, window, cx| this.install(result, window, cx));
+        });
     }
 
     /// Reloads from disk, discarding unsaved changes.
@@ -383,22 +641,33 @@ impl Buffer {
     /// chooses to overwrite it (or to reload it instead). The file is checked here and not only when the
     /// watcher reports a change: the watcher skips gitignored paths such as `.env`, and its report can
     /// arrive after the save.
+    ///
+    /// Every save path (Save, Save All, the close prompt, auto-save on focus change) runs the
+    /// "before save" step first: Format on Save and the `.editorconfig` whitespace rules.
     pub fn save(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Task<bool> {
-        self.save_checked(OnDiskChange::Ask, window, cx)
+        self.save_checked(OnDiskChange::Ask, Participants::Run, window, cx)
+    }
+
+    /// Saves the content exactly as it is, without the "before save" step: for programmatic writes
+    /// such as Replace in Files, which stand for a file written by the backend.
+    pub fn save_as_is(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Task<bool> {
+        self.save_checked(OnDiskChange::Ask, Participants::Skip, window, cx)
     }
 
     /// Saves even if the file changed on disk: the "Overwrite" choice.
     pub fn overwrite(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Task<bool> {
-        self.save_checked(OnDiskChange::Overwrite, window, cx)
+        self.save_checked(OnDiskChange::Overwrite, Participants::Run, window, cx)
     }
 
     /// A save nobody asked for at that moment (auto-save): a file that changed on disk is left alone,
-    /// and the buffer is marked as conflicted, which shows the banner.
+    /// and the buffer is marked as conflicted, which shows the banner. Auto-save after a delay skips the
+    /// "before save" step, as in VS Code; auto-save on focus change runs it.
     pub(crate) fn auto_save(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Task<bool> {
-        self.save_checked(OnDiskChange::Keep, window, cx)
+        let participants = if self.auto_save_mode(cx) == AutoSave::AfterDelay { Participants::Skip } else { Participants::Run };
+        self.save_checked(OnDiskChange::Keep, participants, window, cx)
     }
 
-    fn save_checked(&mut self, on_change: OnDiskChange, window: &mut Window, cx: &mut Context<Self>) -> Task<bool> {
+    fn save_checked(&mut self, on_change: OnDiskChange, participants: Participants, window: &mut Window, cx: &mut Context<Self>) -> Task<bool> {
         if self.is_untitled() {
             return self.save_untitled(window, cx);
         }
@@ -410,6 +679,13 @@ impl Buffer {
             // One save at a time: otherwise a save could take the file written by the save before it,
             // whose stat is not recorded yet, for a change made by another program.
             let _turn = turn.lock_owned().await;
+            if participants == Participants::Run {
+                // Outside any update of this buffer: the step reads the buffer and edits its editor state.
+                let step = this.upgrade().and_then(|buffer| cx.update(|window, cx| super::format::before_save(&buffer, window, cx)).ok());
+                if let Some(step) = step {
+                    step.await;
+                }
+            }
             if on_change != OnDiskChange::Overwrite {
                 let Ok(stat) = this.update(cx, |this, cx| {
                     let (core, label, path) = (this.env.core.clone(), this.env.window.to_string(), this.path.clone());
@@ -471,8 +747,12 @@ impl Buffer {
                     this.mtime_ms = stat.mtime_ms;
                     this.size = stat.size;
                     this.conflict = false;
+                    this.format_changed = false;
                     // Edits can happen while saving.
                     this.dirty = this.primary().is_some_and(|primary| *primary.read(cx).text() != this.saved);
+                    if !this.dirty {
+                        this.delete_backup(cx);
+                    }
                     cx.emit(BufferEvent::Saved);
                     cx.notify();
                     let saved = WorkbenchEvent::FileSaved(this.path.clone());
@@ -508,7 +788,15 @@ impl Buffer {
             let Ok(Ok(Some(target))) = chosen.await else { return false };
             let target = target.to_string_lossy().into_owned();
             let (save_target, content) = (target.clone(), text.to_string());
-            let Ok(task) = cx.update(|_, cx| spawn_core(cx, async move { fs::fs_save(&core, &label, save_target, content, "UTF-8".into(), false, Eol::Lf).await })) else {
+            let Ok(task) = cx.update(|_, cx| {
+                spawn_core(cx, async move {
+                    // The new file's line ending and encoding come from `.editorconfig`, if it says.
+                    let config = fs::fs_editorconfig(&core, &label, save_target.clone()).await.unwrap_or_default();
+                    let eol = if config.end_of_line.as_deref() == Some("crlf") { Eol::Crlf } else { Eol::Lf };
+                    let (encoding, bom) = config.charset.as_deref().and_then(charset_encoding).unwrap_or(("UTF-8", false));
+                    fs::fs_save(&core, &label, save_target, content, encoding.into(), bom, eol).await
+                })
+            }) else {
                 return false;
             };
             let result = task.await;
@@ -518,6 +806,8 @@ impl Buffer {
                     this.mtime_ms = stat.mtime_ms;
                     this.size = stat.size;
                     this.dirty = this.primary().is_some_and(|primary| *primary.read(cx).text() != this.saved);
+                    // The backup was kept under the untitled name.
+                    this.delete_backup_of(from.clone(), cx);
                     this.move_to_saved_path(from, target, window, cx);
                     true
                 }
@@ -622,7 +912,46 @@ pub enum BuffersEvent {
     Reveal(String),
     /// The end-of-line hint content changed; the editor view repaints its hint.
     LineHintsChanged,
+    /// The signature help shown for an editor changed (see [`Buffers::set_signature`]).
+    SignatureChanged,
 }
+
+/// Signature help for a call at the cursor (the language server's `textDocument/signatureHelp`), shown
+/// above the cursor by the editor view.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SignaturePopup {
+    /// The signature, e.g. `fn copy(from: &str, to: &str) -> Result<()>`.
+    pub label: String,
+    /// The byte range of the current parameter inside `label`, if known.
+    pub active: Option<std::ops::Range<usize>>,
+    /// Documentation of the signature or the current parameter (plain text).
+    pub documentation: Option<String>,
+    /// Which overload this is and how many there are, when there is more than one.
+    pub overload: Option<(usize, usize)>,
+}
+
+/// A label for a run of lines in the annotation column to the left of the editor (e.g. the blame column).
+#[derive(Debug, Clone, PartialEq)]
+pub struct LineAnnotation {
+    /// First line, from 1.
+    pub start_line: u32,
+    pub line_count: u32,
+    /// Shown once, at the first visible line of the run.
+    pub text: SharedString,
+    /// Passed to the column's click handler (e.g. a commit id).
+    pub id: SharedString,
+}
+
+/// The annotation column of one file: its runs of lines (sorted, not overlapping) and what a click does.
+#[derive(Clone)]
+pub struct AnnotationColumn {
+    pub annotations: Rc<Vec<LineAnnotation>>,
+    pub on_click: Rc<dyn Fn(&str, &mut Window, &mut App)>,
+}
+
+/// A provider of the annotation column for a file path; `None` = no column for that file. Called during
+/// render, so it must be cheap and must not update entities.
+pub type AnnotationProvider = Rc<dyn Fn(&str, &App) -> Option<AnnotationColumn>>;
 
 /// A provider of faint text at the end of the cursor line (e.g. inline blame), like the "after"
 /// decoration in VS Code. Takes the file path and the line (starting at 0); it is called during
@@ -635,13 +964,61 @@ pub struct Buffers {
     buffers: HashMap<String, WeakEntity<Buffer>>,
     reveals: HashMap<String, Reveal>,
     line_hints: Vec<(SharedString, LineHintProvider)>,
+    /// Signature help per editor state.
+    signatures: HashMap<EntityId, SignaturePopup>,
+    /// Hot exit backups waiting for their buffer to be opened (see [`Buffers::restore_backups`]).
+    pending_backups: HashMap<String, BufferBackup>,
+    annotation_providers: Vec<(SharedString, AnnotationProvider)>,
 }
 
 impl EventEmitter<BuffersEvent> for Buffers {}
 
 impl Buffers {
     pub fn new(env: Env) -> Self {
-        Self { env, buffers: HashMap::new(), reveals: HashMap::new(), line_hints: Vec::new() }
+        Self { env, buffers: HashMap::new(), reveals: HashMap::new(), line_hints: Vec::new(), signatures: HashMap::new(), pending_backups: HashMap::new(), annotation_providers: Vec::new() }
+    }
+
+    /// Hot exit restore: each backup is applied to its buffer when that buffer is opened (right away if
+    /// it is open already).
+    pub fn restore_backups(&mut self, backups: Vec<BufferBackup>, window: &mut Window, cx: &mut Context<Self>) {
+        for backup in backups {
+            let path = file_path(&backup.path);
+            match self.get(&path) {
+                Some(buffer) => buffer.update(cx, |buffer, cx| buffer.restore_backup(backup, window, cx)),
+                None => {
+                    self.pending_backups.insert(path, backup);
+                }
+            }
+        }
+    }
+
+    /// Writes the backups of all buffers with unsaved changes now (before a window closes). Resolves to
+    /// `true` if every one is on disk.
+    pub fn flush_backups(&self, cx: &mut Context<Self>) -> Task<bool> {
+        let writes: Vec<Task<bool>> = self.dirty(cx).into_iter().map(|buffer| buffer.update(cx, |buffer, cx| buffer.write_backup(cx))).collect();
+        cx.spawn(async move |_, _| {
+            let mut all = true;
+            for write in writes {
+                all &= write.await;
+            }
+            all
+        })
+    }
+
+    /// Shows (or with `None` hides) signature help in the editor whose state is `state`.
+    pub fn set_signature(&mut self, state: EntityId, popup: Option<SignaturePopup>, cx: &mut Context<Self>) {
+        let changed = match popup {
+            Some(popup) => self.signatures.insert(state, popup.clone()).as_ref() != Some(&popup),
+            None => self.signatures.remove(&state).is_some(),
+        };
+        if changed {
+            cx.emit(BuffersEvent::SignatureChanged);
+        }
+    }
+
+    /// The signature help shown in the editor whose state is `state`.
+    pub fn signature(&self, state: EntityId) -> Option<&SignaturePopup> {
+        self.signatures.get(&state)
     }
 
     /// Installs an end-of-line hint provider; the same id replaces the old one.
@@ -655,6 +1032,20 @@ impl Buffers {
     /// The hint for a line (starting at 0): from the first provider that has content.
     pub fn line_hint(&self, path: &str, row: u32, cx: &App) -> Option<SharedString> {
         self.line_hints.iter().find_map(|(_, provider)| provider(path, row, cx))
+    }
+
+    /// Installs an annotation column provider; the same id replaces the old one. A provider tells about
+    /// changes through [`Buffers::refresh_line_hints`].
+    pub fn set_annotation_provider(&mut self, id: impl Into<SharedString>, provider: AnnotationProvider, cx: &mut Context<Self>) {
+        let id = id.into();
+        self.annotation_providers.retain(|(existing, _)| *existing != id);
+        self.annotation_providers.push((id, provider));
+        cx.emit(BuffersEvent::LineHintsChanged);
+    }
+
+    /// The annotation column for a file, from the first provider that has one.
+    pub fn annotation_column(&self, path: &str, cx: &App) -> Option<AnnotationColumn> {
+        self.annotation_providers.iter().find_map(|(_, provider)| provider(path, cx))
     }
 
     /// Called by a provider when its hint content changes.
@@ -683,6 +1074,9 @@ impl Buffers {
         let path = file_path(path);
         let path_owned = path.clone();
         let buffer = cx.new(|cx| Buffer::open(path_owned, env, window, cx));
+        if let Some(backup) = self.pending_backups.remove(&path) {
+            buffer.update(cx, |buffer, cx| buffer.restore_backup(backup, window, cx));
+        }
         self.buffers.insert(path, buffer.downgrade());
         cx.emit(BuffersEvent::Opened(buffer.clone()));
         buffer
@@ -725,5 +1119,19 @@ impl Buffers {
 
     pub fn take_reveal(&mut self, path: &str) -> Option<Reveal> {
         self.reveals.remove(&file_path(path))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::same_stat;
+
+    /// A modification time read back from a hot exit backup can differ in its last bit.
+    #[test]
+    fn stats_match_despite_float_rounding_but_not_real_changes() {
+        let time = 1795762287027.6243_f64;
+        assert!(same_stat(1795762287027.6245, 2, time, 2));
+        assert!(!same_stat(time + 1.0, 2, time, 2), "a millisecond later is a change");
+        assert!(!same_stat(time, 3, time, 2), "another size is a change");
     }
 }

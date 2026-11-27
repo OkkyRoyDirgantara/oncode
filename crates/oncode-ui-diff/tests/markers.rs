@@ -40,11 +40,24 @@ async fn editor_shows_changes_against_the_index_and_blame(cx: &mut TestAppContex
     window.wait_until(cx, "blame loaded", |_, cx| markers.read(cx).blame_for(&path).is_some_and(|ranges| !ranges.is_empty())).await;
     let author = cx.update(|cx| markers.read(cx).blame_for(&path).unwrap()[0].author.clone());
     assert_eq!(author, "Tester");
+    // Toggle Blame shows the blame column beside the editor, and hides it again.
     assert!(window.run_command(cx, "git.toggleBlame"));
     cx.run_until_parked();
-    assert!(cx.update(|cx| markers.read(cx).blame_for(&path).is_none()), "blame turned off");
+    assert!(cx.update(|cx| markers.read(cx).has_blame_column(&path)));
+    let shown = |window: &TestWindow, cx: &mut TestAppContext| {
+        window.update(cx, |window, cx| {
+            window.render_frame(cx);
+            window.try_find("annotation-column").is_some()
+        })
+    };
+    window.wait_until(cx, "column has the blame", |_, cx| markers.read(cx).blame_column(&path).is_some_and(|column| !column.annotations.is_empty())).await;
+    assert!(shown(&window, cx), "the blame column is drawn");
+    let first = cx.update(|cx| markers.read(cx).blame_column(&path).unwrap().annotations[0].text.to_string());
+    assert!(first.contains("Tester") || first == "Not committed yet", "{first}");
     assert!(window.run_command(cx, "git.toggleBlame"));
-    window.wait_until(cx, "blame turned on again", |_, cx| markers.read(cx).blame_for(&path).is_some_and(|ranges| !ranges.is_empty())).await;
+    cx.run_until_parked();
+    assert!(!shown(&window, cx), "the blame column is hidden");
+    assert!(cx.update(|cx| markers.read(cx).blame_for(&path).is_some()), "inline blame keeps its blame");
 }
 
 /// The end-of-line hint painted in the editor, after redrawing frames until `ok` is satisfied.
@@ -103,4 +116,22 @@ async fn inline_blame_is_drawn_at_the_end_of_the_cursor_line(cx: &mut TestAppCon
     assert!(window.run_command(cx, "git.toggleInlineBlame"));
     painted_hint(&window, &view, cx, "inline blame turned off", |hint| hint.is_none()).await;
     assert!(!app.core.user_settings().editor.inline_blame);
+}
+
+/// A file restored with the session when the folder opens can get its editor before the repository is known;
+/// it still gets its change markers and blame once the repository shows up.
+#[gpui_kit::test]
+async fn an_editor_opened_before_its_repository_is_known_still_gets_blame(cx: &mut TestAppContext) {
+    let app = TestApp::new(cx);
+    cx.update(oncode_ui_diff::init);
+    let project = app.git_project(&[("a.txt", "one\n")]);
+    let path = project.join("a.txt").to_string_lossy().into_owned();
+    // The session restores a.txt as soon as the folder is open.
+    app.core.store.set_session(&project.to_string_lossy(), serde_json::json!({ "files": [path.clone()], "active": path.clone() }).to_string());
+    let window = app.open(Some(&project), cx).await;
+    let workbench = window.workbench(cx);
+    window.wait_until(cx, "markers installed", |_, cx| change_markers(workbench.read(cx)).is_some()).await;
+    let markers = cx.update(|cx| change_markers(workbench.read(cx)).unwrap());
+    window.wait_until(cx, "a.txt restored", |_, cx| active_file(workbench.read(cx), cx).is_some_and(|(_, buffer, _)| buffer.read(cx).path() == path)).await;
+    window.wait_until(cx, "blame loaded for the restored file", |_, cx| markers.read(cx).blame_for(&path).is_some_and(|ranges| !ranges.is_empty())).await;
 }

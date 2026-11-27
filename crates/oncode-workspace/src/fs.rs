@@ -117,10 +117,18 @@ fn read_dir_sync(root: &Path, dir: &Path) -> Result<Vec<DirEntry>> {
 /// - `eol` is `Crlf` if `\r\n` outnumbers lone `\n`.
 pub async fn open_file(path: &Path, max_bytes: u64) -> Result<OpenedFile> {
     let path = path.to_path_buf();
-    blocking(move || open_file_sync(&path, max_bytes)).await
+    blocking(move || open_file_sync(&path, max_bytes, None)).await
 }
 
-fn open_file_sync(path: &Path, max_bytes: u64) -> Result<OpenedFile> {
+/// Like [`open_file`], but the text is decoded with `encoding` (a WHATWG label, e.g. `windows-1252`)
+/// instead of detecting it: "Reopen with Encoding". A BOM of that encoding is still recognized.
+pub async fn open_file_with_encoding(path: &Path, max_bytes: u64, encoding: &str) -> Result<OpenedFile> {
+    let forced = Encoding::for_label(encoding.as_bytes()).ok_or_else(|| WsError::other(format!("Unknown encoding: {encoding}")))?;
+    let path = path.to_path_buf();
+    blocking(move || open_file_sync(&path, max_bytes, Some(forced))).await
+}
+
+fn open_file_sync(path: &Path, max_bytes: u64, forced: Option<&'static Encoding>) -> Result<OpenedFile> {
     let meta = fs::metadata(path).map_err(|e| WsError::io(path, e))?;
     if !meta.is_file() {
         return Err(WsError::invalid_path(format!("Not a regular file: {}", path.display())));
@@ -133,7 +141,11 @@ fn open_file_sync(path: &Path, max_bytes: u64) -> Result<OpenedFile> {
     if size > max_bytes {
         return Ok(OpenedFile::TooLarge { size: saturate(size) });
     }
-    match decode(bytes) {
+    let decoded = match forced {
+        Some(encoding) => Some(decode_as(bytes, encoding)),
+        None => decode(bytes),
+    };
+    match decoded {
         None => Ok(OpenedFile::Binary { size: saturate(size) }),
         Some(decoded) => {
             let mut stat = stat_of(&meta);
@@ -194,6 +206,15 @@ fn decode(bytes: Vec<u8>) -> Option<Decoded> {
     };
     let (text, eol) = normalize_eol(text);
     Some(Decoded { text, encoding, bom: bom.is_some(), eol })
+}
+
+/// Decodes with a chosen encoding; a leading BOM of that encoding is dropped (and remembered).
+fn decode_as(bytes: Vec<u8>, encoding: &'static Encoding) -> Decoded {
+    let bom = Encoding::for_bom(&bytes).filter(|(found, _)| *found == encoding);
+    let start = bom.map_or(0, |(_, length)| length);
+    let text = encoding.decode_without_bom_handling(&bytes[start..]).0.into_owned();
+    let (text, eol) = normalize_eol(text);
+    Decoded { text, encoding, bom: bom.is_some(), eol }
 }
 
 /// Converts `\r\n` and lone `\r` into `\n`, and determines the dominant line ending.
@@ -763,6 +784,19 @@ mod tests {
         assert_eq!(file.encoding, "windows-1252");
         assert_eq!(file.text, FRENCH);
         assert!(!file.bom);
+    }
+
+    /// Reopen with Encoding: valid UTF-8 read as windows-1252 on purpose, and an unknown label refused.
+    #[tokio::test]
+    async fn opens_with_a_chosen_encoding() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("a.txt");
+        write(&path, "\u{feff}é\r\n");
+        let file = text_of(open_file_with_encoding(&path, MAX, "windows-1252").await.unwrap());
+        assert_eq!((file.encoding.as_str(), file.text.as_str(), file.bom, file.eol), ("windows-1252", "ï»¿Ã©\n", false, Eol::Crlf));
+        let file = text_of(open_file_with_encoding(&path, MAX, "utf-8").await.unwrap());
+        assert_eq!((file.text.as_str(), file.bom), ("é\n", true));
+        assert!(open_file_with_encoding(&path, MAX, "nope").await.is_err());
     }
 
     #[tokio::test]

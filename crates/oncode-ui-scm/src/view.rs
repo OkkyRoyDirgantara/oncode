@@ -62,6 +62,8 @@ pub struct ScmPanel {
     placeholder_for: String,
     amend: bool,
     signoff: bool,
+    /// Sign commits (GPG or SSH, as configured in git).
+    sign: bool,
     no_verify: bool,
     view: ViewState,
     rows: Vec<Row>,
@@ -135,6 +137,7 @@ impl ScmPanel {
             placeholder_for: String::new(),
             amend: false,
             signoff: false,
+            sign: false,
             no_verify: false,
             view: ViewState::default(),
             rows: Vec::new(),
@@ -191,7 +194,7 @@ impl ScmPanel {
         if self.busy(cx) {
             return;
         }
-        let request = CommitRequest { message: self.message(cx), amend: self.amend, signoff: self.signoff, no_verify: self.no_verify, then };
+        let request = CommitRequest { message: self.message(cx), amend: self.amend, signoff: self.signoff, no_verify: self.no_verify, sign: self.sign, then };
         cx.spawn_in(window, async move |this, cx| {
             if actions::commit(&git, request, cx).await {
                 // The commit box is cleared after a successful commit.
@@ -401,7 +404,7 @@ impl ScmPanel {
         let theme = cx.theme();
         let subject_length = self.message(cx).lines().next().map_or(0, |line| line.chars().count());
         let disabled = busy || snapshot.operation.is_some();
-        let (signoff, no_verify) = (self.signoff, self.no_verify);
+        let (signoff, no_verify, sign) = (self.signoff, self.no_verify, self.sign);
         let this = cx.entity().downgrade();
         let menu = move |menu: PopupMenu, _: &mut Window, _: &mut Context<PopupMenu>| {
             let submit = |then: Option<AfterCommit>| {
@@ -425,6 +428,9 @@ impl ScmPanel {
                 .separator()
                 .item(menu_item("Add Signed-off-by", toggle(|this| this.signoff = !this.signoff)).checked(signoff))
                 .item(menu_item("Skip Hooks (--no-verify)", toggle(|this| this.no_verify = !this.no_verify)).checked(no_verify))
+                // The key and program come from git's configuration (`user.signingkey`, `gpg.format`); a passphrase
+                // must be asked by a graphical pinentry or an agent, since git runs without a terminal here.
+                .item(menu_item("Sign Commit (GPG/SSH)", toggle(|this| this.sign = !this.sign)).checked(sign))
         };
         v_flex()
             .w_full()
@@ -514,6 +520,11 @@ impl ScmPanel {
 
     fn render_operation(&self, snapshot: &RepoSnapshot, busy: bool, cx: &mut Context<Self>) -> Option<AnyElement> {
         let text = logic::operation_text(snapshot.operation.as_ref()?);
+        // A bisect has Good / Bad / Skip / Stop instead of Continue / Skip / Abort (unless a conflict stopped it).
+        let (bisect, found) = match snapshot.operation.as_ref() {
+            Some(oncode_git::Operation::Bisect { first_bad, .. }) => (true, first_bad.is_some()),
+            _ => (false, false),
+        };
         let theme = cx.theme();
         let conflicts = snapshot.conflicted.len();
         let action = |id: &'static str, label: &'static str, action: OperationAction, cx: &Context<Self>| {
@@ -535,15 +546,38 @@ impl ScmPanel {
                 .text_sm()
                 .child(div().font_weight(gpui_kit::FontWeight::SEMIBOLD).child(SharedString::from(text.title)))
                 .child(SharedString::from(text.detail))
-                .child(div().text_xs().text_color(theme.muted_foreground).child(SharedString::from(logic::conflicts_left(conflicts))))
-                .child(
-                    h_flex()
-                        .gap_1p5()
-                        .pt_1()
-                        .child(action("scm-op-continue", "Continue", OperationAction::Continue, cx).primary().disabled(busy || conflicts > 0))
-                        .when(text.can_skip, |el| el.child(action("scm-op-skip", "Skip", OperationAction::Skip, cx).outline()))
-                        .child(action("scm-op-abort", "Abort", OperationAction::Abort, cx).outline()),
-                )
+                .when(!bisect || conflicts > 0, |el| el.child(div().text_xs().text_color(theme.muted_foreground).child(SharedString::from(logic::conflicts_left(conflicts)))))
+                .map(|el| {
+                    if bisect && conflicts == 0 {
+                        let mark = |id: &'static str, label: &'static str, mark: oncode_git::BisectMark, cx: &Context<Self>| {
+                            Button::new(id).small().label(label).disabled(busy || found).on_click(cx.listener(move |this, _, window, cx| {
+                                this.run(window, cx, async move |git, cx| actions::bisect_mark(&git, mark, cx).await);
+                            }))
+                        };
+                        el.child(
+                            h_flex()
+                                .gap_1p5()
+                                .pt_1()
+                                .child(mark("scm-bisect-good", "Good", oncode_git::BisectMark::Good, cx).outline())
+                                .child(mark("scm-bisect-bad", "Bad", oncode_git::BisectMark::Bad, cx).outline())
+                                .child(mark("scm-bisect-skip", "Skip", oncode_git::BisectMark::Skip, cx).outline())
+                                .child(Button::new("scm-bisect-reset").small().label(if found { "Finish" } else { "Stop" }).when(found, |b| b.primary()).when(!found, |b| b.outline()).disabled(busy).on_click(cx.listener(
+                                    |this, _, window, cx| {
+                                        this.run(window, cx, async move |git, cx| actions::bisect_reset(&git, cx).await);
+                                    },
+                                ))),
+                        )
+                    } else {
+                        el.child(
+                            h_flex()
+                                .gap_1p5()
+                                .pt_1()
+                                .child(action("scm-op-continue", "Continue", OperationAction::Continue, cx).primary().disabled(busy || conflicts > 0))
+                                .when(text.can_skip, |el| el.child(action("scm-op-skip", "Skip", OperationAction::Skip, cx).outline()))
+                                .child(action("scm-op-abort", "Abort", OperationAction::Abort, cx).outline()),
+                        )
+                    }
+                })
                 .into_any_element(),
         )
     }

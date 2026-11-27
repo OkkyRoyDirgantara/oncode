@@ -229,6 +229,55 @@ async fn shift_alt_f_and_format_on_save_use_the_languages_formatter(cx: &mut Tes
     window.wait_until(cx, "saved tidily", move |_, _| std::fs::read_to_string(&lib).is_ok_and(|text| text == "pub fn a() {}\n")).await;
 }
 
+/// Save All goes through the same "before save" step as Save, so Format on Save formats every file it
+/// writes (it used to skip it), and Replace in Files' programmatic save (`save_as_is`) does not.
+#[gpui_kit::test]
+async fn save_all_runs_format_on_save_but_save_as_is_does_not(cx: &mut TestAppContext) {
+    let app = TestApp::new(cx);
+    cx.update(|cx| {
+        oncode_ui::editor::register_format_provider(
+            1000,
+            |buffer, _, _, cx| {
+                let text = buffer.read(cx).text(cx)?.to_string();
+                Some(gpui_kit::Task::ready(oncode_ui::editor::FormatOutcome::Formatted(text.to_uppercase())))
+            },
+            cx,
+        )
+    });
+    let project = app.project(&[("a.txt", "a\n"), ("b.txt", "b\n")]);
+    let window = app.open(Some(&project), cx).await;
+    let workbench = window.workbench(cx);
+    let mut settings = app.core.user_settings();
+    settings.editor.format_on_save = true;
+    let core = app.core.clone();
+    app.runtime.block_on(async move { oncode_core::api::app::settings_set(&core, settings).await }).unwrap();
+    window.wait_until(cx, "new settings read", |_, cx| workbench.read(cx).settings().editor.format_on_save).await;
+
+    let mut buffers_by_name = Vec::new();
+    for name in ["a.txt", "b.txt"] {
+        let path = project.join(name).to_string_lossy().into_owned();
+        window.update(cx, |window, cx| workbench.update(cx, |workbench, cx| open_file(workbench, OpenFile::new(&path), window, cx)));
+        window.wait_until(cx, "loaded", |_, cx| active_file(workbench.read(cx), cx).is_some_and(|(_, buffer, _)| buffer.read(cx).path().ends_with(name) && buffer.read(cx).is_ready())).await;
+        window.update(cx, |window, cx| {
+            window.render_frame(cx);
+            window.input("x", cx);
+        });
+        cx.run_until_parked();
+        buffers_by_name.push(cx.update(|cx| active_file(workbench.read(cx), cx).unwrap().1));
+    }
+
+    // b.txt is written as it is, the way Replace in Files saves a file.
+    let b = buffers_by_name[1].clone();
+    let saved = window.update(cx, |window, cx| b.update(cx, |buffer, cx| buffer.save_as_is(window, cx)));
+    window.wait_until(cx, "b.txt saved", |_, cx| !b.read(cx).is_dirty()).await;
+    drop(saved);
+    assert_eq!(std::fs::read_to_string(project.join("b.txt")).unwrap(), "xb\n");
+
+    assert!(window.run_command(cx, "file.saveAll"));
+    let a = project.join("a.txt");
+    window.wait_until(cx, "a.txt formatted and saved", move |_, _| std::fs::read_to_string(&a).is_ok_and(|text| text == "XA\n")).await;
+}
+
 fn rustfmt_on_path() -> Option<std::path::PathBuf> {
     std::env::split_paths(&std::env::var_os("PATH")?).find_map(|dir| ["rustfmt", "rustfmt.exe"].iter().map(|name| dir.join(name)).find(|path| path.is_file()))
 }
@@ -365,4 +414,240 @@ async fn saving_a_file_changed_on_disk_asks_before_overwriting(cx: &mut TestAppC
     window.wait_until(cx, "reloaded", |_, cx| state.read(cx).value().as_ref() == "FROM_SCRIPT=2\n").await;
     assert!(!cx.update(|cx| buffer.read(cx).is_dirty() || buffer.read(cx).has_conflict()));
     assert_eq!(std::fs::read_to_string(&file).unwrap(), "FROM_SCRIPT=2\n");
+}
+
+/// Opens `name` (with `content`) in a new project and returns the window, the editor state, and a key-press helper.
+async fn open_single(app: &TestApp, name: &str, content: &str, cx: &mut TestAppContext) -> (TestWindow, gpui_kit::Entity<gpui_kit::component::input::EditorState>) {
+    let project = app.project(&[(name, content)]);
+    let window = app.open(Some(&project), cx).await;
+    let workbench = window.workbench(cx);
+    let path = project.join(name).to_string_lossy().into_owned();
+    window.update(cx, |window, cx| workbench.update(cx, |workbench, cx| open_file(workbench, OpenFile::new(&path), window, cx)));
+    window.wait_until(cx, "file loaded", |_, cx| active_file(workbench.read(cx), cx).is_some_and(|(_, buffer, _)| buffer.read(cx).is_ready())).await;
+    let (_, _, state) = cx.update(|cx| active_file(workbench.read(cx), cx).unwrap());
+    (window, state)
+}
+
+fn press(window: &TestWindow, cx: &mut TestAppContext, key: &str) {
+    window.update(cx, |window, cx| {
+        window.render_frame(cx);
+        window.press(key, cx);
+    });
+    cx.run_until_parked();
+}
+
+fn typed(window: &TestWindow, cx: &mut TestAppContext, text: &str) {
+    window.update(cx, |window, cx| {
+        window.render_frame(cx);
+        window.input(text, cx);
+    });
+    cx.run_until_parked();
+}
+
+#[gpui_kit::test]
+async fn ctrl_slash_toggles_line_comments_and_undo_restores_in_one_step(cx: &mut TestAppContext) {
+    let app = TestApp::new(cx);
+    let (window, state) = open_single(&app, "main.rs", "fn main() {\n    run();\n}\n", cx).await;
+    let text = |cx: &mut TestAppContext| cx.update(|cx| state.read(cx).value().to_string());
+    // The cursor is at the start of the first line.
+    press(&window, cx, "secondary-/");
+    assert_eq!(text(cx), "// fn main() {\n    run();\n}\n");
+    press(&window, cx, "secondary-/");
+    assert_eq!(text(cx), "fn main() {\n    run();\n}\n", "toggling again removes the comment");
+    press(&window, cx, "secondary-/");
+    press(&window, cx, "secondary-z");
+    assert_eq!(text(cx), "fn main() {\n    run();\n}\n", "one undo step per toggle");
+
+    // Shift+Alt+A on an empty selection inserts an empty block comment with the cursor inside.
+    press(&window, cx, "shift-alt-a");
+    typed(&window, cx, "x");
+    assert_eq!(text(cx), "/* x */fn main() {\n    run();\n}\n");
+}
+
+#[gpui_kit::test]
+async fn copy_and_delete_line_commands(cx: &mut TestAppContext) {
+    let app = TestApp::new(cx);
+    let (window, state) = open_single(&app, "list.txt", "one\ntwo\n", cx).await;
+    let text = |cx: &mut TestAppContext| cx.update(|cx| state.read(cx).value().to_string());
+    assert!(window.run_command(cx, "editor.copyLinesDown"));
+    cx.run_until_parked();
+    assert_eq!(text(cx), "one\none\ntwo\n");
+    typed(&window, cx, "x");
+    assert_eq!(text(cx), "one\nxone\ntwo\n", "the cursor moved to the copy below");
+    press(&window, cx, "secondary-shift-k");
+    assert_eq!(text(cx), "one\ntwo\n");
+}
+
+#[gpui_kit::test]
+async fn ctrl_d_adds_the_next_occurrence_and_ctrl_shift_l_selects_all(cx: &mut TestAppContext) {
+    let app = TestApp::new(cx);
+    let (window, state) = open_single(&app, "a.txt", "foo bar foo foobar foo\n", cx).await;
+    let text = |cx: &mut TestAppContext| cx.update(|cx| state.read(cx).value().to_string());
+    // First press selects the word under the cursor, the next two add the other whole-word "foo"s.
+    press(&window, cx, "secondary-d");
+    assert_eq!(cx.update(|cx| state.read(cx).selected_range()), 0..3);
+    press(&window, cx, "secondary-d");
+    press(&window, cx, "secondary-d");
+    typed(&window, cx, "x");
+    assert_eq!(text(cx), "x bar x foobar x\n", "three cursors typed at once; foobar is not a whole-word match");
+
+    press(&window, cx, "secondary-z");
+    // Ctrl+Shift+L from a cursor: every whole-word occurrence of the word under it.
+    cx.update(|cx| state.update(cx, |state, cx| state.set_selected_range(9..9, cx)));
+    press(&window, cx, "secondary-shift-l");
+    typed(&window, cx, "y");
+    assert_eq!(text(cx), "y bar y foobar y\n");
+    // From a selection: the selected text anywhere, also inside other words (as in VS Code).
+    press(&window, cx, "secondary-z");
+    cx.update(|cx| state.update(cx, |state, cx| state.set_selected_range(8..11, cx)));
+    press(&window, cx, "secondary-shift-l");
+    typed(&window, cx, "y");
+    assert_eq!(text(cx), "y bar y ybar y\n");
+}
+
+/// Waits until an element exists (e.g. a quick pick's input or first item), rendering meanwhile.
+async fn wait_for_pick_element(window: &TestWindow, cx: &mut TestAppContext, id: impl Into<gpui_kit::ElementId> + Clone) {
+    for _ in 0..300 {
+        let found = window.update(cx, |window, cx| {
+            window.render_frame(cx);
+            window.try_find(id.clone()).is_some()
+        });
+        if found {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        cx.run_until_parked();
+    }
+    panic!("element never appeared");
+}
+
+/// Go to Symbol in Editor without a language server: the outline comes from the file's text; moving through
+/// the list previews each symbol, Enter goes there, Escape returns to where the cursor was.
+#[gpui_kit::test]
+async fn go_to_symbol_in_editor_without_a_language_server(cx: &mut TestAppContext) {
+    let app = TestApp::new(cx);
+    let project = app.project(&[("lib.rs", "struct Point {}\n\nfn helper() {}\n\nfn main() {\n    helper();\n}\n")]);
+    let window = app.open(Some(&project), cx).await;
+    let workbench = window.workbench(cx);
+    let path = project.join("lib.rs").to_string_lossy().into_owned();
+    window.update(cx, |window, cx| workbench.update(cx, |workbench, cx| open_file(workbench, OpenFile::new(&path), window, cx)));
+    window.wait_until(cx, "file loaded", |_, cx| active_file(workbench.read(cx), cx).is_some_and(|(_, buffer, _)| buffer.read(cx).is_ready())).await;
+    let (view, _, _) = cx.update(|cx| active_file(workbench.read(cx), cx).unwrap());
+    let line = |cx: &mut TestAppContext| cx.update(|cx| view.read(cx).cursor_info(cx).0);
+
+    press(&window, cx, "secondary-shift-o");
+    wait_for_pick_element(&window, cx, "quick-pick-input").await;
+    press(&window, cx, "down");
+    assert_eq!(line(cx), 3, "moving to the second symbol previews it");
+    press(&window, cx, "escape");
+    assert_eq!(line(cx), 1, "Escape returns to where the cursor was");
+
+    press(&window, cx, "secondary-shift-o");
+    wait_for_pick_element(&window, cx, "quick-pick-input").await;
+    typed(&window, cx, "main");
+    press(&window, cx, "enter");
+    assert_eq!(cx.update(|cx| view.read(cx).cursor_info(cx)).0, 5);
+}
+
+/// Go to Symbol in Workspace without a language server: a project text search for definitions.
+#[gpui_kit::test]
+async fn go_to_symbol_in_workspace_without_a_language_server(cx: &mut TestAppContext) {
+    let app = TestApp::new(cx);
+    let project = app.project(&[("main.rs", "fn main() {}\n"), ("src/util.rs", "// helpers\npub fn compute_total() {}\n")]);
+    let window = app.open(Some(&project), cx).await;
+    let workbench = window.workbench(cx);
+
+    assert!(window.run_command(cx, "workbench.gotoSymbol"));
+    wait_for_pick_element(&window, cx, "quick-pick-input").await;
+    typed(&window, cx, "total");
+    wait_for_pick_element(&window, cx, ("quick-pick-item", 0usize)).await;
+    press(&window, cx, "enter");
+    window
+        .wait_until(cx, "util.rs open at the definition", |_, cx| {
+            active_file(workbench.read(cx), cx).is_some_and(|(view, buffer, _)| buffer.read(cx).path().ends_with("util.rs") && buffer.read(cx).is_ready() && view.read(cx).cursor_info(cx).0 == 2)
+        })
+        .await;
+}
+
+/// `.editorconfig`: indentation per file type, and trailing whitespace / final newline on save.
+#[gpui_kit::test]
+async fn editorconfig_sets_indentation_and_cleans_whitespace_on_save(cx: &mut TestAppContext) {
+    let app = TestApp::new(cx);
+    let project = app.project(&[
+        (".editorconfig", "root = true\n[*]\ntrim_trailing_whitespace = true\ninsert_final_newline = true\n[*.go]\nindent_style = tab\n[*.py]\nindent_style = space\nindent_size = 2\n"),
+        ("main.go", "x\n"),
+        ("app.py", "y\n"),
+        ("notes.txt", "a  \nb"),
+    ]);
+    let window = app.open(Some(&project), cx).await;
+    let workbench = window.workbench(cx);
+    let open = |name: &str, window: &TestWindow, cx: &mut TestAppContext| {
+        let path = project.join(name).to_string_lossy().into_owned();
+        window.update(cx, |window, cx| workbench.update(cx, |w, cx| open_file(w, OpenFile::new(&path), window, cx)));
+    };
+    for (name, expected) in [("main.go", "\tx\n"), ("app.py", "  y\n")] {
+        open(name, &window, cx);
+        window
+            .wait_until(cx, "loaded with its .editorconfig", |_, cx| {
+                active_file(workbench.read(cx), cx).is_some_and(|(_, b, _)| b.read(cx).path().ends_with(name) && b.read(cx).is_ready() && b.read(cx).editorconfig().indent_with_tabs.is_some())
+            })
+            .await;
+        press(&window, cx, "tab");
+        let state = cx.update(|cx| active_file(workbench.read(cx), cx).unwrap().2);
+        assert_eq!(cx.update(|cx| state.read(cx).value().to_string()), expected, "{name}");
+    }
+
+    open("notes.txt", &window, cx);
+    window
+        .wait_until(cx, "notes.txt loaded", |_, cx| active_file(workbench.read(cx), cx).is_some_and(|(_, b, _)| b.read(cx).path().ends_with("notes.txt") && b.read(cx).is_ready() && b.read(cx).editorconfig().trim_trailing_whitespace.is_some()))
+        .await;
+    typed(&window, cx, "x");
+    assert!(window.run_command(cx, "file.save"));
+    let notes = project.join("notes.txt");
+    window.wait_until(cx, "saved clean", move |_, _| std::fs::read_to_string(&notes).is_ok_and(|text| text == "xa\nb\n")).await;
+}
+
+/// Picks an item of the open quick pick by typing part of its label, then Enter.
+async fn pick_item(window: &TestWindow, cx: &mut TestAppContext, text: &str) {
+    wait_for_pick_element(window, cx, "quick-pick-input").await;
+    typed(window, cx, text);
+    press(window, cx, "enter");
+}
+
+/// The status bar's line ending and encoding open Change End of Line Sequence and Change File Encoding.
+#[gpui_kit::test]
+async fn change_end_of_line_and_encoding(cx: &mut TestAppContext) {
+    let app = TestApp::new(cx);
+    let project = app.project(&[("a.txt", "é\nb\n")]);
+    let window = app.open(Some(&project), cx).await;
+    let workbench = window.workbench(cx);
+    let path = project.join("a.txt").to_string_lossy().into_owned();
+    window.update(cx, |window, cx| workbench.update(cx, |w, cx| open_file(w, OpenFile::new(&path), window, cx)));
+    window.wait_until(cx, "loaded", |_, cx| active_file(workbench.read(cx), cx).is_some_and(|(_, b, _)| b.read(cx).is_ready())).await;
+    let buffer = cx.update(|cx| active_file(workbench.read(cx), cx).unwrap().1);
+    let file = project.join("a.txt");
+
+    wait_for_pick_element(&window, cx, "status-eol").await;
+    window.update(cx, |window, cx| {
+        window.render_frame(cx);
+        window.click("status-eol", cx);
+    });
+    pick_item(&window, cx, "CRLF").await;
+    assert!(cx.update(|cx| buffer.read(cx).is_dirty()), "a new line ending is an unsaved change");
+    assert!(window.run_command(cx, "file.save"));
+    let crlf = file.clone();
+    window.wait_until(cx, "saved with CRLF", move |_, _| std::fs::read(&crlf).is_ok_and(|bytes| bytes == "é\r\nb\r\n".as_bytes())).await;
+
+    assert!(window.run_command(cx, "editor.changeEncoding"));
+    pick_item(&window, cx, "Save with").await;
+    pick_item(&window, cx, "Western").await;
+    let western = file.clone();
+    window.wait_until(cx, "saved as windows-1252", move |_, _| std::fs::read(&western).is_ok_and(|bytes| bytes == b"\xe9\r\nb\r\n")).await;
+
+    // Reopen as UTF-8: the windows-1252 byte is not valid UTF-8 and shows as a replacement character.
+    assert!(window.run_command(cx, "editor.changeEncoding"));
+    pick_item(&window, cx, "Reopen").await;
+    pick_item(&window, cx, "UTF-8").await;
+    window.wait_until(cx, "reopened as UTF-8", |_, cx| buffer.read(cx).encoding() == "UTF-8" && buffer.read(cx).text(cx).is_some_and(|t| t.to_string() == "\u{fffd}\nb\n")).await;
+    assert!(!cx.update(|cx| buffer.read(cx).is_dirty()));
 }

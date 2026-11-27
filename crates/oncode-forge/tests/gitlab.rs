@@ -5,7 +5,7 @@ mod common;
 use common::{assert_error, header, query_value, received, repo};
 use oncode_forge::{
     provider, CheckState, ForgeErrorCode, ForgeHost, ForgeKind, ForgeProvider, NewPullRequest, PrFilter, PrState,
-    RepoRef,
+    RepoRef, MergeInput, MergeMethod, NewReviewComment, ReviewEvent, ReviewInput, ReviewSide,
 };
 use serde_json::{json, Value};
 use wiremock::matchers::{body_json, method, path, query_param, query_param_is_missing};
@@ -725,4 +725,66 @@ async fn malformed_json_and_unreachable_server() {
     let uri = common::closed_port_uri();
     let err = provider(&ForgeHost::gitlab(), TOKEN, Some(&uri)).current_user().await.expect_err("not connected");
     assert_error(&err, ForgeErrorCode::Network, TOKEN);
+}
+
+/// Merge on GitLab: squash, the head commit seen, and removing the source branch go in one request; rebase is
+/// not a merge method there.
+#[tokio::test]
+async fn merge_request_merges_with_squash_and_removes_the_branch() {
+    let server = MockServer::start().await;
+    Mock::given(method("PUT"))
+        .and(path(format!("{PROJECT}/merge_requests/4/merge")))
+        .and(body_json(json!({ "squash": true, "sha": "abc123", "should_remove_source_branch": true, "squash_commit_message": "Add page" })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(mr_json(4, "Add page")))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let input = MergeInput { method: MergeMethod::Squash, sha: Some("abc123".into()), title: Some("Add page".into()), message: None, delete_branch: true };
+    client(&server).merge_pull_request(&proyek(), 4, &input).await.expect("merged");
+    let rebase = MergeInput { method: MergeMethod::Rebase, sha: None, title: None, message: None, delete_branch: false };
+    let err = client(&server).merge_pull_request(&proyek(), 4, &rebase).await.expect_err("no rebase");
+    assert_error(&err, ForgeErrorCode::InvalidInput, TOKEN);
+}
+
+/// GitLab review: line comments come from discussions; a review posts each line comment as a positioned
+/// discussion (with the MR's diff refs), the overall comment as a note, then the approval.
+#[tokio::test]
+async fn review_on_gitlab_uses_discussions_notes_and_approve() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path(format!("{PROJECT}/merge_requests/4/discussions")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!([
+            { "id": "d1", "notes": [
+                { "id": 1, "body": "Why?", "author": { "username": "budi" }, "system": false, "position": { "new_path": "a.rs", "old_path": "a.rs", "new_line": 3, "old_line": null } },
+                { "id": 2, "body": "Because.", "author": { "username": "ana" }, "system": false, "position": { "new_path": "a.rs", "old_path": "a.rs", "new_line": 3, "old_line": null } }
+            ] },
+            { "id": "d2", "notes": [{ "id": 3, "body": "General", "author": { "username": "budi" }, "system": false }] },
+            { "id": "d3", "notes": [{ "id": 4, "body": "added 1 commit", "system": true }] }
+        ])))
+        .mount(&server)
+        .await;
+    let mut mr = mr_json(4, "Add page");
+    mr["diff_refs"] = json!({ "base_sha": "b", "start_sha": "s", "head_sha": "h" });
+    Mock::given(method("GET")).and(path(format!("{PROJECT}/merge_requests/4"))).respond_with(ResponseTemplate::new(200).set_body_json(mr)).mount(&server).await;
+    Mock::given(method("POST"))
+        .and(path(format!("{PROJECT}/merge_requests/4/discussions")))
+        .and(body_json(json!({ "body": "nit", "position": { "position_type": "text", "base_sha": "b", "start_sha": "s", "head_sha": "h", "new_path": "a.rs", "old_path": "a.rs", "new_line": 5 } })))
+        .respond_with(ResponseTemplate::new(201).set_body_json(json!({ "id": "d4" })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST")).and(path(format!("{PROJECT}/merge_requests/4/notes"))).and(body_json(json!({ "body": "LGTM" }))).respond_with(ResponseTemplate::new(201).set_body_json(json!({ "id": 9 }))).expect(1).mount(&server).await;
+    Mock::given(method("POST")).and(path(format!("{PROJECT}/merge_requests/4/approve"))).respond_with(ResponseTemplate::new(201).set_body_json(json!({}))).expect(1).mount(&server).await;
+
+    let client = client(&server);
+    let comments = client.list_review_comments(&proyek(), 4).await.expect("comments");
+    let shown: Vec<(&str, &str, Option<u32>, bool)> = comments.iter().map(|c| (c.id.as_str(), c.thread.as_str(), c.line, c.is_reply)).collect();
+    assert_eq!(shown, [("1", "d1", Some(3), false), ("2", "d1", Some(3), true)]);
+    let input = ReviewInput {
+        event: ReviewEvent::Approve,
+        body: "LGTM".into(),
+        comments: vec![NewReviewComment { path: "a.rs".into(), line: 5, side: ReviewSide::Right, body: "nit".into() }],
+        commit_id: "h".into(),
+    };
+    client.submit_review(&proyek(), 4, &input).await.expect("review");
 }

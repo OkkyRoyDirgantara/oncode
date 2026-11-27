@@ -431,3 +431,134 @@ async fn shell_sees_the_same_size_as_the_grid_after_the_first_layout(cx: &mut Te
     let seen = shell_text(&std::fs::read(&out).unwrap());
     assert_eq!(seen.trim(), format!("{cols} {rows}"), "the PTY size according to the shell differs from the emulator grid");
 }
+
+/// A program that asks for the mouse (here `cat -v` after turning on SGR mouse reporting) receives clicks as
+/// escape sequences; Shift+click selects text locally instead.
+#[cfg(unix)]
+#[gpui_kit::test]
+async fn clicks_are_reported_to_a_program_that_asks_for_the_mouse(cx: &mut TestAppContext) {
+    let app = TestApp::new(cx);
+    cx.update(oncode_ui_terminal::init);
+    let project = app.project(&[("a.txt", "a\n")]);
+    let window = app.open(Some(&project), cx).await;
+    let workbench = window.workbench(cx);
+    assert!(window.run_command(cx, "terminal.toggle"));
+    let panel = cx.update(|cx| oncode_ui_terminal::panel(workbench.read(cx)).unwrap());
+    window.wait_until(cx, "shell is running", |_, cx| panel.read(cx).active_session().is_some_and(|s| s.read(cx).is_running())).await;
+    let session = cx.update(|cx| panel.read(cx).active_session().unwrap().clone());
+    window.update(cx, |window, cx| {
+        window.render_frame(cx);
+        window.input("printf '\\033[?1000h\\033[?1006h'; echo mouse-on; cat -v", cx);
+        window.press("enter", cx);
+    });
+    window.wait_until(cx, "mouse reporting on", |_, cx| session.read(cx).text().lines().any(|line| line.trim() == "mouse-on")).await;
+    for _ in 0..5 {
+        window.update(cx, |window, cx| window.render_frame(cx));
+        cx.run_until_parked();
+    }
+    window.update(cx, |window, cx| {
+        window.render_frame(cx);
+        window.click("terminal-session", cx);
+    });
+    // `cat -v` shows the escape byte as `^[`; the line only appears after Enter (the terminal is in line mode).
+    window.update(cx, |window, cx| window.press("enter", cx));
+    window.wait_until(cx, "the click reached the program", |_, cx| session.read(cx).text().contains("^[[<0;")).await;
+}
+
+/// An input method composes text (shown at the cursor, not sent yet), then commits it, which sends it to the shell.
+#[gpui_kit::test]
+async fn input_method_composition_is_sent_when_committed(cx: &mut TestAppContext) {
+    let app = TestApp::new(cx);
+    cx.update(oncode_ui_terminal::init);
+    let project = app.project(&[("a.txt", "a\n")]);
+    let window = app.open(Some(&project), cx).await;
+    let workbench = window.workbench(cx);
+    assert!(window.run_command(cx, "terminal.toggle"));
+    let panel = cx.update(|cx| oncode_ui_terminal::panel(workbench.read(cx)).unwrap());
+    window.wait_until(cx, "shell is running", |_, cx| panel.read(cx).active_session().is_some_and(|s| s.read(cx).is_running())).await;
+    let session = cx.update(|cx| panel.read(cx).active_session().unwrap().clone());
+    let bounds = window.update(cx, |window, cx| {
+        window.render_frame(cx);
+        window.find("terminal-session").bounds()
+    });
+    window.update(cx, |window, cx| {
+        let mut input = gpui_kit::test::TestInput::new(gpui_kit::ElementInputHandler::new(bounds, session.clone()), window);
+        input.compose_text(None, "にほ", None, cx);
+        assert_eq!(input.marked_text_range(cx), Some(0..2));
+    });
+    assert_eq!(cx.update(|cx| session.read(cx).preedit().map(String::from)).as_deref(), Some("にほ"));
+    window.update(cx, |window, cx| {
+        let mut input = gpui_kit::test::TestInput::new(gpui_kit::ElementInputHandler::new(bounds, session.clone()), window);
+        input.commit_text("echo ime-日本", cx);
+    });
+    assert_eq!(cx.update(|cx| session.read(cx).preedit().map(String::from)), None);
+    window.update(cx, |window, cx| window.press("enter", cx));
+    window.wait_until(cx, "the committed text reached the shell", |_, cx| session.read(cx).text().lines().any(|line| line.trim() == "ime-日本")).await;
+}
+
+/// Ctrl+F opens an inline find bar: matches are counted as you type, Enter / Shift+Enter move between them,
+/// the options narrow the search, and Escape closes the bar and gives the keyboard back to the terminal.
+#[gpui_kit::test]
+async fn inline_find_bar_counts_and_steps_through_matches(cx: &mut TestAppContext) {
+    let app = TestApp::new(cx);
+    cx.update(oncode_ui_terminal::init);
+    let project = app.project(&[("a.txt", "a\n")]);
+    let window = app.open(Some(&project), cx).await;
+    let workbench = window.workbench(cx);
+    assert!(window.run_command(cx, "terminal.toggle"));
+    let panel = cx.update(|cx| oncode_ui_terminal::panel(workbench.read(cx)).unwrap());
+    window.wait_until(cx, "shell is running", |_, cx| panel.read(cx).active_session().is_some_and(|s| s.read(cx).is_running())).await;
+    let session = cx.update(|cx| panel.read(cx).active_session().unwrap().clone());
+    window.update(cx, |window, cx| {
+        window.render_frame(cx);
+        window.input("echo zebra-1 && echo zebra-2 && echo ZEBRA-3", cx);
+        window.press("enter", cx);
+    });
+    window.wait_until(cx, "output shown", |_, cx| session.read(cx).text().lines().any(|line| line.trim() == "ZEBRA-3")).await;
+
+    window.update(cx, |window, cx| {
+        window.render_frame(cx);
+        window.press(if cfg!(target_os = "macos") { "cmd-f" } else { "ctrl-f" }, cx);
+    });
+    cx.run_until_parked();
+    window.update(cx, |window, cx| {
+        window.render_frame(cx);
+        window.input("zebra-", cx);
+    });
+    cx.run_until_parked();
+    // The typed command line holds three more matches than the output (it echoes all three words).
+    let (query, total, current) = cx.update(|cx| session.read(cx).find_state(cx)).expect("find bar open");
+    assert_eq!(query, "zebra-");
+    assert!(total >= 3, "{total}");
+    assert_eq!(current, Some(total - 1), "starts at the newest match");
+    window.update(cx, |window, cx| window.press("enter", cx));
+    cx.run_until_parked();
+    assert_eq!(cx.update(|cx| session.read(cx).find_state(cx)).unwrap().2, Some(0), "Enter wraps to the first match");
+    // New output (here a command run meanwhile; on macOS zsh redraws its prompt) shifts the lines; the current
+    // match stays the same one.
+    // Enough lines to scroll the screen (on Unix; `seq` is not in cmd or PowerShell).
+    let more = if cfg!(unix) { "seq 1 80; echo more-output\r" } else { "echo more-output\r" };
+    session.update(cx, |session, cx| session.send_text(more, cx));
+    window.wait_until(cx, "new output", |_, cx| session.read(cx).text().lines().any(|line| line.trim() == "more-output")).await;
+    assert_eq!(cx.update(|cx| session.read(cx).find_state(cx)).unwrap().2, Some(0), "new output keeps the current match");
+    window.update(cx, |window, cx| window.press("shift-enter", cx));
+    cx.run_until_parked();
+    let total = cx.update(|cx| session.read(cx).find_state(cx)).unwrap().1;
+    assert_eq!(cx.update(|cx| session.read(cx).find_state(cx)).unwrap().2, Some(total - 1));
+
+    window.update(cx, |window, cx| {
+        window.render_frame(cx);
+        window.click("terminal-find-case", cx);
+    });
+    cx.run_until_parked();
+    let case_sensitive = cx.update(|cx| session.read(cx).find_state(cx)).unwrap().1;
+    assert!(case_sensitive < total, "Match Case leaves out ZEBRA");
+
+    window.update(cx, |window, cx| {
+        window.render_frame(cx);
+        window.press("escape", cx);
+    });
+    cx.run_until_parked();
+    assert!(cx.update(|cx| session.read(cx).find_state(cx)).is_none(), "Escape closes the bar");
+    assert!(window.update(cx, |window, cx| session.read(cx).focus_handle_is_focused(window)), "the terminal has the keyboard again");
+}

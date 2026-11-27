@@ -336,6 +336,31 @@ impl MockServer {
         json!(actions)
     }
 
+    /// `def name` definitions in one document, as hierarchical symbols (functions, kind 12).
+    fn document_symbols(&self, params: &Value) -> Value {
+        let Some((_, doc)) = params["textDocument"]["uri"].as_str().and_then(|uri| self.doc(uri)) else { return Value::Null };
+        let symbols: Vec<Value> = definitions(&doc.text)
+            .into_iter()
+            .map(|span| {
+                let range = self.range(&doc.text, span);
+                json!({ "name": &doc.text[span.0..span.1], "kind": 12, "range": range, "selectionRange": range })
+            })
+            .collect();
+        json!(symbols)
+    }
+
+    /// `def name` definitions across the workspace whose name contains the query, as `SymbolInformation`.
+    fn workspace_symbols(&self, params: &Value) -> Value {
+        let query = params["query"].as_str().unwrap_or_default().to_lowercase();
+        let mut out = Vec::new();
+        for (uri, text) in self.workspace() {
+            for span in definitions(&text).into_iter().filter(|span| text[span.0..span.1].to_lowercase().contains(&query)) {
+                out.push(json!({ "name": &text[span.0..span.1], "kind": 12, "location": { "uri": uri, "range": self.range(&text, span) }, "containerName": "mock" }));
+            }
+        }
+        json!(out)
+    }
+
     fn capabilities(&self) -> Value {
         json!({
             "positionEncoding": self.encoding.kind(),
@@ -347,7 +372,9 @@ impl MockServer {
             "referencesProvider": true,
             "renameProvider": { "prepareProvider": true },
             "documentFormattingProvider": true,
-            "codeActionProvider": { "codeActionKinds": ["quickfix"] }
+            "codeActionProvider": { "codeActionKinds": ["quickfix"] },
+            "documentSymbolProvider": true,
+            "workspaceSymbolProvider": true
         })
     }
 
@@ -396,6 +423,8 @@ impl MockServer {
             }
             "textDocument/formatting" => self.formatting(params),
             "textDocument/codeAction" => self.code_actions(params),
+            "textDocument/documentSymbol" => self.document_symbols(params),
+            "workspace/symbol" => self.workspace_symbols(params),
             // Test hooks: the server's state and the document contents according to the server.
             "mock/document" => match params["uri"].as_str().and_then(|uri| self.doc(uri)) {
                 Some((_, doc)) => json!({ "text": doc.text, "version": doc.version, "languageId": doc.language }),

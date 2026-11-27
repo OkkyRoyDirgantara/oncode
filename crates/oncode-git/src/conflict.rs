@@ -167,7 +167,7 @@ impl Repo {
             }
             Some(Operation::CherryPick { commit }) => (head_label, format!("cherry-pick {commit}")),
             Some(Operation::Revert { commit }) => (head_label, format!("revert {commit}")),
-            None => (head_label, "incoming".to_string()),
+            Some(Operation::Bisect { .. }) | None => (head_label, "incoming".to_string()),
         }
     }
 

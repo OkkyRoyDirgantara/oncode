@@ -4,17 +4,19 @@
 //! (see `docs/DESIGN.md` section 7.1–7.3). This crate does not depend on Tauri,
 //! so it can be tested directly against temporary directories.
 
+pub mod editorconfig;
 pub mod error;
 pub mod fs;
 mod gitignore;
 pub mod index;
+pub mod outline;
 pub mod search;
 pub mod symbols;
 pub mod watcher;
 
 pub use error::{Result, WsError, WsErrorCode};
 pub use fs::{
-    copy_into, create_dir, create_file, is_inside, open_file, read_bytes, read_dir, rename, save_file, stat, trash, DirEntry, Eol,
+    copy_into, create_dir, create_file, is_inside, open_file, open_file_with_encoding, read_bytes, read_dir, rename, save_file, stat, trash, DirEntry, Eol,
     FileStat, OpenedFile, TextFile,
 };
 pub use index::{FileIndex, QuickOpenItem};

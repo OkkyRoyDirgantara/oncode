@@ -73,6 +73,8 @@ pub struct Frame {
     pub backgrounds: Vec<Span>,
     /// Selected cells; drawn with the palette's selection color (transparent) over the background.
     pub selections: Vec<Span>,
+    /// Find bar matches; drawn like the selection, in the match color.
+    pub matches: Vec<Span>,
     pub runs: Vec<TextRun>,
     pub glyphs: Vec<Glyph>,
     pub cursor: Option<Cursor>,

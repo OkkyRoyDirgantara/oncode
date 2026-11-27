@@ -325,7 +325,7 @@ impl ImageView {
                 BufferEvent::Loaded => this.load(window, cx),
                 // An SVG edited as text, e.g. in another group.
                 BufferEvent::Edited => this.schedule_load(window, cx),
-                BufferEvent::Saved => {}
+                BufferEvent::Saved | BufferEvent::ConfigChanged => {}
             }),
             // The picture lives in the GPU texture atlas until it is removed explicitly.
             cx.on_release(|this, cx| {

@@ -70,6 +70,13 @@ async fn gitlab_token_login_lists_merge_requests_and_opens_one(cx: &mut TestAppC
     assert_eq!(detail.pull_request.number, 12);
     assert_eq!(detail.body, "## Summary\n\nFixes *login*.");
     assert_eq!(detail.labels, ["bug"]);
+    // The merge state of an open MR is shown under the title.
+    assert_eq!(detail.mergeable, Some(true));
+    let shown = window.update(cx, |window, cx| {
+        window.render_frame(cx);
+        window.try_find("forge-pr-mergeable").is_some()
+    });
+    assert!(shown, "the merge state line is shown");
 }
 
 /// Picks a quick pick item by typing, then Enter.
@@ -209,4 +216,101 @@ async fn self_hosted_browser_sign_in_saves_the_client_id_of_the_server(cx: &mut 
     wait_for_account(&app, &window, cx, "sari").await;
     assert_eq!(cx.opened_url(), Some(format!("{base}/oauth/device")), "verification page opened in the browser");
     assert_eq!(app.core.user_settings().forge.client_ids.get(&base).map(String::as_str), Some("server-client"));
+}
+
+/// Waits for a dialog, then presses Enter (confirms it, or submits its text box as it is).
+async fn press_enter_in_dialog(window: &TestWindow, cx: &mut TestAppContext) {
+    for _ in 0..300 {
+        let open = window.update(cx, |window, cx| {
+            use gpui_kit::component::WindowExt as _;
+            window.render_frame(cx);
+            window.has_active_dialog(cx)
+        });
+        if open {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        cx.run_until_parked();
+    }
+    window.update(cx, |window, cx| {
+        window.render_frame(cx);
+        window.press("enter", cx);
+    });
+    cx.run_until_parked();
+}
+
+async fn wait_for_request(server: &MockServer, http_method: &str, url_path: &str, window: &TestWindow, cx: &mut TestAppContext) -> serde_json::Value {
+    for _ in 0..500 {
+        let requests = server.received_requests().await.unwrap_or_default();
+        if let Some(request) = requests.iter().find(|r| r.method.as_str() == http_method && r.url.path() == url_path) {
+            return serde_json::from_slice(&request.body).unwrap_or(serde_json::Value::Null);
+        }
+        window.update(cx, |window, cx| window.render_frame(cx));
+        cx.run_until_parked();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    panic!("{http_method} {url_path} was never sent");
+}
+
+/// The MR tab shows the merge state and the line comments; Merge sends the merge with the head commit seen,
+/// and a review comment is posted.
+#[gpui_kit::test]
+async fn merge_request_tab_merges_and_reviews(cx: &mut TestAppContext) {
+    let app = TestApp::new(cx);
+    cx.update(oncode_ui_forge::init);
+    let server = app.runtime.block_on(gitlab());
+    let base = server.uri();
+    let mut detail = mr(12, "Fix login", &base);
+    detail["detailed_merge_status"] = json!("mergeable");
+    app.runtime.block_on(async {
+        Mock::given(method("GET")).and(path(PROJECT)).respond_with(ResponseTemplate::new(200).set_body_json(json!({ "path_with_namespace": "team/project", "squash_option": "default_off", "default_branch": "main" }))).mount(&server).await;
+        Mock::given(method("GET"))
+            .and(path(format!("{PROJECT}/merge_requests/12/discussions")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!([{ "id": "d1", "notes": [{ "id": 1, "body": "Why?", "author": { "username": "ana" }, "system": false, "position": { "new_path": "a.rs", "new_line": 3 } }] }])))
+            .mount(&server)
+            .await;
+        // The first answer: GitLab is still checking whether it can be merged.
+        let mut checking = mr(12, "Fix login", &base);
+        checking["detailed_merge_status"] = json!("checking");
+        Mock::given(method("GET")).and(path(format!("{PROJECT}/merge_requests/12"))).respond_with(ResponseTemplate::new(200).set_body_json(checking)).up_to_n_times(1).with_priority(1).mount(&server).await;
+        Mock::given(method("PUT")).and(path(format!("{PROJECT}/merge_requests/12/merge"))).respond_with(ResponseTemplate::new(200).set_body_json(detail.clone()).set_delay(std::time::Duration::from_millis(300))).mount(&server).await;
+        Mock::given(method("POST")).and(path(format!("{PROJECT}/merge_requests/12/notes"))).respond_with(ResponseTemplate::new(201).set_body_json(json!({ "id": 5 }))).mount(&server).await;
+    });
+    let core = app.core.clone();
+    app.runtime.block_on(forge_api::forge_login_token(&core, ForgeKind::GitLab, Some(base.clone()), "glpat-test".into())).expect("login token");
+    let project = app.git_project(&[("README.md", "# Project\n")]);
+    git(&project, &["remote", "add", "origin", &format!("{base}/team/project.git")]);
+    let window = app.open(Some(&project), cx).await;
+    let workbench = window.workbench(cx);
+    window.wait_until(cx, "sidebar PR", |_, cx| oncode_ui_forge::pull_requests(workbench.read(cx)).is_some()).await;
+    let list = cx.update(|cx| oncode_ui_forge::pull_requests(workbench.read(cx)).unwrap());
+    window.wait_until(cx, "MR list loaded", |_, cx| list.read(cx).items().len() == 2).await;
+    cx.update(|cx| workbench.update(cx, |w, cx| w.show_sidebar("pullRequests", cx)));
+    window.update(cx, |window, cx| {
+        window.render_frame(cx);
+        window.click("forge-pr-12", cx);
+    });
+    cx.run_until_parked();
+    let tab = cx.update(|cx| workbench.read(cx).active_content().and_then(|c| c.as_any().downcast_ref::<ViewTab<PullRequestTab>>().map(|t| t.0.clone())).expect("active MR tab"));
+    window.wait_until(cx, "detail loaded", |_, cx| tab.read(cx).detail().is_some()).await;
+    assert_eq!(cx.update(|cx| tab.read(cx).detail().unwrap().merge_state), oncode_forge::MergeState::Checking);
+    // Merge waits while GitLab is checking; the tab asks again until it knows.
+    window.wait_until(cx, "merge state checked and comments loaded", |_, cx| tab.read(cx).detail().is_some_and(|d| d.merge_state != oncode_forge::MergeState::Checking) && tab.read(cx).review_comments().len() == 1).await;
+    let detail = cx.update(|cx| tab.read(cx).detail().cloned().unwrap());
+    assert_eq!(detail.merge_state, oncode_forge::MergeState::Clean);
+    assert_eq!(detail.merge_methods, [oncode_forge::MergeMethod::Merge, oncode_forge::MergeMethod::Squash]);
+
+    click_when_ready(&window, cx, "forge-merge").await;
+    press_enter_in_dialog(&window, cx).await;
+    let merge = wait_for_request(&server, "PUT", &format!("{PROJECT}/merge_requests/12/merge"), &window, cx).await;
+    assert_eq!(merge["sha"], "8888888888888888888888888888888888888888");
+    assert_eq!(merge["squash"], false);
+    // The server got the merge before answering it (the delay above): the buttons stay disabled until the answer
+    // arrives and the tab has reloaded.
+    window.wait_until(cx, "merge answered and the tab reloaded", |_, cx| !tab.read(cx).is_sending() && tab.read(cx).detail().is_some()).await;
+
+    click_when_ready(&window, cx, "forge-review-comment").await;
+    answer(&window, cx, "Looks fine").await;
+    let note = wait_for_request(&server, "POST", &format!("{PROJECT}/merge_requests/12/notes"), &window, cx).await;
+    assert_eq!(note["body"], "Looks fine");
 }

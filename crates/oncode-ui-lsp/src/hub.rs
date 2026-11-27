@@ -29,6 +29,7 @@ use serde_json::Value;
 use tokio::sync::mpsc;
 
 use crate::diagnostics::Diagnostics;
+use crate::signature::SignatureWatch;
 
 /// Limit on attempts to restart a server that died on its own.
 const MAX_RESTARTS: u32 = 3;
@@ -100,6 +101,9 @@ pub struct LspHub {
     warned: HashSet<String>,
     /// Editor state per path, to show diagnostics and apply edits.
     editors: HashMap<String, Vec<WeakEntity<EditorState>>>,
+    buffers: WeakEntity<oncode_ui::editor::Buffers>,
+    /// Signature help, one watch per file editor.
+    signatures: Vec<Entity<SignatureWatch>>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -120,7 +124,7 @@ impl LspHub {
                 }
             }),
         ];
-        Self { env, servers: HashMap::new(), diagnostics, warned: HashSet::new(), editors: HashMap::new(), _subscriptions: subscriptions }
+        Self { env, servers: HashMap::new(), diagnostics, warned: HashSet::new(), editors: HashMap::new(), buffers: buffers.downgrade(), signatures: Vec::new(), _subscriptions: subscriptions }
     }
 
     pub fn diagnostics(&self) -> &Entity<Diagnostics> {
@@ -171,8 +175,19 @@ impl LspHub {
             lsp.show_document = Some(oncode_ui::editor::show_document_handler(workbench.clone(), open_path.clone()));
             cx.notify();
         });
+        self.signatures.retain(|watch| watch.read(cx).is_alive());
+        if let Some(uri) = path_to_lsp_uri(&path) {
+            let (hub, buffers) = (cx.weak_entity(), self.buffers.clone());
+            let watch = cx.new(|cx| SignatureWatch::new(hub, buffers, &state, language.clone(), path.clone(), uri, window, cx));
+            self.signatures.push(watch);
+        }
         self.show_diagnostics(&path, cx);
         self.open_doc(&language, buffer, window, cx);
+    }
+
+    /// The signature help watch of an editor (for Trigger Parameter Hints).
+    pub(crate) fn signature_watch(&self, state: &Entity<EditorState>, cx: &App) -> Option<Entity<SignatureWatch>> {
+        self.signatures.iter().find(|watch| watch.read(cx).watches(state)).cloned()
     }
 
     fn open_doc(&mut self, language: &str, buffer: Entity<Buffer>, window: &mut Window, cx: &mut Context<Self>) {
@@ -220,6 +235,7 @@ impl LspHub {
                 move |this: &mut Self, buffer, event: &BufferEvent, cx| match event {
                     BufferEvent::Edited | BufferEvent::Loaded => this.sync(&language, &buffer, cx),
                     BufferEvent::Saved => this.saved(&language, &buffer, cx),
+                    BufferEvent::ConfigChanged => {}
                 }
             }),
             cx.observe_release(&buffer, {

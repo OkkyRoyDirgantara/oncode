@@ -705,6 +705,98 @@ pub async fn stash_branch(ctx: &Ctx, name: String, cx: &mut AsyncWindowContext) 
     run(ctx, "Stash to branch", operation, false, cx).await;
 }
 
+// ----- Drag a branch onto a branch -----
+
+/// A branch label dragged in the Graph (from the ref panel or a commit row).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DraggedRef {
+    /// `main`, or `origin/main` for a remote branch.
+    pub name: String,
+    /// A local branch (can be checked out and rebased).
+    pub local: bool,
+}
+
+/// A branch was dropped on another branch: merge it into that branch, or rebase it onto that branch. Merging
+/// needs the target checked out and rebasing needs the dragged branch checked out; the normal checkout is
+/// used for that (it asks about local changes when needed).
+pub async fn drop_ref(ctx: &Ctx, dragged: DraggedRef, target: DraggedRef, cx: &mut AsyncWindowContext) {
+    if dragged.name == target.name {
+        return;
+    }
+    let (from, to) = (dragged.name.clone(), target.name.clone());
+    let mut choices = vec![Choice::new("cancel", "Cancel")];
+    if dragged.local {
+        choices.push(Choice::new("rebase", format!("Rebase {from} onto {to}")));
+    }
+    if target.local {
+        choices.push(Choice::new("merge", format!("Merge {from} into {to}")).primary());
+    }
+    let answer = match choices.len() {
+        1 => return,
+        _ => choose(cx, format!("{from} → {to}"), "What should happen with the dropped branch?".to_string(), choices).await,
+    };
+    let current = cx.update(|_, cx| match snapshot(&ctx.root, cx).map(|s| s.head) {
+        Some(oncode_git::Head::Branch { name }) => Some(name),
+        _ => None,
+    });
+    let current = current.ok().flatten();
+    match answer {
+        Some("merge") => {
+            if current.as_deref() != Some(to.as_str()) && !checkout(ctx, CheckoutTarget::Branch(to.clone()), cx).await {
+                return;
+            }
+            merge(ctx, from, cx).await;
+        }
+        Some("rebase") => {
+            if current.as_deref() != Some(from.as_str()) && !checkout(ctx, CheckoutTarget::Branch(from.clone()), cx).await {
+                return;
+            }
+            rebase_onto(ctx, to, cx).await;
+        }
+        _ => {}
+    }
+}
+
+// ----- Bisect -----
+
+/// The line of git's bisect output worth showing: the steps left, or which commit is the first bad one.
+fn bisect_summary(message: &str) -> String {
+    message.lines().map(str::trim).find(|line| line.starts_with("Bisecting:") || oncode_git::status::bisect_found(line)).or_else(|| message.lines().next()).unwrap_or("").to_string()
+}
+
+async fn bisect_step<Fut>(ctx: &Ctx, label: &str, make: impl FnOnce(Shared, String) -> Fut, cx: &mut AsyncWindowContext)
+where
+    Fut: std::future::Future<Output = oncode_core::AppResult<String>> + Send + 'static,
+{
+    let Ok(task) = cx.update(|_, cx| spawn_core(cx, make(ctx.core(cx), ctx.root.clone()))) else { return };
+    let result = task.await;
+    let (ctx, label) = (ctx.clone(), label.to_string());
+    let _ = cx.update(|window, cx| match result {
+        Ok(message) => overlay::toast_info(bisect_summary(&message), window, cx),
+        Err(error) => handle_git_error(&ctx, &error, &label, None, window, cx),
+    });
+}
+
+/// Starts a bisect: `bad` is a commit with the problem; asks for one without it.
+pub async fn bisect_start(ctx: &Ctx, bad: String, cx: &mut AsyncWindowContext) {
+    let short = crate::format::short_oid(&bad).to_string();
+    let Some(good) = prompt(cx, TextPrompt::new("Start bisect", "Start").message(format!("{short} has the problem. Which commit did not have it yet? (a hash, tag, or branch)")).placeholder("e.g. v1.2.0")).await else { return };
+    let good = good.trim().to_string();
+    if good.is_empty() {
+        return;
+    }
+    bisect_step(ctx, "Start bisect", move |core, root| async move { git::git_bisect_start(&core, root, bad, good).await }, cx).await;
+}
+
+pub async fn bisect_mark(ctx: &Ctx, mark: oncode_git::BisectMark, oid: Option<String>, cx: &mut AsyncWindowContext) {
+    bisect_step(ctx, "Bisect", move |core, root| async move { git::git_bisect_mark(&core, root, mark, oid).await }, cx).await;
+}
+
+pub async fn bisect_reset(ctx: &Ctx, cx: &mut AsyncWindowContext) {
+    let operation = op(|core, root| async move { git::git_bisect_reset(&core, root).await });
+    run(ctx, "Stop bisect", operation, false, cx).await;
+}
+
 // ----- Dispatcher -----
 
 /// Runs the action of a menu item. `CompareWithHead` is handled by the Graph tab itself.
@@ -714,7 +806,7 @@ pub fn run_action(ctx: &Ctx, action: GitAction, window: &mut Window, cx: &mut Ap
         GitAction::ShowStash(name) => return crate::open_stash(&ctx.store, &ctx.root, &name, window, cx),
         GitAction::ShowInGraph { oid, label } => return crate::open_graph(&ctx.store, &ctx.root, Some(RevealTarget { oid, label, hunt: true }), window, cx),
         GitAction::InteractiveRebase { base } => return crate::rebase_dialog::open(ctx.clone(), base, window, cx),
-        GitAction::CompareWithHead(_) => return,
+        GitAction::CompareWithHead(_) | GitAction::CompareWithCurrent(_) => return,
         _ => {}
     }
     let ctx = ctx.clone();
@@ -754,7 +846,10 @@ pub fn run_action(ctx: &Ctx, action: GitAction, window: &mut Window, cx: &mut Ap
             }
             GitAction::StashBranch(name) => stash_branch(&ctx, name, cx).await,
             GitAction::StashDrop { name, message } => stash_drop(&ctx, name, message, cx).await,
-            GitAction::Copy { .. } | GitAction::ShowStash(_) | GitAction::ShowInGraph { .. } | GitAction::InteractiveRebase { .. } | GitAction::CompareWithHead(_) => {}
+            GitAction::BisectStart { bad } => bisect_start(&ctx, bad, cx).await,
+            GitAction::BisectMark { mark, oid } => bisect_mark(&ctx, mark, oid, cx).await,
+            GitAction::BisectReset => bisect_reset(&ctx, cx).await,
+            GitAction::Copy { .. } | GitAction::ShowStash(_) | GitAction::ShowInGraph { .. } | GitAction::InteractiveRebase { .. } | GitAction::CompareWithHead(_) | GitAction::CompareWithCurrent(_) => {}
         })
         .detach();
 }

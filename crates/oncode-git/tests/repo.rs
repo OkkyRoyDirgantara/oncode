@@ -400,6 +400,82 @@ async fn a_filtered_log_has_no_lanes() {
     stream.close().await;
 }
 
+/// Line history (`git log -L`): only the commits that changed the chosen lines, and the parser keeps just
+/// the subject even when an older Git prints the patch anyway.
+#[tokio::test]
+async fn line_history_lists_only_commits_touching_the_lines() {
+    let t = TestRepo::with_commit().await;
+    t.commit_file("f.txt", "a\nb\nc\n", "Add f");
+    t.commit_file("f.txt", "a\nB\nc\n", "Change line 2");
+    t.commit_file("f.txt", "A\nB\nc\n", "Change line 1");
+    let query = LogQuery { path: Some("f.txt".into()), lines: Some((2, 2)), ..Default::default() };
+    let found = t.repo.log(&query, 10).await.unwrap();
+    assert_eq!(found.iter().map(|c| c.subject.as_str()).collect::<Vec<_>>(), ["Change line 2", "Add f"]);
+    assert!(query.is_filtered());
+    let mut stream = t.repo.log_stream(&query).unwrap();
+    let page = stream.next_page(10).await.unwrap();
+    assert_eq!(page.rows.len(), 2);
+    stream.close().await;
+}
+
+/// Bisect from start to finish: the snapshot shows it in progress, each mark checks out the next commit,
+/// the first bad commit is found and shown, and reset returns to the branch.
+#[tokio::test]
+async fn bisect_finds_the_first_bad_commit() {
+    let t = TestRepo::with_commit().await;
+    for i in 1..=6 {
+        t.commit_file("n.txt", &format!("{i}\n"), &format!("Step {i}"));
+    }
+    // "Step 4" introduced the problem (n >= 4).
+    let good = t.git(&["rev-parse", "HEAD~5"]).trim().to_string();
+    let message = t.repo.bisect_start("HEAD", &good).await.unwrap();
+    assert!(message.contains("Bisecting:"), "{message}");
+    let snapshot = t.repo.snapshot().await.unwrap();
+    assert!(matches!(&snapshot.operation, Some(Operation::Bisect { original, first_bad: None }) if original == "main"), "{:?}", snapshot.operation);
+    let labels: Vec<String> = t.repo.log(&LogQuery { all: true, ..Default::default() }, 20).await.unwrap().iter().flat_map(|c| c.refs.iter().filter(|r| r.kind == RefKind::Bisect).map(|r| r.name.clone())).collect();
+    assert!(labels.contains(&"bisect: bad".to_string()) && labels.contains(&"bisect: good".to_string()), "{labels:?}");
+
+    for _ in 0..10 {
+        let value: u32 = std::fs::read_to_string(t.path().join("n.txt")).unwrap().trim().parse().unwrap();
+        let mark = if value >= 4 { BisectMark::Bad } else { BisectMark::Good };
+        let message = t.repo.bisect_mark(mark, None).await.unwrap();
+        if oncode_git::status::bisect_found(&message) {
+            break;
+        }
+    }
+    let snapshot = t.repo.snapshot().await.unwrap();
+    match &snapshot.operation {
+        Some(Operation::Bisect { first_bad: Some(found), .. }) => assert!(found.ends_with("Step 4"), "{found}"),
+        other => panic!("bisect not finished: {other:?}"),
+    }
+
+    t.repo.bisect_reset().await.unwrap();
+    let snapshot = t.repo.snapshot().await.unwrap();
+    assert_eq!(snapshot.operation, None);
+    assert_eq!(snapshot.head, Head::Branch { name: "main".into() });
+}
+
+/// A Git LFS pointer is shown through git's filters (here a stand-in smudge filter instead of git-lfs), and the
+/// diff says so, since its lines cannot be staged one by one.
+#[tokio::test]
+async fn lfs_pointers_are_shown_through_the_smudge_filter() {
+    let t = TestRepo::with_commit().await;
+    t.git(&["config", "filter.lfs.smudge", "tr a-z A-Z"]);
+    t.git(&["config", "filter.lfs.clean", "cat"]);
+    std::fs::write(t.path().join(".gitattributes"), "*.bin filter=lfs\n").unwrap();
+    let pointer = |size: u32| format!("version https://git-lfs.github.com/spec/v1\noid sha256:abc{size}\nsize {size}\n");
+    t.commit_file("data.bin", &pointer(3), "Add data");
+    t.commit_file("data.bin", &pointer(4), "Change data");
+    let head = t.git(&["rev-parse", "HEAD"]).trim().to_string();
+    let contents = t.repo.diff_contents("data.bin", None, &DiffSource::Commit { oid: head, parent: None }).await.unwrap();
+    assert!(contents.lfs);
+    assert!(contents.b.text.as_deref().unwrap().starts_with("VERSION HTTPS"), "{:?}", contents.b.text);
+    // An ordinary text file is shown as it is.
+    let head = t.git(&["rev-parse", "HEAD~1"]).trim().to_string();
+    let plain = t.repo.diff_contents(".gitattributes", None, &DiffSource::Commit { oid: head, parent: None }).await.unwrap();
+    assert!(!plain.lfs);
+}
+
 #[tokio::test]
 async fn log_of_empty_repo_is_empty() {
     let t = TestRepo::new().await;

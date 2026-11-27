@@ -5,7 +5,8 @@ use std::ops::Range;
 use std::rc::Rc;
 
 use gpui_kit::component::input::{Input, InputEvent, InputState};
-use gpui_kit::component::menu::{ContextMenuExt as _, PopupMenu, PopupMenuItem};
+use gpui_kit::component::button::Button;
+use gpui_kit::component::menu::{ContextMenuExt as _, DropdownMenu as _, PopupMenu, PopupMenuItem};
 use gpui_kit::component::resizable::{h_resizable, resizable_panel};
 use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::{h_flex, v_flex, ActiveTheme as _, Icon, Sizable as _};
@@ -18,10 +19,10 @@ use gpui_kit::{
 use oncode_core::api::git;
 use oncode_git::{ChangeKind, CommitDetail, CommitFile, DiffSource, GraphRow, LogQuery, RefKind};
 use gpui_kit::TestSupportExt as _;
-use oncode_ui::{spawn_core, Env, Lucide};
+use oncode_ui::{spawn_core, Env, Lucide, TabDragPreview};
 use oncode_ui_diff::{open_diff, DiffRequest};
 
-use crate::actions::{run_action, Ctx};
+use crate::actions::{run_action, Ctx, DraggedRef};
 use crate::format::{base_name, full_date, relative_date, short_oid};
 use crate::geometry::{edge_segments, graph_width, lane_color_index, lane_x, max_lane, Segment, DOT_RADIUS, ROW_HEIGHT};
 use crate::menus::{branch_menu, commit_menu, remote_branch_menu, stash_menu, tag_menu, CommitMenuContext, GitAction, MenuEntry};
@@ -80,7 +81,13 @@ pub struct GraphTab {
     env: Env,
     /// `Some(path)`: the history of a single file (a repository-relative path).
     path: Option<String>,
+    /// With `path`: only these lines of it (Line History).
+    lines: Option<(u32, u32)>,
     search: Entity<InputState>,
+    /// Only commits by this author (name or e-mail, a part of it is enough).
+    author: Entity<InputState>,
+    /// Only commits after this date (git's own date text, e.g. `1 week ago`); `None` = any time.
+    since: Option<String>,
     query: LogQuery,
     rows: Vec<GraphRow>,
     /// The rightmost lane used by `rows`; kept up to date as pages arrive, so drawing does not scan every row.
@@ -93,6 +100,9 @@ pub struct GraphTab {
     revision: u64,
     selected: Vec<String>,
     details: Details,
+    /// The branch shown by Compare with Current Branch; kept when the list reloads (refs changed, a fetch) until
+    /// another commit is selected.
+    compare_branch: Option<String>,
     /// A commit to select as soon as it appears (from the ref panel or a "Show in Graph" request).
     hunt: Option<String>,
     scroll: UniformListScrollHandle,
@@ -112,14 +122,17 @@ impl Focusable for GraphTab {
 impl GraphTab {
     pub fn new(store: Entity<GraphStore>, root: String, path: Option<String>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let env = store.read(cx).env().clone();
-        let search = cx.new(|cx| InputState::new(window, cx).placeholder(if path.is_some() { "Filter by message" } else { "Search commits by message" }));
+        let search = cx.new(|cx| InputState::new(window, cx).placeholder(if path.is_some() { "Filter by message" } else { "Search commits by message or hash" }));
+        let author = cx.new(|cx| InputState::new(window, cx).placeholder("Author"));
+        let on_input = |this: &mut Self, _: &Entity<InputState>, event: &InputEvent, window: &mut Window, cx: &mut Context<Self>| {
+            if matches!(event, InputEvent::Change | InputEvent::PressEnter { .. }) {
+                let immediate = matches!(event, InputEvent::PressEnter { .. });
+                this.schedule_search(immediate, window, cx);
+            }
+        };
         let subscriptions = vec![
-            cx.subscribe_in(&search, window, |this: &mut Self, _, event: &InputEvent, window, cx| {
-                if matches!(event, InputEvent::Change | InputEvent::PressEnter { .. }) {
-                    let immediate = matches!(event, InputEvent::PressEnter { .. });
-                    this.schedule_search(immediate, window, cx);
-                }
-            }),
+            cx.subscribe_in(&search, window, on_input),
+            cx.subscribe_in(&author, window, on_input),
             cx.subscribe(&store, |this: &mut Self, store, event: &StoreEvent, cx| match event {
                 StoreEvent::RefsChanged(root) if *root == this.ctx.root => this.reload(cx),
                 StoreEvent::RevealRequested(root) if *root == this.ctx.root => {
@@ -142,7 +155,10 @@ impl GraphTab {
             ctx: Ctx::new(&store, root),
             env,
             path,
+            lines: None,
             search,
+            author,
+            since: None,
             query: LogQuery::default(),
             rows: Vec::new(),
             lanes: -1,
@@ -153,6 +169,7 @@ impl GraphTab {
             revision: 0,
             selected: Vec::new(),
             details: Details::None,
+            compare_branch: None,
             hunt: None,
             scroll: UniformListScrollHandle::new(),
             focus_handle: cx.focus_handle(),
@@ -168,6 +185,15 @@ impl GraphTab {
         this
     }
 
+    /// Limits a file history to some of its lines (Line History) and reloads.
+    pub fn with_lines(mut self, lines: Option<(u32, u32)>, cx: &mut Context<Self>) -> Self {
+        if lines.is_some() && self.path.is_some() {
+            self.lines = lines;
+            self.reload(cx);
+        }
+        self
+    }
+
     pub fn rows(&self) -> &[GraphRow] {
         &self.rows
     }
@@ -180,6 +206,16 @@ impl GraphTab {
         self.loading
     }
 
+    /// The search box (message or hash).
+    pub fn search_input(&self) -> &Entity<InputState> {
+        &self.search
+    }
+
+    /// The author filter box.
+    pub fn author_input(&self) -> &Entity<InputState> {
+        &self.author
+    }
+
     fn schedule_search(&mut self, immediate: bool, window: &mut Window, cx: &mut Context<Self>) {
         self._search_debounce = cx.spawn_in(window, async move |this, cx| {
             if !immediate {
@@ -189,10 +225,46 @@ impl GraphTab {
         });
     }
 
-    /// Restarts the list with the current query.
+    /// Only commits after `since` (git's date text); `None` = any time.
+    pub fn set_since(&mut self, since: Option<String>, cx: &mut Context<Self>) {
+        if self.since != since {
+            self.since = since;
+            self.reload(cx);
+        }
+    }
+
+    /// Restarts the list with the current query. A search that looks like a commit hash first tries to find
+    /// that commit: if it exists, the whole history is shown with that commit selected.
     pub fn reload(&mut self, cx: &mut Context<Self>) {
-        let grep = self.search.read(cx).value().to_string();
-        self.query = build_query("all", &grep, "", self.path.as_deref().unwrap_or(""));
+        let grep = self.search.read(cx).value().trim().to_string();
+        if self.path.is_none() && looks_like_hash(&grep) {
+            self.revision += 1;
+            let revision = self.revision;
+            let (core, root) = (self.env.core.clone(), self.ctx.root.clone());
+            let candidate = grep.clone();
+            let task = spawn_core(cx, async move { git::git_rev_parse(&core, root, candidate).await });
+            self._load = cx.spawn(async move |this, cx| {
+                let found = task.await.ok();
+                let _ = this.update(cx, |this, cx| {
+                    if this.revision == revision {
+                        this.start_load(if found.is_some() { "" } else { &grep }, found, cx);
+                    }
+                });
+            });
+            return;
+        }
+        self.start_load(&grep, None, cx);
+    }
+
+    /// Opens a new `git log` for the toolbar's filters; `hunt` is a commit to select once it is listed.
+    fn start_load(&mut self, grep: &str, hunt: Option<String>, cx: &mut Context<Self>) {
+        let author = self.author.read(cx).value().to_string();
+        self.query = build_query("all", grep, &author, self.path.as_deref().unwrap_or(""));
+        self.query.since = self.since.clone();
+        self.query.lines = self.lines;
+        if hunt.is_some() {
+            self.hunt = hunt;
+        }
         self.revision += 1;
         let revision = self.revision;
         if let Some(stream) = self.stream.take() {
@@ -231,7 +303,7 @@ impl GraphTab {
                             }
                         }
                         this.after_rows_changed(cx);
-                        this.load_details(cx);
+                        this.refresh_details(cx);
                     }
                     Err(error) => {
                         this.rows.clear();
@@ -275,7 +347,8 @@ impl GraphTab {
         });
     }
 
-    /// If a commit is being hunted, select it once visible; otherwise load the next page.
+    /// If a commit is being hunted, select it once visible; otherwise load the next page. In a very long
+    /// history the hunt stops after [`HUNT_LIMIT`] rows and shows the commit's details without its row.
     fn after_rows_changed(&mut self, cx: &mut Context<Self>) {
         let Some(oid) = self.hunt.clone() else { return };
         if let Some(index) = self.rows.iter().position(|row| row.commit.oid == oid) {
@@ -283,10 +356,12 @@ impl GraphTab {
             self.selected = vec![oid];
             self.scroll.scroll_to_item(index, ScrollStrategy::Center);
             self.load_details(cx);
-        } else if !self.done {
+        } else if !self.done && self.rows.len() < HUNT_LIMIT {
             self.load_more(cx);
         } else {
             self.hunt = None;
+            self.selected = vec![oid];
+            self.load_details(cx);
         }
     }
 
@@ -318,7 +393,18 @@ impl GraphTab {
         cx.notify();
     }
 
+    /// After the list reloads: the comparison with the current branch again (its refs may have moved), or the
+    /// selected commit's details.
+    fn refresh_details(&mut self, cx: &mut Context<Self>) {
+        match self.compare_branch.clone() {
+            Some(branch) => self.compare_with_current(branch, cx),
+            None => self.load_details(cx),
+        }
+    }
+
+    /// The details of the selected commits; a selection made by the user ends Compare with Current Branch.
     fn load_details(&mut self, cx: &mut Context<Self>) {
+        self.compare_branch = None;
         let (core, root) = (self.env.core.clone(), self.ctx.root.clone());
         match self.selected.as_slice() {
             [] => {
@@ -361,6 +447,38 @@ impl GraphTab {
     }
 
 
+    /// Shows the files a branch changed since it split from the current branch (merge base → branch).
+    pub fn compare_with_current(&mut self, branch: String, cx: &mut Context<Self>) {
+        self.compare_branch = Some(branch.clone());
+        self.details = Details::Loading;
+        let (core, root) = (self.env.core.clone(), self.ctx.root.clone());
+        let to = branch.clone();
+        let task = spawn_core(cx, async move {
+            let base = git::git_merge_base(&core, root.clone(), "HEAD".into(), to.clone()).await?.ok_or_else(|| oncode_core::AppError::invalid(format!("{to} has no history in common with the current branch")))?;
+            let files = git::git_diff_files(&core, root, base.clone(), to).await?;
+            Ok::<_, oncode_core::AppError>((base, files))
+        });
+        self._details = cx.spawn(async move |this, cx| {
+            let result = task.await;
+            let _ = this.update(cx, |this, cx| {
+                this.details = match result {
+                    Ok((base, files)) => Details::Compare { from: base, to: branch, files },
+                    Err(error) => Details::Failed(error.message),
+                };
+                cx.notify();
+            });
+        });
+        cx.notify();
+    }
+
+    /// The files listed in the right panel when it compares two commits.
+    pub fn compared_files(&self) -> Option<Vec<String>> {
+        match &self.details {
+            Details::Compare { files, .. } => Some(files.iter().map(|file| file.path.clone()).collect()),
+            _ => None,
+        }
+    }
+
     // ----- View -----
 
     fn render_refs(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -373,11 +491,21 @@ impl GraphTab {
         let heading = |text: &str| div().px_2().pt_2().pb_1().text_xs().text_color(theme.muted_foreground).child(text.to_uppercase());
         let entity = cx.entity();
         let ctx = self.ctx.clone();
-        let item = move |id: String, icon: Lucide, label: String, bold: bool, oid: String, menu: Vec<MenuEntry>, cx: &App| {
+        let item = move |id: String, icon: Lucide, label: String, bold: bool, oid: String, menu: Vec<MenuEntry>, branch: Option<DraggedRef>, cx: &App| {
             let entity = entity.clone();
             let ctx = ctx.clone();
+            let drop_ctx = ctx.clone();
             h_flex()
                 .id(SharedString::from(id))
+                .test_support()
+                // A branch can be dragged onto another branch (here or on a commit row) to merge or rebase it.
+                .when_some(branch, |el, branch| {
+                    let preview = branch.name.clone();
+                    let target = branch.clone();
+                    el.on_drag(branch, move |_, _, _, cx| cx.new(|_| TabDragPreview::new(preview.clone(), Some(Lucide::GitBranch))))
+                        .drag_over::<DraggedRef>(|style, _, _, cx| style.bg(cx.theme().drop_target))
+                        .on_drop(move |dragged: &DraggedRef, window, cx| drop_branch(&drop_ctx, dragged.clone(), target.clone(), window, cx))
+                })
                 .w_full()
                 .px_2()
                 .py_0p5()
@@ -397,17 +525,21 @@ impl GraphTab {
             .overflow_y_scroll()
             .pb_2()
             .child(heading("Branches"))
-            .children(groups.branches.iter().map(|branch| item(format!("ref-branch-{}", branch.name), Lucide::GitBranch, branch.name.clone(), branch.is_head, branch.oid.clone(), branch_menu(branch), cx)))
+            .children(groups.branches.iter().map(|branch| {
+                let dragged = DraggedRef { name: branch.name.clone(), local: true };
+                item(format!("ref-branch-{}", branch.name), Lucide::GitBranch, branch.name.clone(), branch.is_head, branch.oid.clone(), branch_menu(branch), Some(dragged), cx)
+            }))
             .when(!groups.remotes.is_empty(), |el| el.child(heading("Remotes")))
             .children(groups.remotes.iter().flat_map(|group| {
                 group.branches.iter().map(|branch| {
-                    item(format!("ref-remote-{}", branch.name), Lucide::Cloud, format!("{}/{}", group.remote, remote_short_name(branch)), false, branch.oid.clone(), remote_branch_menu(branch), cx)
+                    let dragged = DraggedRef { name: branch.name.clone(), local: false };
+                    item(format!("ref-remote-{}", branch.name), Lucide::Cloud, format!("{}/{}", group.remote, remote_short_name(branch)), false, branch.oid.clone(), remote_branch_menu(branch), Some(dragged), cx)
                 })
             }))
             .when(!groups.tags.is_empty(), |el| el.child(heading("Tags")))
-            .children(groups.tags.iter().map(|tag| item(format!("ref-tag-{}", tag.name), Lucide::Tag, tag.name.clone(), false, tag.oid.clone(), tag_menu(tag, remote.as_deref()), cx)))
+            .children(groups.tags.iter().map(|tag| item(format!("ref-tag-{}", tag.name), Lucide::Tag, tag.name.clone(), false, tag.oid.clone(), tag_menu(tag, remote.as_deref()), None, cx)))
             .when(!groups.stashes.is_empty(), |el| el.child(heading("Stashes")))
-            .children(groups.stashes.iter().map(|stash| item(format!("ref-stash-{}", stash.name), Lucide::Archive, format!("{} {}", stash.name, stash.message), false, stash.oid.clone(), stash_menu(stash), cx)))
+            .children(groups.stashes.iter().map(|stash| item(format!("ref-stash-{}", stash.name), Lucide::Archive, format!("{} {}", stash.name, stash.message), false, stash.oid.clone(), stash_menu(stash), None, cx)))
             .into_any_element()
     }
 
@@ -445,8 +577,27 @@ impl GraphTab {
                         RefKind::Remote => theme.blue,
                         RefKind::Tag => theme.yellow,
                         RefKind::Stash => theme.magenta,
+                        RefKind::Bisect => theme.red,
                     };
-                    div().flex_none().px_1().rounded(px(3.)).border_1().border_color(color).text_color(color).text_xs().child(label.name.clone())
+                    let badge = div().flex_none().px_1().rounded(px(3.)).border_1().border_color(color).text_color(color).text_xs().child(label.name.clone());
+                    // Branch labels on rows can be dragged and dropped on like the ref panel's branches.
+                    let branch = match label.kind {
+                        RefKind::Branch => Some(DraggedRef { name: label.name.clone(), local: true }),
+                        RefKind::Remote => Some(DraggedRef { name: label.name.clone(), local: false }),
+                        _ => None,
+                    };
+                    match branch {
+                        Some(branch) => {
+                            let (preview, target, drop_ctx) = (branch.name.clone(), branch.clone(), self.ctx.clone());
+                            badge
+                                .id(SharedString::from(format!("graph-badge-{}-{}", row.commit.oid, label.name)))
+                                .on_drag(branch, move |_, _, _, cx| cx.new(|_| TabDragPreview::new(preview.clone(), Some(Lucide::GitBranch))))
+                                .drag_over::<DraggedRef>(|style, _, _, cx| style.bg(cx.theme().drop_target))
+                                .on_drop(move |dragged: &DraggedRef, window, cx| drop_branch(&drop_ctx, dragged.clone(), target.clone(), window, cx))
+                                .into_any_element()
+                        }
+                        None => badge.into_any_element(),
+                    }
                 });
                 let menu_ctx = self.ctx.clone();
                 Some(
@@ -591,6 +742,13 @@ fn dispatch(ctx: &Ctx, action: GitAction, window: &mut Window, cx: &mut App) {
         }
         return;
     }
+    if let GitAction::CompareWithCurrent(branch) = &action {
+        if let Some(tab) = crate::active_tab(window, cx) {
+            let branch = branch.clone();
+            tab.update(cx, |tab, cx| tab.compare_with_current(branch, cx));
+        }
+        return;
+    }
     run_action(ctx, action, window, cx);
 }
 
@@ -624,7 +782,6 @@ fn paint_row(row: &GraphRow, bounds: Bounds<gpui_kit::Pixels>, colors: &[Hsla], 
 
 impl Render for GraphTab {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.theme();
         let count = self.rows.len();
         let status: SharedString = match (&self.error, self.loading, count) {
             (Some(error), _, _) => error.clone().into(),
@@ -632,6 +789,8 @@ impl Render for GraphTab {
             (None, false, 0) => "No commits match.".into(),
             _ => format!("{count}{} commits", if self.done { "" } else { "+" }).into(),
         };
+        let date_filter = self.render_date_filter(cx);
+        let theme = cx.theme();
         let list = uniform_list("graph-list", count, cx.processor(Self::render_rows)).track_scroll(&self.scroll).size_full();
         let middle = v_flex()
             .size_full()
@@ -644,8 +803,17 @@ impl Render for GraphTab {
                     .gap_2()
                     .border_b_1()
                     .border_color(theme.border)
-                    .when_some(self.path.clone(), |el, path| el.child(div().flex_none().text_sm().child(format!("History: {path}"))))
+                    .when_some(self.path.clone(), |el, path| {
+                        let title = match self.lines {
+                            Some((start, end)) if start == end => format!("History: {path}:{start}"),
+                            Some((start, end)) => format!("History: {path}:{start}-{end}"),
+                            None => format!("History: {path}"),
+                        };
+                        el.child(div().flex_none().text_sm().child(title))
+                    })
                     .child(div().flex_1().child(Input::new(&self.search).small().prefix(Icon::new(Lucide::Search).xsmall())))
+                    .child(div().w(px(140.)).flex_none().child(Input::new(&self.author).small().prefix(Icon::new(Lucide::User).xsmall())))
+                    .child(date_filter)
                     .child(div().flex_none().text_xs().text_color(theme.muted_foreground).child(status)),
             )
             .child(div().flex_1().min_h_0().w_full().child(list));
@@ -669,6 +837,58 @@ impl Render for GraphTab {
     }
 }
 
+/// A dragged branch was dropped on another branch.
+fn drop_branch(ctx: &Ctx, dragged: DraggedRef, target: DraggedRef, window: &mut Window, cx: &mut App) {
+    let ctx = ctx.clone();
+    window.spawn(cx, async move |cx| crate::actions::drop_ref(&ctx, dragged, target, cx).await).detach();
+}
+
+/// Date filter choices: label and git's date text.
+const DATE_FILTERS: &[(&str, Option<&str>)] = &[("Any time", None), ("Last 7 days", Some("1 week ago")), ("Last 30 days", Some("1 month ago")), ("Last year", Some("1 year ago"))];
+
+/// Rows loaded at most while looking for a commit picked by hash.
+const HUNT_LIMIT: usize = 20_000;
+
+/// A search that may be a commit hash: 4 to 40 hexadecimal characters, at least one of them a digit
+/// (so words such as "added" or "cafe" are searched as messages).
+pub fn looks_like_hash(text: &str) -> bool {
+    (4..=40).contains(&text.len()) && text.chars().all(|c| c.is_ascii_hexdigit()) && text.chars().any(|c| c.is_ascii_digit())
+}
+
+impl GraphTab {
+    fn render_date_filter(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let label = match &self.since {
+            None => "Any time".to_string(),
+            Some(since) => DATE_FILTERS.iter().find(|(_, value)| value.as_deref() == Some(since.as_str())).map_or_else(|| format!("Since {since}"), |(label, _)| label.to_string()),
+        };
+        let entity = cx.entity();
+        let current = self.since.clone();
+        Button::new("graph-date-filter").xsmall().outline().icon(Icon::new(Lucide::Calendar)).label(label).dropdown_menu(move |menu, _, _| {
+            let mut menu = menu;
+            for (label, value) in DATE_FILTERS {
+                let entity = entity.clone();
+                let value = value.map(String::from);
+                let checked = value == current;
+                menu = menu.item(PopupMenuItem::new(*label).checked(checked).on_click(move |_, _, cx| {
+                    let value = value.clone();
+                    entity.update(cx, |this, cx| this.set_since(value, cx));
+                }));
+            }
+            let entity = entity.clone();
+            menu.separator().item(PopupMenuItem::new("Custom…").on_click(move |_, window, cx| {
+                let answer = oncode_ui::overlay::prompt_text(oncode_ui::overlay::TextPrompt::new("Commits since", "Filter").placeholder("e.g. 2026-01-31 or 3 weeks ago"), window, cx);
+                let entity = entity.clone();
+                window
+                    .spawn(cx, async move |cx| {
+                        let Some(text) = answer.await.map(|t| t.trim().to_string()).filter(|t| !t.is_empty()) else { return };
+                        let _ = entity.update(cx, |this, cx| this.set_since(Some(text), cx));
+                    })
+                    .detach();
+            }))
+        })
+    }
+}
+
 /// The commit message body without the subject line (already shown as the title); `None` if empty.
 pub fn message_body(subject: &str, body: &str) -> Option<String> {
     let trimmed = body.trim();
@@ -678,7 +898,16 @@ pub fn message_body(subject: &str, body: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::message_body;
+    use super::{looks_like_hash, message_body};
+
+    #[test]
+    fn hashes_are_recognized_but_hex_words_are_not() {
+        assert!(looks_like_hash("1a2b3c4"));
+        assert!(looks_like_hash("abc1"));
+        assert!(!looks_like_hash("added"));
+        assert!(!looks_like_hash("12"));
+        assert!(!looks_like_hash("fix bug"));
+    }
 
     #[test]
     fn body_without_repeated_subject() {

@@ -1,7 +1,7 @@
 //! Pure logic behind the forge views: the PR tab, the create-PR dialog, and the CI summary.
 
 use oncode_core::api::forge::ForgeContext;
-use oncode_forge::{Check, CheckState, ForgeKind, PrFilter, PrState, PullRequest, RepoRef};
+use oncode_forge::{Check, CheckState, ForgeKind, MergeState, PrFilter, PrState, PullRequest, RepoRef};
 use oncode_git::{ChangeKind, Refs, Upstream};
 use oncode_ui::TabData;
 use serde::{Deserialize, Serialize};
@@ -105,6 +105,13 @@ pub fn summarize_checks(checks: &[Check]) -> String {
 }
 
 /// Merge state sentence for a PR that is still open.
+/// Whether Merge is offered: not when the forge has said it would refuse (conflicts, a draft, unmet
+/// rules or reviews, a source branch that must be updated first), nor while it is still checking.
+/// `Unknown` is left to the forge to decide. Failing checks (`Unstable`) do not stop a merge.
+pub fn can_try_merge(state: MergeState) -> bool {
+    matches!(state, MergeState::Clean | MergeState::Unstable | MergeState::Unknown)
+}
+
 pub fn mergeable_text(mergeable: Option<bool>) -> &'static str {
     match mergeable {
         Some(true) => "No conflicts with the target branch",
@@ -255,6 +262,15 @@ mod tests {
     use super::*;
     use oncode_forge::Account;
     use oncode_git::{Branch, Remote, RemoteBranch};
+
+    #[test]
+    fn merge_is_offered_only_when_the_forge_may_accept_it() {
+        let offered: Vec<MergeState> = [MergeState::Clean, MergeState::Blocked, MergeState::Behind, MergeState::Conflicts, MergeState::Unstable, MergeState::Draft, MergeState::Checking, MergeState::Unknown]
+            .into_iter()
+            .filter(|state| can_try_merge(*state))
+            .collect();
+        assert_eq!(offered, [MergeState::Clean, MergeState::Unstable, MergeState::Unknown]);
+    }
 
     fn refs() -> Refs {
         let branch = |name: &str| Branch {

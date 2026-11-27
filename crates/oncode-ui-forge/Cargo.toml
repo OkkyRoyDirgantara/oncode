@@ -15,6 +15,7 @@ serde_json.workspace = true
 oncode-forge = { path = "../oncode-forge" }
 oncode-git = { path = "../oncode-git" }
 oncode-ui-settings = { path = "../oncode-ui-settings" }
+oncode-ui-diff = { path = "../oncode-ui-diff" }
 tokio.workspace = true
 
 [dev-dependencies]

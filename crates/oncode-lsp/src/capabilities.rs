@@ -20,7 +20,8 @@ pub(crate) fn client_capabilities_json() -> serde_json::Value {
             "workspaceEdit": { "documentChanges": true, "failureHandling": "abort" },
             "configuration": true,
             "workspaceFolders": true,
-            "didChangeConfiguration": { "dynamicRegistration": false }
+            "didChangeConfiguration": { "dynamicRegistration": false },
+            "symbol": { "dynamicRegistration": false }
         },
         "textDocument": {
             "synchronization": { "dynamicRegistration": false, "willSave": false, "willSaveWaitUntil": false, "didSave": true },
@@ -48,6 +49,7 @@ pub(crate) fn client_capabilities_json() -> serde_json::Value {
             },
             "definition": { "dynamicRegistration": false, "linkSupport": true },
             "references": { "dynamicRegistration": false },
+            "documentSymbol": { "dynamicRegistration": false, "hierarchicalDocumentSymbolSupport": true },
             "rename": { "dynamicRegistration": false, "prepareSupport": true },
             "formatting": { "dynamicRegistration": false },
             "codeAction": {
@@ -83,6 +85,8 @@ pub enum Feature {
     Formatting,
     CodeAction,
     CodeActionResolve,
+    DocumentSymbol,
+    WorkspaceSymbol,
 }
 
 impl Feature {
@@ -100,6 +104,8 @@ impl Feature {
             Self::Formatting => "textDocument/formatting",
             Self::CodeAction => "textDocument/codeAction",
             Self::CodeActionResolve => "codeAction/resolve",
+            Self::DocumentSymbol => "textDocument/documentSymbol",
+            Self::WorkspaceSymbol => "workspace/symbol",
         }
     }
 }
@@ -124,6 +130,8 @@ pub fn server_supports(capabilities: &ServerCapabilities, feature: Feature) -> b
         Feature::CodeActionResolve => {
             matches!(&capabilities.code_action_provider, Some(CodeActionProviderCapability::Options(options)) if options.resolve_provider == Some(true))
         }
+        Feature::DocumentSymbol => one_of(&capabilities.document_symbol_provider),
+        Feature::WorkspaceSymbol => one_of(&capabilities.workspace_symbol_provider),
     }
 }
 

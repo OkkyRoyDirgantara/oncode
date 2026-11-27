@@ -45,6 +45,41 @@ pub async fn symbol_definitions(core: &Shared, window: &str, symbol: String, cur
         .collect())
 }
 
+/// A definition found by [`symbol_search`] (Go to Symbol in Workspace without a language server).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceSymbolLocation {
+    /// Absolute path.
+    pub path: String,
+    pub name: String,
+    pub kind: String,
+    /// Starts from 1.
+    pub line: u32,
+    /// Characters, starts from 0.
+    pub column: u32,
+}
+
+/// Most results of a workspace symbol search.
+const SEARCH_LIMIT: usize = 200;
+
+/// Definitions in this window's folder whose name contains `query`. Empty if the extension is turned off.
+pub async fn symbol_search(core: &Shared, window: &str, query: String) -> AppResult<Vec<WorkspaceSymbolLocation>> {
+    if !core.effective_settings(window).extensions.symbol_search {
+        return Ok(Vec::new());
+    }
+    let root = core.workspace_root(window)?;
+    let search_root = root.clone();
+    let found = core
+        .runtime()
+        .spawn_blocking(move || oncode_workspace::outline::find_workspace_symbols(&search_root, &query, SEARCH_LIMIT))
+        .await
+        .map_err(|e| AppError::new("io", e.to_string()))??;
+    Ok(found
+        .into_iter()
+        .map(|s| WorkspaceSymbolLocation { path: root.join(&s.path).to_string_lossy().into_owned(), name: s.name, kind: s.kind, line: s.line, column: s.column })
+        .collect())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

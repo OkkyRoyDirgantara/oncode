@@ -26,7 +26,7 @@ use oncode_ui::commands::Command;
 use oncode_ui::editor::active_file;
 use oncode_ui::overlay::{self, Confirm, TextPrompt};
 use oncode_ui::quick_pick::{PickItem, QuickPickOptions};
-use oncode_ui::{Env, Lucide, OpenOptions, SidebarView, TabContent, TabData, TabKind, ViewTab, Workbench};
+use oncode_ui::{spawn_core, Env, Lucide, OpenOptions, SidebarView, TabContent, TabData, TabKind, ViewTab, Workbench};
 use serde_json::{json, Value};
 
 use actions::{ask, handle_git_error, pick, prompt, run_with_progress, Ctx};
@@ -65,7 +65,8 @@ impl TabKind for GraphKind {
     fn build(&self, tab: &TabData, _: &Env, window: &mut Window, cx: &mut App) -> Box<dyn TabContent> {
         let store = current_store(cx);
         let (root, path) = (root_param(tab), tab.param_str("path").map(String::from));
-        Box::new(ViewTab(cx.new(|cx| GraphTab::new(store, root, path, window, cx))))
+        let lines = tab.params.get("lines").and_then(|lines| Some((lines.get(0)?.as_u64()? as u32, lines.get(1)?.as_u64()? as u32)));
+        Box::new(ViewTab(cx.new(|cx| GraphTab::new(store, root, path, window, cx).with_lines(lines, cx))))
     }
 
     fn icon(&self, tab: &TabData) -> Option<Lucide> {
@@ -134,6 +135,16 @@ pub fn open_file_history(store: &Entity<GraphStore>, root: &str, path: &str, win
     open_tab(store, tab, window, cx);
 }
 
+/// Opens the history of lines `start..=end` (from 1, as at HEAD) of a file (a repository-relative path).
+pub fn open_line_history(store: &Entity<GraphStore>, root: &str, path: &str, start: u32, end: u32, window: &mut Window, cx: &mut App) {
+    let range = if start == end { start.to_string() } else { format!("{start}-{end}") };
+    let title = format!("History: {}:{range}", format::base_name(path));
+    let tab = TabData::new("fileHistory", title, json!({ "root": root, "path": path, "lines": [start, end] }))
+        .with_id(format!("lineHistory:{root}:{path}:{range}"))
+        .with_description(format!("Line history — {path}:{range}"));
+    open_tab(store, tab, window, cx);
+}
+
 /// The Graph tab currently active in this window.
 pub(crate) fn active_tab(window: &Window, cx: &App) -> Option<Entity<GraphTab>> {
     let workbench = Workbench::for_window(window, cx)?;
@@ -173,7 +184,40 @@ fn setup(workbench: &mut Workbench, window: &mut Window, cx: &mut Context<Workbe
         Command::new("git.showReflog", "Show Reflog", with_root(|store, root, window, cx| open_reflog(&store, &root, window, cx))),
         Command::new("git.interactiveRebase", "Interactive Rebase…", with_root(|store, root, window, cx| rebase_dialog::open(Ctx::new(&store, root), None, window, cx))),
         Command::new("git.fileHistoryActive", "Show History of Active File", with_root(file_history_of_active)),
-        Command::new("git.fileHistory", "Show File History…", with_root(file_history_of_active)),
+        Command::new("git.lineHistory", "Show Line History", with_root(line_history_of_active)),
+        // `[root, oid]`: e.g. a click in the blame column.
+        Command::new("git.showCommit", "Show Commit in Graph", {
+            let store = store.clone();
+            move |args: &Value, window: &mut Window, cx: &mut App| {
+                let (Some(root), Some(oid)) = (args.get(0).and_then(Value::as_str), args.get(1).and_then(Value::as_str)) else { return };
+                let label = format::short_oid(oid).to_string();
+                open_graph(&store, root, Some(RevealTarget { oid: oid.to_string(), label, hunt: true }), window, cx);
+            }
+        })
+        .hidden(),
+        Command::new("git.bisectStart", "Start Bisect (Current Commit Is Bad)…", with_root(|store, root, window, cx| actions::run_action(&Ctx::new(&store, root), menus::GitAction::BisectStart { bad: "HEAD".into() }, window, cx))),
+        Command::new("git.bisectGood", "Bisect: Mark Current Commit as Good", with_root(|store, root, window, cx| {
+            actions::run_action(&Ctx::new(&store, root), menus::GitAction::BisectMark { mark: oncode_git::BisectMark::Good, oid: None }, window, cx)
+        })),
+        Command::new("git.bisectBad", "Bisect: Mark Current Commit as Bad", with_root(|store, root, window, cx| {
+            actions::run_action(&Ctx::new(&store, root), menus::GitAction::BisectMark { mark: oncode_git::BisectMark::Bad, oid: None }, window, cx)
+        })),
+        Command::new("git.bisectSkip", "Bisect: Skip Current Commit", with_root(|store, root, window, cx| {
+            actions::run_action(&Ctx::new(&store, root), menus::GitAction::BisectMark { mark: oncode_git::BisectMark::Skip, oid: None }, window, cx)
+        })),
+        Command::new("git.bisectReset", "Stop Bisect", with_root(|store, root, window, cx| actions::run_action(&Ctx::new(&store, root), menus::GitAction::BisectReset, window, cx))),
+        Command::new("git.fileHistory", "Show File History…", {
+            let store = store.clone();
+            move |args: &Value, window: &mut Window, cx: &mut App| {
+                // `[root, path]` (repository-relative) from a menu, e.g. a Source Control row; otherwise the active file.
+                if let (Some(root), Some(path)) = (args.get(0).and_then(Value::as_str), args.get(1).and_then(Value::as_str)) {
+                    open_file_history(&store, root, path, window, cx);
+                    return;
+                }
+                let Some(root) = store.read(cx).default_root().map(String::from) else { return };
+                file_history_of_active(store.clone(), root, window, cx);
+            }
+        }),
         Command::new("git.showStash", "Show Stash…", with_root(|store, root, window, cx| {
             let stashes = store.read(cx).stashes(&root).to_vec();
             if stashes.is_empty() {
@@ -221,6 +265,45 @@ fn file_history_of_active(store: Entity<GraphStore>, root: String, window: &mut 
         Some((root, relative)) => open_file_history(&store, &root, &relative, window, cx),
         None => overlay::toast_info("This file is not part of an open Git repository.", window, cx),
     }
+}
+
+/// The history of the selected lines of the active file (or of the cursor line). The editor's lines are
+/// mapped to the lines of the file at HEAD first, since `git log -L` counts those.
+fn line_history_of_active(store: Entity<GraphStore>, root: String, window: &mut Window, cx: &mut App) {
+    let Some((_, buffer, state)) = Workbench::for_window(window, cx).and_then(|w| active_file(w.read(cx), cx)) else {
+        overlay::toast_info("Open a file first.", window, cx);
+        return;
+    };
+    let path = buffer.read(cx).path().to_string();
+    let Some((root, relative)) = locate_in_repo([root.as_str()], &path) else {
+        overlay::toast_info("This file is not part of an open Git repository.", window, cx);
+        return;
+    };
+    let (text, selection) = {
+        let state = state.read(cx);
+        (state.text().to_string(), state.selected_range())
+    };
+    let line_of = |offset: usize| text[..offset.min(text.len())].matches('\n').count() as u32 + 1;
+    let start = line_of(selection.start);
+    // A selection that ends at the start of a line does not include that line.
+    let end_offset = if selection.end > selection.start && text[..selection.end.min(text.len())].ends_with('\n') { selection.end - 1 } else { selection.end };
+    let end = line_of(end_offset).max(start);
+    let core = store.read(cx).env().core.clone();
+    let (head_root, head_path) = (root.clone(), relative.clone());
+    let head = spawn_core(cx, async move { git::git_file_at(&core, head_root, "HEAD".into(), head_path).await });
+    window
+        .spawn(cx, async move |cx| {
+            let head = head.await;
+            let _ = cx.update(|window, cx| match head {
+                Ok(Some(head)) => match paths::map_lines_to_head(&head, &text, start, end) {
+                    Some((from, to)) => open_line_history(&store, &root, &relative, from, to, window, cx),
+                    None => overlay::toast_info("These lines are new: they are not in any commit yet.", window, cx),
+                },
+                Ok(None) => overlay::toast_info("This file is not committed yet.", window, cx),
+                Err(error) => overlay::toast_error(error.message, window, cx),
+            });
+        })
+        .detach();
 }
 
 /// New worktree: pick a branch (or type a new branch name), then the target folder next to the repository.

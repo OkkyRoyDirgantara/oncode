@@ -388,7 +388,7 @@ impl Worker {
         let flags = GitFlags {
             refs: shared_refs || (!nested && first == "HEAD"),
             index: !nested && first == "index",
-            state: in_rebase || (!nested && matches!(first, "MERGE_HEAD" | "CHERRY_PICK_HEAD" | "REVERT_HEAD")),
+            state: in_rebase || (!nested && matches!(first, "MERGE_HEAD" | "CHERRY_PICK_HEAD" | "REVERT_HEAD" | "BISECT_START" | "BISECT_LOG")),
         };
 
         for git in &self.git_dirs {

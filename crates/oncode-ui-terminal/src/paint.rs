@@ -49,6 +49,10 @@ pub fn paint_frame(frame: &Frame, origin: Point<Pixels>, metrics: CellMetrics, f
     for span in &frame.backgrounds {
         window.paint_quad(fill(metrics.bounds(origin, span.row, span.start, span.end - span.start), to_hsla(span.color)));
     }
+    // Find matches: a warm highlight, under the selection (the current match is also selected).
+    for span in &frame.matches {
+        window.paint_quad(fill(metrics.bounds(origin, span.row, span.start, span.end - span.start), gpui_kit::hsla(0.12, 0.9, 0.55, 0.35)));
+    }
     let (selection, alpha) = palette.selection;
     for span in &frame.selections {
         window.paint_quad(fill(metrics.bounds(origin, span.row, span.start, span.end - span.start), to_hsla(selection).opacity(alpha)));
