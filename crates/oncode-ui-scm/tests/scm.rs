@@ -109,6 +109,8 @@ async fn bisect_banner_marks_commits_until_the_first_bad_one(cx: &mut TestAppCon
         let root = root.clone();
         move |cx: &gpui_kit::App| repos(cx).read(cx).snapshot(&root).map(|s| s.operation.clone())
     };
+    let workbench = window.workbench(cx);
+    let store = cx.update(|cx| workbench.read(cx).extension::<gpui_kit::Entity<oncode_ui_scm::store::ScmStore>>()).expect("Source Control store");
     git(&project, &["bisect", "start", "HEAD", "HEAD~4", "--"]);
     window.wait_until(cx, "bisect shown", |_, cx| matches!(bisecting(cx), Some(Some(oncode_git::Operation::Bisect { .. })))).await;
 
@@ -124,10 +126,12 @@ async fn bisect_banner_marks_commits_until_the_first_bad_one(cx: &mut TestAppCon
             window.render_frame(cx);
             window.click(button, cx);
         });
-        let (root, project) = (root.clone(), project.clone());
+        let (root, project, store) = (root.clone(), project.clone(), store.clone());
+        // HEAD moves before git exits: the buttons stay disabled until the command has finished.
         window
             .wait_until(cx, "the next step", move |_, cx| {
-                git(&project, &["rev-parse", "HEAD"]) != before || matches!(repos(cx).read(cx).snapshot(&root).and_then(|s| s.operation.clone()), Some(oncode_git::Operation::Bisect { first_bad: Some(_), .. }))
+                store.read(cx).busy().is_none()
+                    && (git(&project, &["rev-parse", "HEAD"]) != before || matches!(repos(cx).read(cx).snapshot(&root).and_then(|s| s.operation.clone()), Some(oncode_git::Operation::Bisect { first_bad: Some(_), .. })))
             })
             .await;
     }

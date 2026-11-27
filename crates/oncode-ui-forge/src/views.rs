@@ -284,6 +284,11 @@ impl PullRequestTab {
         &self.pending
     }
 
+    /// `true` while a merge or a review is being sent (its buttons are disabled meanwhile).
+    pub fn is_sending(&self) -> bool {
+        self.sending
+    }
+
     /// Adds a line comment to the review being written.
     pub fn add_pending_comment(&mut self, comment: NewReviewComment, cx: &mut Context<Self>) {
         self.pending.push(comment);

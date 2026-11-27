@@ -269,7 +269,7 @@ async fn merge_request_tab_merges_and_reviews(cx: &mut TestAppContext) {
             .respond_with(ResponseTemplate::new(200).set_body_json(json!([{ "id": "d1", "notes": [{ "id": 1, "body": "Why?", "author": { "username": "ana" }, "system": false, "position": { "new_path": "a.rs", "new_line": 3 } }] }])))
             .mount(&server)
             .await;
-        Mock::given(method("PUT")).and(path(format!("{PROJECT}/merge_requests/12/merge"))).respond_with(ResponseTemplate::new(200).set_body_json(detail.clone())).mount(&server).await;
+        Mock::given(method("PUT")).and(path(format!("{PROJECT}/merge_requests/12/merge"))).respond_with(ResponseTemplate::new(200).set_body_json(detail.clone()).set_delay(std::time::Duration::from_millis(300))).mount(&server).await;
         Mock::given(method("POST")).and(path(format!("{PROJECT}/merge_requests/12/notes"))).respond_with(ResponseTemplate::new(201).set_body_json(json!({ "id": 5 }))).mount(&server).await;
     });
     let core = app.core.clone();
@@ -298,6 +298,9 @@ async fn merge_request_tab_merges_and_reviews(cx: &mut TestAppContext) {
     let merge = wait_for_request(&server, "PUT", &format!("{PROJECT}/merge_requests/12/merge"), &window, cx).await;
     assert_eq!(merge["sha"], "8888888888888888888888888888888888888888");
     assert_eq!(merge["squash"], false);
+    // The server got the merge before answering it (the delay above): the buttons stay disabled until the answer
+    // arrives and the tab has reloaded.
+    window.wait_until(cx, "merge answered and the tab reloaded", |_, cx| !tab.read(cx).is_sending() && tab.read(cx).detail().is_some()).await;
 
     click_when_ready(&window, cx, "forge-review-comment").await;
     answer(&window, cx, "Looks fine").await;
