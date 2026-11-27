@@ -10,17 +10,18 @@ use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::{Editor, EditorState, GutterDecoration, GutterDecorationCollection, InputEditsEvent, RangeDecoration, RangeDecorationCollection, RangeDecorationStyle, Rope};
 use gpui_kit::component::resizable::{h_resizable, resizable_panel};
 use gpui_kit::component::spinner::Spinner;
+use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{h_flex, v_flex, ActiveTheme as _, Disableable as _, Icon, Sizable as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
-    div, relative, App, AppContext as _, Context, Entity, FocusHandle, Focusable, Hsla, InteractiveElement as _, IntoElement, ParentElement as _, Render, SharedString, Styled as _,
+    div, relative, App, AppContext as _, Context, Entity, FocusHandle, Focusable, Hsla, InteractiveElement as _, IntoElement, ParentElement as _, Render, SharedString, StatefulInteractiveElement as _, Styled as _,
     Subscription, Task, Window,
 };
 use oncode_core::api::git;
 use oncode_core::AppError;
 use oncode_git::{ConflictDetail, ConflictKind, ConflictSide};
 use oncode_ui::editor::language_for_path;
-use oncode_ui::overlay::{self, Confirm};
+use oncode_ui::overlay::{self, Choice, Confirm};
 use oncode_ui::{repos, spawn_core, Env, Lucide, TabContent, TabData, TabKind};
 use serde_json::json;
 
@@ -157,7 +158,8 @@ impl ConflictView {
     fn install(&mut self, result: Result<ConflictDetail, AppError>, window: &mut Window, cx: &mut Context<Self>) {
         match result {
             Ok(detail) => {
-                self.initial = (!detail.segments.is_empty()).then(|| build_initial_result(&detail.segments));
+                let (current, incoming) = (detail.current.as_deref().unwrap_or_default(), detail.incoming.as_deref().unwrap_or_default());
+                self.initial = (!detail.segments.is_empty()).then(|| build_initial_result(&detail.segments, current, incoming));
                 if let Some(initial) = &self.initial {
                     self.model = ConflictState::new(initial.conflicts.clone());
                     let sides = [(&self.current, normalize(detail.current.as_deref().unwrap_or_default())), (&self.result, initial.text.clone()), (&self.incoming, normalize(detail.incoming.as_deref().unwrap_or_default()))];
@@ -187,9 +189,10 @@ impl ConflictView {
         }
         let mut before = self.synced.clone();
         for (edit, after) in event.edits() {
-            let whole = edit.start_byte == 0 && edit.old_end_byte == before.len() && before.len() > 0;
-            let (start, old_end, new_end) = if whole { minimal_edit(&before.to_string(), &after.to_string()) } else { (edit.start_byte, edit.old_end_byte, edit.new_end_byte) };
-            self.model.apply_edit(start, old_end, new_end);
+            let text = before.to_string();
+            let whole = edit.start_byte == 0 && edit.old_end_byte == text.len() && !text.is_empty();
+            let (start, old_end, new_end) = if whole { minimal_edit(&text, &after.to_string()) } else { (edit.start_byte, edit.old_end_byte, edit.new_end_byte) };
+            self.model.apply_edit(start, old_end, new_end, |pos| pos > 0 && text.as_bytes().get(pos - 1) == Some(&b'\n'));
             before = after.clone();
         }
         self.synced = before;
@@ -284,7 +287,9 @@ impl ConflictView {
         });
     }
 
-    /// Writes the Result panel content to the file and marks the conflict resolved.
+    /// Writes the Result panel content to the file, in the file's own encoding and line endings, and marks the
+    /// conflict resolved. If the file in the working tree changed after this tab read it (edited in another
+    /// editor, for example), the user chooses between overwriting it and reloading the tab from it.
     pub fn mark_resolved(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.saving {
             return;
@@ -295,8 +300,7 @@ impl ConflictView {
             let title = if left == 1 { "1 conflict is still unresolved".to_string() } else { format!("{left} conflicts are still unresolved") };
             overlay::confirm(Confirm::new(title, "Unresolved conflicts keep the Current side. Mark the file as resolved anyway?", "Mark as Resolved"), window, cx)
         });
-        // Line endings follow the original file.
-        let crlf = detail.current.as_deref().or(detail.incoming.as_deref()).unwrap_or_default().contains("\r\n");
+        let (format, worktree) = (detail.format.clone(), detail.worktree.clone());
         let (core, root, path) = (self.env.core.clone(), self.root.clone(), self.path.clone());
         cx.spawn_in(window, async move |this, cx| {
             if let Some(confirmed) = confirmed {
@@ -304,26 +308,50 @@ impl ConflictView {
                     return;
                 }
             }
-            let Ok(task) = this.update(cx, |this, cx| {
-                let text = this.result.read(cx).text().to_string();
-                let content = if crlf { text.replace('\n', "\r\n") } else { text };
-                this.saving = true;
-                cx.notify();
-                spawn_core(cx, async move { git::git_resolve_write(&core, root, path, content).await })
-            }) else {
-                return;
-            };
-            let result = task.await;
-            let _ = this.update_in(cx, |this, window, cx| {
-                this.saving = false;
-                match result {
-                    Ok(()) => this.close(window, cx),
-                    Err(error) => {
-                        overlay::show_error(&error, window, cx);
-                        cx.notify();
+            // `None` once the user chose to overwrite the changed file.
+            let mut expected = Some(worktree);
+            loop {
+                let (core, root, path, format, check) = (core.clone(), root.clone(), path.clone(), format.clone(), expected.clone());
+                let Ok(task) = this.update(cx, |this, cx| {
+                    let content = this.result.read(cx).text().to_string();
+                    this.saving = true;
+                    cx.notify();
+                    spawn_core(cx, async move { git::git_resolve_write(&core, root, path, content, format, check).await })
+                }) else {
+                    return;
+                };
+                let result = task.await;
+                let question = this.update_in(cx, |this, window, cx| {
+                    this.saving = false;
+                    cx.notify();
+                    match result {
+                        Ok(()) => {
+                            this.close(window, cx);
+                            None
+                        }
+                        Err(error) if error.code == git::CHANGED_ON_DISK => Some(overlay::choose(
+                            format!("{} changed on disk", base_name(&this.path)),
+                            "The file was changed after the conflict editor opened it. Overwrite it with the result shown here, or reload the conflict editor from the file and lose the choices made here?",
+                            vec![Choice::new("cancel", "Cancel"), Choice::new("reload", "Reload"), Choice::new("overwrite", "Overwrite").danger()],
+                            window,
+                            cx,
+                        )),
+                        Err(error) => {
+                            overlay::show_error(&error, window, cx);
+                            None
+                        }
                     }
+                });
+                let Ok(Some(question)) = question else { return };
+                match question.await {
+                    Some("overwrite") => expected = None,
+                    Some("reload") => {
+                        let _ = this.update_in(cx, |this, window, cx| this.load(window, cx));
+                        return;
+                    }
+                    _ => return,
                 }
-            });
+            }
         })
         .detach();
     }
@@ -424,6 +452,16 @@ impl ConflictView {
             .border_color(theme.border)
             .child(div().min_w_0().overflow_hidden().whitespace_nowrap().child(SharedString::from(self.path.clone())))
             .child(div().id("conflict-counter").flex_none().text_color(if unresolved > 0 { theme.warning } else { theme.success }).child(SharedString::from(counter)))
+            .when(detail.from_worktree, |el| {
+                el.child(
+                    div()
+                        .id("conflict-from-worktree")
+                        .flex_none()
+                        .text_color(theme.muted_foreground)
+                        .child("· from the edited file")
+                        .tooltip(|window, cx| Tooltip::new("The file in the working tree was already edited, so the result starts from it and keeps what was resolved there.").build(window, cx)),
+                )
+            })
             .child(div().flex_1())
             .child(Button::new("conflict-previous").ghost().xsmall().icon(Icon::new(Lucide::ArrowUp)).tooltip("Previous conflict").disabled(total == 0).on_click(cx.listener(|this, _, _, cx| this.go_to(-1, cx))))
             .child(Button::new("conflict-next").ghost().xsmall().icon(Icon::new(Lucide::ArrowDown)).tooltip("Next conflict").disabled(total == 0).on_click(cx.listener(|this, _, _, cx| this.go_to(1, cx))))

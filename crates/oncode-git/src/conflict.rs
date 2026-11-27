@@ -1,5 +1,11 @@
 //! Conflict resolution: the three versions from the index are re-merged with `git merge-file`
-//! and then split into segments for the conflict editor.
+//! and then split into segments for the conflict editor. If the file in the working tree was already
+//! edited (conflicts resolved by hand, by rerere or by a merge driver), the segments come from its
+//! conflict markers instead, so that work is kept.
+//!
+//! Text is decoded the way the editor reads files: a byte order mark, then UTF-8, then a guess.
+
+use encoding_rs::{Encoding, UTF_8};
 
 use crate::content::is_binary;
 use crate::error::{GitError, Result};
@@ -10,6 +16,13 @@ use crate::status::detect_operation;
 
 /// Splits `git merge-file --diff3` output whose markers are `marker` characters long.
 pub fn parse_merge_output(output: &[u8], marker: usize) -> Vec<MergeSegment> {
+    parse_merge_text(&String::from_utf8_lossy(output), marker)
+}
+
+/// Splits text with conflict markers that are `marker` characters long (git writes 7 unless the
+/// `conflict-marker-size` attribute says otherwise). The base section (`|||||||`) is optional.
+pub fn parse_merge_text(output: &str, marker: usize) -> Vec<MergeSegment> {
+    let output = output.as_bytes();
     #[derive(PartialEq)]
     enum State {
         Resolved,
@@ -84,6 +97,53 @@ fn kind_from_stages(base: bool, ours: bool, theirs: bool) -> ConflictKind {
     }
 }
 
+/// The encoding of a conflicted file, judged from all of its versions: a byte order mark, then UTF-8 if
+/// every version is valid UTF-8, otherwise a guess from the bytes (as the editor does when it opens a file).
+fn detect_encoding(sides: &[&[u8]]) -> (&'static Encoding, bool) {
+    if let Some((encoding, _)) = sides.first().and_then(|bytes| Encoding::for_bom(bytes)) {
+        return (encoding, true);
+    }
+    if sides.iter().all(|bytes| std::str::from_utf8(bytes).is_ok()) {
+        return (UTF_8, false);
+    }
+    let mut detector = chardetng::EncodingDetector::new(chardetng::Iso2022JpDetection::Deny);
+    for bytes in sides.iter().filter(|bytes| std::str::from_utf8(bytes).is_err()) {
+        detector.feed(bytes, false);
+    }
+    detector.feed(b"", true);
+    (detector.guess(None, chardetng::Utf8Detection::Deny), false)
+}
+
+/// Decodes `bytes` as `encoding`, without the byte order mark.
+fn decode_as(encoding: &'static Encoding, bytes: &[u8]) -> String {
+    let bytes = Encoding::for_bom(bytes).map_or(bytes, |(_, length)| &bytes[length..]);
+    encoding.decode_without_bom_handling(bytes).0.into_owned()
+}
+
+/// More lines end with `\r\n` than with a bare `\n`.
+fn mostly_crlf(text: &str) -> bool {
+    let crlf = text.matches("\r\n").count();
+    crlf > text.matches('\n').count() - crlf
+}
+
+/// Nothing in `marked` (the working tree) was resolved yet: taking the current side of every conflict gives
+/// the same text in both, and so does taking the incoming side (line endings aside). The conflicts
+/// themselves may be cut differently: git joins conflicts that are close together unless
+/// `merge.conflictStyle` is diff3, and leaves the base out.
+fn same_conflicts(fresh: &[MergeSegment], marked: &[MergeSegment]) -> bool {
+    let side = |segments: &[MergeSegment], current_side: bool| -> String {
+        let text: String = segments
+            .iter()
+            .map(|segment| match segment {
+                MergeSegment::Resolved { text } => text.as_str(),
+                MergeSegment::Conflict { current, incoming, .. } => if current_side { current.as_str() } else { incoming.as_str() },
+            })
+            .collect();
+        text.replace("\r\n", "\n")
+    };
+    side(fresh, true) == side(marked, true) && side(fresh, false) == side(marked, false)
+}
+
 impl Repo {
     /// Labels for both sides of the conflict, using the actual branch/commit names.
     async fn conflict_labels(&self) -> (String, String) {
@@ -111,7 +171,8 @@ impl Repo {
         }
     }
 
-    /// The three versions of a conflicted file together with the result of re-merging them.
+    /// The three versions of a conflicted file together with the result of re-merging them, or with the
+    /// conflicts still marked in the working tree if that file was already edited.
     pub async fn conflict_detail(&self, path: &str) -> Result<ConflictDetail> {
         let path = check_path(path)?;
         let base = self.blob(&format!(":1:{path}")).await?;
@@ -121,10 +182,19 @@ impl Repo {
             return Err(GitError::invalid(format!("{path} is not in conflict")));
         }
         let kind = kind_from_stages(base.is_some(), current.is_some(), incoming.is_some());
+        let tree = tokio::fs::read(self.root().join(path)).await.ok().filter(|bytes| !is_binary(bytes));
         let binary = [&base, &current, &incoming].iter().any(|side| side.as_deref().is_some_and(is_binary));
         let (current_label, incoming_label) = self.conflict_labels().await;
 
+        let sides: Vec<&[u8]> = [&tree, &current, &incoming, &base].into_iter().flatten().map(Vec::as_slice).collect();
+        let (encoding, bom) = detect_encoding(&sides);
+        let decode = |bytes: &[u8]| decode_as(encoding, bytes);
+        let worktree = tree.as_deref().filter(|_| !binary).map(decode);
+        let reference = worktree.clone().or_else(|| current.as_deref().map(decode)).unwrap_or_default();
+        let format = TextFormat { encoding: encoding.name().to_string(), bom, crlf: mostly_crlf(&reference) };
+
         let mut segments = Vec::new();
+        let mut from_worktree = false;
         if !binary {
             if let (Some(cur), Some(inc)) = (&current, &incoming) {
                 let base_bytes = base.clone().unwrap_or_default();
@@ -145,11 +215,18 @@ impl Repo {
                 if out.code < 0 || out.code > 127 {
                     return Err(GitError::from_output(&["merge-file".into()], out.code, "", &out.stderr));
                 }
-                segments = parse_merge_output(&out.stdout, marker);
+                segments = parse_merge_text(&decode(&out.stdout), marker);
+                if let Some(tree) = &worktree {
+                    let marked = parse_merge_text(tree, self.conflict_marker_size(path).await);
+                    if !same_conflicts(&segments, &marked) {
+                        segments = if marked.is_empty() { vec![MergeSegment::Resolved { text: String::new() }] } else { marked };
+                        from_worktree = true;
+                    }
+                }
             }
         }
 
-        let text = |side: &Option<Vec<u8>>| side.as_ref().filter(|_| !binary).map(|b| String::from_utf8_lossy(b).into_owned());
+        let text = |side: &Option<Vec<u8>>| side.as_deref().filter(|_| !binary).map(decode);
         Ok(ConflictDetail {
             path: path.to_string(),
             kind,
@@ -160,7 +237,24 @@ impl Repo {
             current: text(&current),
             incoming: text(&incoming),
             segments,
+            format,
+            worktree,
+            from_worktree,
         })
+    }
+
+    /// The file in the working tree decoded as `encoding` (a WHATWG label); `None` if it is missing or binary.
+    pub async fn worktree_text(&self, path: &str, encoding: &str) -> Result<Option<String>> {
+        let path = check_path(path)?;
+        let encoding = Encoding::for_label(encoding.as_bytes()).unwrap_or(UTF_8);
+        Ok(tokio::fs::read(self.root().join(path)).await.ok().filter(|bytes| !is_binary(bytes)).map(|bytes| decode_as(encoding, &bytes)))
+    }
+
+    /// The length of the conflict markers git writes for `path`: 7, unless the `conflict-marker-size`
+    /// attribute sets another.
+    async fn conflict_marker_size(&self, path: &str) -> usize {
+        let out = self.run(Cmd::new(["check-attr", "conflict-marker-size"]).paths([path])).await;
+        out.ok().and_then(|out| out.trimmed().rsplit(": ").next().and_then(|size| size.parse().ok())).filter(|size| *size > 0).unwrap_or(7)
     }
 
     /// Resolves a conflict by taking one side entirely. If that side

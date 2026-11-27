@@ -322,42 +322,20 @@ impl ExternalChanges {
     fn new(env: Env, buffers: Entity<Buffers>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let mut subscriptions = Vec::new();
         if let Some(workbench) = env.workbench.upgrade() {
-            let buffers_for_fs = buffers.clone();
+            let buffers = buffers.clone();
             let weak_workbench = env.workbench.clone();
             subscriptions.push(cx.subscribe_in(&workbench, window, move |_, _, event: &WorkbenchEvent, window, cx| {
                 let WorkbenchEvent::FsChanged { paths, overflow } = event else { return };
-                let open = buffers_for_fs.read(cx).all();
-                for buffer in open {
-                    let path = buffer.read(cx).path().to_string();
-                    if !*overflow && !paths.iter().any(|p| p == &path) {
-                        continue;
-                    }
-                    let check = buffer.update(cx, |buffer, cx| buffer.check_external_change(window, cx));
-                    let weak_workbench = weak_workbench.clone();
-                    let buffer = buffer.clone();
-                    window
-                        .spawn(cx, async move |cx| {
-                            if check.await != ExternalChange::Deleted {
-                                return;
-                            }
-                            let _ = cx.update(|window, cx| {
-                                let (dirty, name) = (buffer.read(cx).is_dirty(), buffer.read(cx).file_name().to_string());
-                                if dirty {
-                                    overlay::toast_warning(format!("{name} was deleted on disk. Your unsaved changes are still open; save to restore the file."), window, cx);
-                                } else {
-                                    let _ = weak_workbench.update(cx, |workbench, cx| {
-                                        workbench.force_close_where(|tab| tab.kind == "file" && tab.param_str("path") == Some(path.as_str()), window, cx);
-                                    });
-                                }
-                            });
-                        })
-                        .detach();
-                }
+                let changed = buffers.read(cx).all().into_iter().filter(|buffer| *overflow || paths.iter().any(|p| p == buffer.read(cx).path())).collect();
+                check_buffers(changed, &weak_workbench, window, cx);
             }));
         }
         let weak_workbench = env.workbench.clone();
         subscriptions.push(cx.observe_window_activation(window, move |_, window, cx| {
             if window.is_window_active() {
+                // The watcher does not report gitignored files (`.env`, build output), and it can miss
+                // changes while the computer sleeps: coming back to the window checks every open file.
+                check_buffers(buffers.read(cx).all(), &weak_workbench, window, cx);
                 return;
             }
             let on_focus_change = weak_workbench.upgrade().is_some_and(|w| w.read(cx).settings().files.auto_save == AutoSave::OnFocusChange);
@@ -366,11 +344,38 @@ impl ExternalChanges {
             }
             for buffer in buffers.read(cx).dirty(cx) {
                 if !buffer.read(cx).has_conflict() {
-                    buffer.update(cx, |buffer, cx| buffer.save(window, cx)).detach();
+                    buffer.update(cx, |buffer, cx| buffer.auto_save(window, cx)).detach();
                 }
             }
         }));
         Self { _subscriptions: subscriptions }
+    }
+}
+
+/// Compares open files with the disk: a clean buffer is reloaded, a dirty one is marked as conflicted,
+/// and the tab of a clean file that was deleted is closed.
+fn check_buffers(buffers: Vec<Entity<Buffer>>, workbench: &WeakEntity<Workbench>, window: &mut Window, cx: &mut App) {
+    for buffer in buffers {
+        let path = buffer.read(cx).path().to_string();
+        let check = buffer.update(cx, |buffer, cx| buffer.check_external_change(window, cx));
+        let workbench = workbench.clone();
+        window
+            .spawn(cx, async move |cx| {
+                if check.await != ExternalChange::Deleted {
+                    return;
+                }
+                let _ = cx.update(|window, cx| {
+                    let (dirty, name) = (buffer.read(cx).is_dirty(), buffer.read(cx).file_name().to_string());
+                    if dirty {
+                        overlay::toast_warning(format!("{name} was deleted on disk. Your unsaved changes are still open; save to restore the file."), window, cx);
+                    } else {
+                        let _ = workbench.update(cx, |workbench, cx| {
+                            workbench.force_close_where(|tab| tab.kind == "file" && tab.param_str("path") == Some(path.as_str()), window, cx);
+                        });
+                    }
+                });
+            })
+            .detach();
     }
 }
 

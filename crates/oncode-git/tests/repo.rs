@@ -85,6 +85,41 @@ async fn stage_unstage_and_discard_whole_files() {
     assert_eq!(t.read("new.txt"), "new\n");
 }
 
+/// `[id]` in a path (Next.js, SvelteKit routes) is part of the name: git would read it as a glob that
+/// also matches `i` and `d`, so acting on one file would touch its neighbours.
+#[tokio::test]
+async fn paths_with_glob_characters_only_touch_that_file() {
+    let t = TestRepo::with_commit().await;
+    let files = ["app/[id]/page.tsx", "app/i/page.tsx", "app/d/page.tsx"];
+    for file in files {
+        t.write(file, "base\n");
+    }
+    t.git(&["add", "-A"]);
+    t.git(&["commit", "-q", "-m", "Routes"]);
+    t.commit_file("app/i/page.tsx", "only i\n", "Change i");
+    for file in files {
+        t.write(file, &format!("{}edited\n", t.read(file)));
+    }
+    let target = paths(&["app/[id]/page.tsx"]);
+
+    t.repo.stage(&target).await.unwrap();
+    let s = t.repo.snapshot().await.unwrap();
+    assert_eq!(names(&s.staged), vec![("app/[id]/page.tsx", ChangeKind::Modified)]);
+    t.repo.unstage(&target).await.unwrap();
+    assert!(t.repo.snapshot().await.unwrap().staged.is_empty());
+
+    t.repo.discard(&target).await.unwrap();
+    assert_eq!(t.read("app/[id]/page.tsx"), "base\n");
+    assert_eq!(t.read("app/i/page.tsx"), "only i\nedited\n");
+    assert_eq!(t.read("app/d/page.tsx"), "base\nedited\n");
+
+    let history = t.repo.log(&LogQuery { path: Some("app/[id]/page.tsx".into()), ..Default::default() }, 10).await.unwrap();
+    assert_eq!(history.iter().map(|c| c.subject.as_str()).collect::<Vec<_>>(), vec!["Routes"]);
+    let mut stream = t.repo.log_stream(&LogQuery { path: Some("app/[id]/page.tsx".into()), ..Default::default() }).unwrap();
+    assert_eq!(stream.next_page(10).await.unwrap().rows.len(), 1);
+    stream.close().await;
+}
+
 #[tokio::test]
 async fn unstage_works_before_first_commit() {
     let t = TestRepo::new().await;
@@ -312,6 +347,21 @@ async fn log_stream_pages_through_history_with_graph() {
     assert_eq!(history.len(), 3);
 }
 
+/// A search lists commits whose parents are mostly not listed: following them would open a lane for each
+/// and widen the graph with every row, so a filtered list has no lanes at all.
+#[tokio::test]
+async fn a_filtered_log_has_no_lanes() {
+    let t = TestRepo::with_commit().await;
+    for i in 0..6 {
+        t.commit_file("n.txt", &format!("{i}\n"), &format!("{} {i}", if i % 2 == 0 { "fix" } else { "feat" }));
+    }
+    let mut stream = t.repo.log_stream(&LogQuery { grep: Some("fix".into()), all: true, ..Default::default() }).unwrap();
+    let page = stream.next_page(100).await.unwrap();
+    assert_eq!(page.rows.len(), 3);
+    assert!(page.rows.iter().all(|row| row.column == 0 && row.edges.is_empty()), "{:?}", page.rows.iter().map(|r| (r.column, r.edges.len())).collect::<Vec<_>>());
+    stream.close().await;
+}
+
 #[tokio::test]
 async fn log_of_empty_repo_is_empty() {
     let t = TestRepo::new().await;
@@ -402,6 +452,107 @@ async fn merge_conflict_is_detected_and_resolved_through_editor_flow() {
     let s = t.repo.snapshot().await.unwrap();
     assert!(s.operation.is_none());
     assert_eq!(t.git(&["rev-list", "--parents", "-n", "1", "HEAD"]).split_whitespace().count(), 3);
+}
+
+/// Two conflicting regions with `between` unchanged lines between them.
+async fn two_conflicts(between: &str) -> TestRepo {
+    let t = TestRepo::with_commit().await;
+    t.commit_file("list.txt", &format!("a = 1\n{between}b = 1\n"), "Base");
+    t.git(&["switch", "-q", "-c", "feature"]);
+    t.commit_file("list.txt", &format!("a = 3\n{between}b = 3\n"), "Feature");
+    t.git(&["switch", "-q", "main"]);
+    t.commit_file("list.txt", &format!("a = 2\n{between}b = 2\n"), "Main");
+    t.repo.merge("feature", MergeMode::Default).await.unwrap_err();
+    t
+}
+
+fn conflicts(segments: &[MergeSegment]) -> Vec<(&str, &str)> {
+    segments
+        .iter()
+        .filter_map(|s| match s {
+            MergeSegment::Conflict { current, incoming, .. } => Some((current.as_str(), incoming.as_str())),
+            MergeSegment::Resolved { .. } => None,
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn conflict_detail_keeps_what_was_already_resolved_in_the_working_tree() {
+    let between = "k1\nk2\nk3\nk4\n";
+    let t = two_conflicts(between).await;
+    let fresh = t.repo.conflict_detail("list.txt").await.unwrap();
+    assert!(!fresh.from_worktree, "git's own markers match a fresh merge");
+    assert_eq!(conflicts(&fresh.segments), vec![("a = 2\n", "a = 3\n"), ("b = 2\n", "b = 3\n")]);
+    assert!(fresh.segments.iter().any(|s| matches!(s, MergeSegment::Conflict { base, .. } if base == "a = 1\n")), "a fresh merge has the base");
+    assert_eq!(fresh.worktree.as_deref(), Some(t.read("list.txt").as_str()));
+
+    // The first conflict is resolved by hand; the editor starts from that.
+    let tree = t.read("list.txt");
+    let end = tree.find(">>>>>>> feature\n").unwrap() + ">>>>>>> feature\n".len();
+    t.write("list.txt", &format!("a = 23\n{}", &tree[end..]));
+    let detail = t.repo.conflict_detail("list.txt").await.unwrap();
+    assert!(detail.from_worktree);
+    assert_eq!(conflicts(&detail.segments), vec![("b = 2\n", "b = 3\n")]);
+    assert_eq!(detail.segments[0], MergeSegment::Resolved { text: format!("a = 23\n{between}") });
+
+    // Without markers left, there is nothing to choose and the file is kept as it is.
+    t.write("list.txt", "a = 23\nb = 23\n");
+    let detail = t.repo.conflict_detail("list.txt").await.unwrap();
+    assert_eq!(detail.segments, vec![MergeSegment::Resolved { text: "a = 23\nb = 23\n".into() }]);
+}
+
+/// git joins conflicts that are close together (and leaves out the base); that alone is no edit.
+#[tokio::test]
+async fn conflicts_git_joined_still_come_from_a_fresh_merge() {
+    let t = two_conflicts("keep\n").await;
+    assert_eq!(t.read("list.txt").matches("<<<<<<<").count(), 1, "git wrote one joined conflict");
+    let detail = t.repo.conflict_detail("list.txt").await.unwrap();
+    assert!(!detail.from_worktree);
+    assert_eq!(conflicts(&detail.segments).len(), 2);
+}
+
+/// A Windows-1252 file with CRLF line endings is read as such, so it can be written back the same way.
+#[tokio::test]
+async fn conflict_detail_reads_the_files_own_encoding_and_line_endings() {
+    let t = TestRepo::with_commit().await;
+    let write = |text: &str| std::fs::write(t.file("menu.txt"), text.replace('\n', "\r\n").chars().map(|c| if c == 'é' { 0xE9u8 } else { c as u8 }).collect::<Vec<u8>>()).unwrap();
+    write("caf\u{e9}\nprix = 1\n");
+    t.git(&["add", "-A"]);
+    t.git(&["commit", "-q", "-m", "Base"]);
+    t.git(&["switch", "-q", "-c", "feature"]);
+    write("caf\u{e9}\nprix = 3 \u{e9}\n");
+    t.git(&["commit", "-q", "-am", "Feature"]);
+    t.git(&["switch", "-q", "main"]);
+    write("caf\u{e9}\nprix = 2 \u{e9}\n");
+    t.git(&["commit", "-q", "-am", "Main"]);
+    t.repo.merge("feature", MergeMode::Default).await.unwrap_err();
+
+    let detail = t.repo.conflict_detail("menu.txt").await.unwrap();
+    assert_eq!(detail.format, TextFormat { encoding: "windows-1252".into(), bom: false, crlf: true });
+    assert_eq!(detail.current.as_deref(), Some("caf\u{e9}\r\nprix = 2 \u{e9}\r\n"));
+    assert_eq!(conflicts(&detail.segments), vec![("prix = 2 \u{e9}\r\n", "prix = 3 \u{e9}\r\n")]);
+    assert_eq!(detail.segments[0], MergeSegment::Resolved { text: "caf\u{e9}\r\n".into() });
+    assert_eq!(t.repo.worktree_text("menu.txt", &detail.format.encoding).await.unwrap(), detail.worktree);
+}
+
+#[tokio::test]
+async fn resolving_a_conflict_with_glob_characters_leaves_other_files_alone() {
+    let t = TestRepo::with_commit().await;
+    t.write("app/i/page.tsx", "i\n");
+    t.write("app/d/page.tsx", "d\n");
+    t.commit_file("app/[id]/page.tsx", "base\n", "Routes");
+    t.git(&["switch", "-q", "-c", "feature"]);
+    t.commit_file("app/[id]/page.tsx", "feature\n", "Feature");
+    t.git(&["switch", "-q", "main"]);
+    t.commit_file("app/[id]/page.tsx", "main\n", "Main");
+    t.repo.merge("feature", MergeMode::Default).await.unwrap_err();
+
+    t.repo.resolve_by_deleting("app/[id]/page.tsx").await.unwrap();
+    assert!(!t.file("app/[id]/page.tsx").exists());
+    assert_eq!((t.read("app/i/page.tsx"), t.read("app/d/page.tsx")), ("i\n".to_string(), "d\n".to_string()));
+    let s = t.repo.snapshot().await.unwrap();
+    assert!(s.conflicted.is_empty());
+    assert_eq!(names(&s.staged), vec![("app/[id]/page.tsx", ChangeKind::Deleted)]);
 }
 
 #[tokio::test]

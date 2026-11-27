@@ -184,6 +184,15 @@ pub struct LogQuery {
     pub path: Option<String>,
 }
 
+impl LogQuery {
+    /// Only some commits are listed (a message search, an author, or one file's history). git then reports
+    /// each commit's real parents, which are mostly not in the list, so no graph can be drawn from them.
+    pub fn is_filtered(&self) -> bool {
+        let set = |value: &Option<String>| value.as_deref().is_some_and(|value| !value.is_empty());
+        set(&self.grep) || set(&self.author) || self.path.is_some()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CommitFile {
@@ -521,6 +530,30 @@ pub struct ConflictDetail {
     pub current: Option<String>,
     pub incoming: Option<String>,
     pub segments: Vec<MergeSegment>,
+    /// How the file is encoded; the resolved file is written back the same way.
+    pub format: TextFormat,
+    /// The file in the working tree when the detail was read (`None` if it is missing or binary). Writing
+    /// the result checks that it is still the same, so changes made meanwhile are not lost.
+    pub worktree: Option<String>,
+    /// The segments come from the working tree, not from a fresh merge of the three versions: it was
+    /// already edited (some conflicts resolved by hand, by rerere, or by a merge driver).
+    pub from_worktree: bool,
+}
+
+/// How a text file is stored: its encoding (a WHATWG label, e.g. `UTF-8`, `windows-1252`), whether it
+/// starts with a byte order mark, and whether its lines mostly end with `\r\n`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TextFormat {
+    pub encoding: String,
+    pub bom: bool,
+    pub crlf: bool,
+}
+
+impl Default for TextFormat {
+    fn default() -> Self {
+        Self { encoding: "UTF-8".into(), bom: false, crlf: false }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]

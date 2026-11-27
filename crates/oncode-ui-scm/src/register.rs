@@ -150,26 +150,24 @@ pub(crate) fn setup(workbench: &mut Workbench, window: &mut Window, cx: &mut Con
     }
 }
 
-/// `git init` in the project folder, then the workspace is reloaded so the repository is picked up.
+/// `git init` in the project folder, then the workspace is rebuilt so the repository is picked up. Unsaved
+/// changes are asked about before anything happens, because rebuilding replaces the editors.
 fn init_flow(window: &mut Window, cx: &mut App) {
     let Some(workbench) = Workbench::for_window(window, cx) else { return };
     let env = workbench.read(cx).env().clone();
     let Some(root) = env.root_string() else { return };
-    let core = env.core.clone();
-    let task = spawn_core(cx, async move { api::git::git_init(&core, root).await });
-    window
-        .spawn(cx, async move |cx| {
-            let result = task.await;
-            let _ = cx.update(|window, cx| match result {
-                Ok(()) => {
-                    if let Some(shell) = Shell::for_window(window, cx) {
-                        shell.update(cx, |shell, cx| shell.set_trusted(true, window, cx));
-                    }
-                }
-                Err(error) => overlay::show_error(&error, window, cx),
-            });
-        })
-        .detach();
+    let label = env.window.to_string();
+    let Some(shell) = Shell::for_window(window, cx) else { return };
+    shell.update(cx, |shell, cx| {
+        shell.rebuild_workspace(
+            move |core| async move {
+                api::git::git_init(&core, root.clone()).await?;
+                api::app::workspace_open(&core, &label, root).await
+            },
+            window,
+            cx,
+        )
+    });
 }
 
 /// Clone: URL → parent folder → folder name, with progress; then offers to open it.

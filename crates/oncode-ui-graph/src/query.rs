@@ -24,7 +24,7 @@ pub fn build_query(scope: &str, grep: &str, author: &str, path: &str) -> LogQuer
 
 /// The list is filtered (message, author, or path), so ancestry cannot be inferred from the rows.
 pub fn is_filtered(query: &LogQuery) -> bool {
-    query.grep.is_some() || query.author.is_some() || query.path.is_some()
+    query.is_filtered()
 }
 
 /// A `ref:<name>` scope still points to an existing ref.

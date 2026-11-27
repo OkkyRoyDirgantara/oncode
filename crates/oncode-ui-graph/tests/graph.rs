@@ -90,3 +90,22 @@ async fn interactive_rebase_reorders_commits(cx: &mut TestAppContext) {
     window.wait_until(cx, "rebase finished", |_, _| subjects(&project) == expected).await;
     assert_eq!(git(&project, &["status", "--porcelain"]).trim(), "");
 }
+
+/// Closing the Graph tab stops its `git log`, which otherwise waits on its pipe until the app quits.
+#[gpui_kit::test]
+async fn closing_the_graph_stops_its_log_stream(cx: &mut TestAppContext) {
+    let app = TestApp::new(cx);
+    cx.update(oncode_ui_graph::init);
+    let project = history(&app);
+    let (window, tab) = open_graph(&app, &project, cx).await;
+    assert_eq!(app.core.log_streams.lock().unwrap().len(), 1);
+
+    drop(tab);
+    assert!(window.run_command(cx, "workbench.closeTab"));
+    for _ in 0..5 {
+        window.update(cx, |window, cx| window.render_frame(cx));
+        cx.run_until_parked();
+    }
+    let core = app.core.clone();
+    window.wait_until(cx, "stream closed", move |_, _| core.log_streams.lock().unwrap().is_empty()).await;
+}

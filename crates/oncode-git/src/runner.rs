@@ -46,6 +46,9 @@ impl Output {
     }
 }
 
+/// Makes git read pathspecs as plain file names (see [`Cmd::paths`]).
+pub(crate) const LITERAL_PATHSPECS: &str = "GIT_LITERAL_PATHSPECS";
+
 /// A single git command to run.
 pub struct Cmd {
     pub(crate) args: Vec<OsString>,
@@ -102,7 +105,10 @@ impl Cmd {
         }
     }
 
-    /// Appends `-- <path...>`.
+    /// Appends `-- <path...>`. The paths are file names, not patterns: git would otherwise read
+    /// `[ ] * ?` as a glob, so discarding `app/[id]/page.tsx` would also discard `app/i/page.tsx`.
+    /// The variable is set only for commands that take paths, because git passes it on to hooks,
+    /// whose own pathspecs may be meant as globs.
     pub fn paths<I, S>(mut self, paths: I) -> Self
     where
         I: IntoIterator<Item = S>,
@@ -110,7 +116,12 @@ impl Cmd {
     {
         self.args.push("--".into());
         self.args.extend(paths.into_iter().map(Into::into));
-        self
+        self.literal_paths()
+    }
+
+    /// Makes git match the command's paths literally; for commands that build their own `-- <path>`.
+    pub(crate) fn literal_paths(self) -> Self {
+        self.env(LITERAL_PATHSPECS, "1")
     }
 
     pub fn stdin(mut self, data: impl Into<Vec<u8>>) -> Self {

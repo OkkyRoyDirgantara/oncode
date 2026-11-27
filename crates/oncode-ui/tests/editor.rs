@@ -3,7 +3,7 @@
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::TestAppContext;
 use oncode_ui::editor::{active_file, buffers, open_file, OpenFile};
-use oncode_ui::testing::TestApp;
+use oncode_ui::testing::{TestApp, TestWindow};
 
 #[gpui_kit::test]
 async fn opens_edits_and_saves_a_file(cx: &mut TestAppContext) {
@@ -283,4 +283,86 @@ async fn going_to_a_definition_in_the_same_file_moves_the_cursor(cx: &mut TestAp
     // The function name is selected (columns 5–10), the cursor at the end of the selection.
     assert_eq!(cx.update(|cx| view.read(cx).cursor_info(cx)), (1, 11, 6), "\"double\" on line 1 is selected");
     assert_eq!(cx.update(|cx| workbench.read(cx).model().all_tabs().count()), 1, "no new tab is opened");
+}
+
+fn has_element(window: &TestWindow, id: &'static str, cx: &mut TestAppContext) -> bool {
+    window.update(cx, |window, cx| {
+        window.render_frame(cx);
+        !window.find_all(id).is_empty()
+    })
+}
+
+/// Waits for an element of a dialog; dialogs are not part of the shell's state that `wait_until` looks at.
+fn wait_for_element(window: &TestWindow, id: &'static str, cx: &mut TestAppContext) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while !has_element(window, id, cx) {
+        assert!(std::time::Instant::now() < deadline, "waited too long for {id}");
+        // The backend (tokio) threads answer in the meantime.
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        cx.run_until_parked();
+    }
+}
+
+fn click_element(window: &TestWindow, id: &'static str, cx: &mut TestAppContext) {
+    window.update(cx, |window, cx| {
+        window.render_frame(cx);
+        window.click(id, cx);
+    });
+    cx.run_until_parked();
+}
+
+/// Saving must not silently replace what another program wrote. `.env` is gitignored, so the watcher never
+/// reports it: the save itself has to notice.
+#[gpui_kit::test]
+async fn saving_a_file_changed_on_disk_asks_before_overwriting(cx: &mut TestAppContext) {
+    let app = TestApp::new(cx);
+    let project = app.project(&[(".gitignore", ".env\n"), (".env", "A=1\n")]);
+    let window = app.open(Some(&project), cx).await;
+    let workbench = window.workbench(cx);
+    let file = project.join(".env");
+    let path = file.to_string_lossy().into_owned();
+
+    window.update(cx, |window, cx| workbench.update(cx, |workbench, cx| open_file(workbench, OpenFile::new(&path), window, cx)));
+    window.wait_until(cx, "file loaded", |_, cx| active_file(workbench.read(cx), cx).is_some_and(|(_, buffer, _)| buffer.read(cx).is_ready())).await;
+    let (_, buffer, state) = cx.update(|cx| active_file(workbench.read(cx), cx).unwrap());
+    window.update(cx, |window, cx| {
+        window.render_frame(cx);
+        window.input("B=2\n", cx);
+    });
+    cx.run_until_parked();
+    assert!(cx.update(|cx| buffer.read(cx).is_dirty()));
+
+    // Another program rewrites the file; Ctrl+S asks, and Cancel writes nothing.
+    std::fs::write(&file, "A=1\nFROM_SCRIPT=1\n").unwrap();
+    assert!(window.run_command(cx, "file.save"));
+    wait_for_element(&window, "choice-overwrite", cx);
+    click_element(&window, "choice-cancel", cx);
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "A=1\nFROM_SCRIPT=1\n");
+    assert!(cx.update(|cx| buffer.read(cx).is_dirty() && buffer.read(cx).has_conflict()));
+    assert!(has_element(&window, "file-conflict-overwrite", cx), "the banner offers the choice again");
+
+    // Overwrite from the banner writes this version.
+    click_element(&window, "file-conflict-overwrite", cx);
+    window.wait_until(cx, "overwritten", |_, cx| !buffer.read(cx).is_dirty()).await;
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "B=2\nA=1\n");
+    assert!(!cx.update(|cx| buffer.read(cx).has_conflict()));
+
+    // Saving again right away is not mistaken for a change from outside.
+    window.update(cx, |window, cx| window.input("C=3\n", cx));
+    cx.run_until_parked();
+    assert!(window.run_command(cx, "file.save"));
+    window.wait_until(cx, "saved", |_, cx| !buffer.read(cx).is_dirty()).await;
+    assert!(!has_element(&window, "choice-overwrite", cx));
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "B=2\nC=3\nA=1\n");
+
+    // Reload takes the other program's version and drops the unsaved edit.
+    window.update(cx, |window, cx| window.input("D=4\n", cx));
+    cx.run_until_parked();
+    std::fs::write(&file, "FROM_SCRIPT=2\n").unwrap();
+    assert!(window.run_command(cx, "file.save"));
+    wait_for_element(&window, "choice-reload", cx);
+    click_element(&window, "choice-reload", cx);
+    window.wait_until(cx, "reloaded", |_, cx| state.read(cx).value().as_ref() == "FROM_SCRIPT=2\n").await;
+    assert!(!cx.update(|cx| buffer.read(cx).is_dirty() || buffer.read(cx).has_conflict()));
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "FROM_SCRIPT=2\n");
 }

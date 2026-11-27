@@ -2,7 +2,8 @@
 //! is opened, closed, or its trust status changes. Also bridges `oncode-core` events
 //! (settings, notices, git credential requests, file changes) to this window.
 
-use std::path::PathBuf;
+use std::future::Future;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use gpui_kit::component::input::{Editor, EditorState};
@@ -12,7 +13,7 @@ use gpui_kit::{
     WeakEntity, Window,
 };
 use oncode_core::api::app::{self, WorkspaceInfo};
-use oncode_core::{CoreEvent, NoticeKind, PromptKind, PromptRequest, Settings, Shared};
+use oncode_core::{AppResult, CoreEvent, NoticeKind, PromptKind, PromptRequest, Settings, Shared};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
@@ -106,8 +107,14 @@ impl Shell {
         let bus = core_bus(cx);
         let subscriptions = vec![
             cx.subscribe_in(&bus, window, Self::on_core_event),
-            // The macOS menu bar follows the active window; redraw so `app_menu::sync` runs.
-            cx.observe_window_activation(window, |_, _, cx| cx.notify()),
+            // The macOS menu bar follows the active window; redraw so `app_menu::sync` runs. Coming back to the
+            // window also picks up a `settings.json` edited in another program.
+            cx.observe_window_activation(window, |this, window, cx| {
+                if window.is_window_active() {
+                    this.reload_settings(true, window, cx);
+                }
+                cx.notify();
+            }),
         ];
         window.on_window_should_close(cx, {
             let weak = cx.weak_entity();
@@ -132,6 +139,9 @@ impl Shell {
         };
         this.watch_workbench(window, cx);
         this.update_title(window);
+        if let Some(problem) = this.core.take_settings_problem() {
+            overlay::toast_warning(problem, window, cx);
+        }
         if let Some(folder) = folder {
             this.open_folder(folder, window, cx);
         }
@@ -162,6 +172,9 @@ impl Shell {
             WorkbenchEvent::FileSaved(path) => {
                 if path.ends_with("keybindings.json") && PathBuf::from(path) == this.core.keybindings_path() {
                     this.load_keybindings(true, window, cx);
+                }
+                if path.ends_with("settings.json") && Path::new(path) == this.core.settings_path() {
+                    this.reload_settings(false, window, cx);
                 }
             }
             _ => {}
@@ -245,19 +258,41 @@ impl Shell {
         .detach();
     }
 
-    /// Changes the folder's trust status. Open tabs are preserved through the session.
+    /// Changes the folder's trust status. The workbench is rebuilt for it (see [`Shell::rebuild_workspace`]).
     pub fn set_trusted(&mut self, trusted: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let label = self.label.to_string();
+        self.rebuild_workspace(move |core| async move { app::workspace_set_trusted(&core, &label, trusted).await }, window, cx);
+    }
+
+    /// Rebuilds the workbench after `change`: work in the core that changes what the workbench is built from,
+    /// such as the folder's trust or a repository that was just created. The tabs come back through the
+    /// session, but their editors are new, so unsaved changes are asked about first (Save / Don't Save /
+    /// Cancel), as when another folder is opened. If the user cancels, `change` does not run.
+    pub fn rebuild_workspace<F>(&mut self, change: impl FnOnce(Shared) -> F + 'static, window: &mut Window, cx: &mut Context<Self>)
+    where
+        F: Future<Output = AppResult<WorkspaceInfo>> + Send + 'static,
+    {
         if self.workspace.is_none() {
             return;
         }
         self.save_session_now(cx);
-        let (core, label) = (self.core.clone(), self.label.to_string());
-        let task = spawn_core(cx, async move { app::workspace_set_trusted(&core, &label, trusted).await });
+        self.session_frozen = true;
+        let closed = self.workbench.update(cx, |workbench, cx| workbench.close_all_tabs(false, window, cx));
+        let core = self.core.clone();
         cx.spawn_in(window, async move |this, cx| {
+            if !closed.await {
+                let _ = this.update(cx, |this, _| this.session_frozen = false);
+                return;
+            }
+            let Ok(task) = cx.update(|_, cx| spawn_core(cx, change(core))) else { return };
             let result = task.await;
             let _ = this.update_in(cx, |this, window, cx| match result {
                 Ok(info) => this.install(Some(info), window, cx),
-                Err(error) => overlay::show_error(&error, window, cx),
+                Err(error) => {
+                    // The tabs are closed already; the workbench stays, so they are opened again in it.
+                    this.restore_session(window, cx);
+                    overlay::show_error(&error, window, cx);
+                }
             });
         })
         .detach();
@@ -416,6 +451,22 @@ impl Shell {
                 this.prompt_open = false;
                 this.next_prompt(window, cx);
             });
+        })
+        .detach();
+    }
+
+    // ----- Settings -----
+
+    /// Reads `settings.json` again after it was edited by hand; every window follows through
+    /// `SettingsChanged`. With `only_if_changed`, the file is read only if it changed since the app last
+    /// read or wrote it. A problem with the file is shown instead of silently using the defaults.
+    fn reload_settings(&mut self, only_if_changed: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let core = self.core.clone();
+        let task = spawn_core(cx, async move { core.reload_user_settings(only_if_changed) });
+        cx.spawn_in(window, async move |_, cx| {
+            if let Some(problem) = task.await {
+                let _ = cx.update(|window, cx| overlay::toast_warning(problem, window, cx));
+            }
         })
         .detach();
     }

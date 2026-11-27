@@ -355,7 +355,7 @@ impl Render for FileView {
                         this.buffer.update(cx, |buffer, cx| buffer.reload(window, cx));
                     })))
                     .child(Button::new("file-conflict-overwrite").label("Overwrite").xsmall().outline().on_click(cx.listener(|this, _, window, cx| {
-                        this.buffer.update(cx, |buffer, cx| buffer.save(window, cx)).detach();
+                        this.buffer.update(cx, |buffer, cx| buffer.overwrite(window, cx)).detach();
                     })))
             }))
             .child(div().flex_1().min_h_0().w_full().child(body))

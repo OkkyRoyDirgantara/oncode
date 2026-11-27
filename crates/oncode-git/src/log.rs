@@ -9,7 +9,7 @@ use crate::error::{GitError, Result};
 use crate::graph::GraphBuilder;
 use crate::model::*;
 use crate::repo::Repo;
-use crate::runner::{check_path, check_ref, Cmd};
+use crate::runner::{check_path, check_ref, Cmd, LITERAL_PATHSPECS};
 
 const FIELD: char = '\x1f';
 /// Hash, parents, author, committer, refs, subject; separated by 0x1f.
@@ -76,7 +76,10 @@ pub(crate) fn parse_commits(raw: &[u8]) -> Vec<Commit> {
 pub struct LogStream {
     child: Child,
     reader: BufReader<ChildStdout>,
-    graph: GraphBuilder,
+    /// `None` for a filtered query (see [`LogQuery::is_filtered`]): the rows get no lanes. Following the real
+    /// parents of the listed commits would open a lane for every parent that is never listed, so the graph
+    /// would grow wider with every row.
+    graph: Option<GraphBuilder>,
     done: bool,
 }
 
@@ -96,7 +99,10 @@ impl LogStream {
                 buf.pop();
             }
             if let Some(commit) = parse_commit(&String::from_utf8_lossy(&buf)) {
-                rows.push(self.graph.push(commit));
+                rows.push(match &mut self.graph {
+                    Some(graph) => graph.push(commit),
+                    None => GraphRow { commit, column: 0, color: 0, edges: Vec::new() },
+                });
             }
         }
         Ok(LogPage { rows, done: self.done })
@@ -151,6 +157,8 @@ impl Repo {
             .args(&args)
             .env("GIT_OPTIONAL_LOCKS", "0")
             .env("GIT_PAGER", "cat")
+            // A file's history: its path is a file name, not a glob (see `Cmd::paths`).
+            .env(LITERAL_PATHSPECS, "1")
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
@@ -159,14 +167,14 @@ impl Repo {
         command.creation_flags(0x0800_0000);
         let mut child = command.spawn().map_err(|e| GitError::io("Failed to run git log", e))?;
         let stdout = child.stdout.take().expect("stdout is piped");
-        Ok(LogStream { child, reader: BufReader::with_capacity(64 * 1024, stdout), graph: GraphBuilder::new(), done: false })
+        Ok(LogStream { child, reader: BufReader::with_capacity(64 * 1024, stdout), graph: (!query.is_filtered()).then(GraphBuilder::new), done: false })
     }
 
     /// A list of commits without a graph (used for file history and previews).
     pub async fn log(&self, query: &LogQuery, limit: u32) -> Result<Vec<Commit>> {
         let mut args = self.log_args(query)?;
         args.insert(1, format!("--max-count={limit}"));
-        let out = self.run(Cmd::new(args).ok_codes(&[0, 128])).await?;
+        let out = self.run(Cmd::new(args).literal_paths().ok_codes(&[0, 128])).await?;
         // Exit code 128 occurs in a repository with no commits.
         Ok(parse_commits(&out.stdout))
     }

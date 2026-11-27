@@ -302,6 +302,8 @@ In GPUI, editor state is an entity (`Entity<EditorState>`) and the view is just 
 
 The buffer registry (in `app/features/editor`) maps paths to entities, counts usage, and keeps the last saved content, encoding, and line endings. The v0.2 rules remain: a clean buffer is reloaded when the file changes on disk; a buffer with changes is marked as conflicting and the user chooses.
 
+The watcher is not the only check, because it skips gitignored paths (`.env`, build output) and its report can come after a save. Every save first compares the file's modification time and size with those of the last load or save; if they differ (or the buffer is already marked as conflicting), nothing is written until the user picks **Overwrite** or **Reload from Disk**. An automatic save never asks: it leaves the file alone and shows the conflict banner. Saves of one buffer take turns, so a save never mistakes the previous save's write for a change from outside. Coming back to the window also checks every open file against the disk.
+
 **Image files** (`crates/oncode-ui/src/editor/image.rs`) are still `file` tabs, so the Explorer, quick open, drag and drop, renames, deletes, and the session treat them like any other file. The tab's `view` parameter (`"image"` or `"text"`) says how it is shown; without it, an image extension means a picture. The file view then shows an `ImageView` instead of the editor, on top of the same buffer: a raster image is read from disk (through `fs_read_bytes`, confined to the project folder like `fs_open`) and decoded off the UI thread, an SVG is drawn from the buffer text, so its picture follows unsaved edits. A buffer reload (the file changed on disk) reloads the picture. Switching an SVG between picture and text (**Open as Text** / **Open as Image**, also tab bar buttons) changes only that group's tab; `TabKind::rebuild` builds its content again, and reopening the tab keeps the parameter (`Model::open` keeps parameters the opener does not mention). Opening at a position (search result, definition) shows the text. A picture creates no editor for the language servers or change markers (`BuffersEvent::EditorCreated` is not sent), so opening an SVG does not start an XML server. Pictures longer than 8192 px on a side are scaled down before they go to the GPU; an SVG is rasterized again at a higher scale when zooming in needs it.
 
 ---
@@ -358,12 +360,12 @@ The Git layer (`crates/oncode-git`) is **unchanged**. A summary of its contract,
 
 | Topic | What applies |
 |---|---|
-| Runner | Arguments as an array, fixed environment, per-repository write queue, cancellation, progress, logging to Git Output |
+| Runner | Arguments as an array, fixed environment, per-repository write queue, cancellation, progress, logging to Git Output. Paths after `--` are matched literally (`GIT_LITERAL_PATHSPECS`, set only for commands that take paths, because hooks inherit it), so `app/[id]/page.tsx` is not a glob that also matches `app/i/page.tsx` |
 | Status | `git status --porcelain=v2 -z`; unfinished operations are detected from the Git directory |
 | Partial staging | Line splice with content fingerprints of both sides, written via `hash-object` + `update-index` |
 | Authentication | `oncode-helper` as `GIT_ASKPASS` and `SSH_ASKPASS`, and as the last `credential.helper` (`-c`), over a local socket with a one-time token. A logged-in GitHub/GitLab account only answers the credential helper, whose protocol and host arrive as separate fields and must match the account's scheme and host name. Askpass prompts always go to the user, because a user name in the URL can spoof the host in the prompt text |
 | Interactive rebase | `oncode-helper` as the todo-list editor and message editor |
-| Conflicts | The three versions from the index are re-merged with `git merge-file --diff3` into segments |
+| Conflicts | The three versions from the index are re-merged with `git merge-file --diff3` into segments; if the working tree file was already edited, the segments come from its markers instead ([7.2](#72-conflict-editor)) |
 | Errors | Classified into codes (`pushRejected`, `noUpstream`, `dirtyWorkTree`, …) that determine the actions offered in the UI |
 | Destructive actions | Always with a confirmation that says what will be lost; force push uses `--force-with-lease` |
 
@@ -404,12 +406,18 @@ The v0.2 model is kept: the backend returns segments that are either *already me
 - The **conflict range model** is translated from `conflictState.ts` to Rust: each conflict has a range in the Result document that shifts as the text changes; choosing a side replaces its content and marks it resolved; a manual edit inside the range also marks it resolved.
 - Pane labels use the actual branch or commit names.
 - Non-text conflicts (binary, deleted on one side) use a simple view with a per-file choice.
+- **The working tree is the starting point when it was already edited.** If taking the current side (or the incoming side) of every conflict in the working tree file does not give the same text as in a fresh merge, something was resolved there already (by hand, by rerere, by a merge driver or `-X`), so the Result starts from the file's own markers and keeps that work. Git's own untouched markers still count as a fresh merge, even though git joins nearby conflicts and leaves out the base.
+- **The file keeps its encoding and line endings.** All versions are decoded the way the editor reads files (byte order mark, then UTF-8, then a guess), and **Mark as Resolved** writes the result back with the same encoding, byte order mark, and dominant line ending, through the same atomic save as the editor. It refuses to write over a working tree file that changed after the tab read it; the user then chooses between overwriting and reloading the tab.
+- The highlighted range of each conflict in the Current and Incoming panes is found with a line diff between that pane's file and the result built from its side, because the merged parts can hold changes from the other side.
+- Typing at the end of a conflict that ends with a line break is typing on the next line, so it does not mark the conflict resolved; typing on its last line or into an empty conflict does.
 
 `gpui-component` also has a type for conflicts inside its diff module. N0 checks whether it can replace part of this work.
 
 ### 7.3 Commit graph
 
 - The data is unchanged: `oncode-git` streams `GraphRow`s per page, complete with column, color, and list of lines.
+- A filtered list (message search, author, one file's history) gets no lanes: git reports each commit's real parents, which are mostly not listed, and following them would open a lane per missing parent and widen the graph with every row.
+- Drawing a row never copies the list: the widest lane is kept as pages arrive, and the context menu reads the rows and the selection when it opens. Each stream has its own lock in the core, and closing the tab stops its `git log`.
 - The view: a virtualized uniform list, so only the visible rows are drawn.
 - Each row draws its own slice of the graph using GPUI's drawing primitives: straight lines for passing lanes, curves for lanes that merge or branch, circles for commits (a hollow circle for a merge).
 - The ref panel on the left and the detail panel on the right use `tree` and `list`.
@@ -488,6 +496,8 @@ The file formats are **unchanged**, so v0.2 users need no migration:
 | `state.json` | Last project, trusted folders, accounts, per-project session |
 | OS keychain | Tokens; an in-memory fallback when the keychain is unavailable |
 
+`settings.json` accepts comments and trailing commas. A value of the wrong type only drops that key (the user is told which), and a file with a syntax error is reported and keeps the settings in effect; before the app writes over such a file it copies it to `settings.json.bak`. Saving `settings.json` in the editor, or coming back to the window after editing it elsewhere, reloads it, and every window follows through `SettingsChanged`. Writes take turns and use a unique temporary file.
+
 The `Settings` and `Store` modules and their tests are moved from `src-tauri` to `oncode-core`. The data directory location is now determined by us (previously by Tauri) and must be the same as the v0.2 location so old data can be read.
 
 ---
@@ -496,7 +506,7 @@ The `Settings` and `Store` modules and their tests are moved from `src-tauri` to
 
 **Still applies:**
 
-- **Restricted mode.** An untrusted folder gets only the explorer, editor, and search. Git, LSP, and project settings are disabled. A freshly cloned repository is no exception: it opens untrusted, and its submodules are not cloned until the user trusts it and runs Update Submodules.
+- **Restricted mode.** An untrusted folder gets only the explorer, editor, and search. Git, LSP, and project settings are disabled. A freshly cloned repository is no exception: it opens untrusted, and its submodules are not cloned until the user trusts it and runs Update Submodules. Trusting a folder (and Initialize Repository) rebuilds the workbench, editors included, so unsaved changes are asked about first, as when another folder is opened; the tabs come back through the session.
 - **Project settings never choose programs or credential targets.** `.oncode/settings.json` comes from the repository (and a pull request from a fork can change it), so it cannot set language server commands, the terminal shell, the git path, or the AI and forge settings, even in a trusted folder.
 - **Running processes.** Only `git`, the terminal shell, and the configured language servers; arguments are always arrays; ref names and paths are validated.
 - **Secrets.** Tokens live only in the keychain or memory; they never become arguments, enter logs, or are displayed.

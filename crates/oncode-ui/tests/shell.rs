@@ -367,3 +367,92 @@ async fn title_bar_search_box_without_a_folder_opens_the_command_palette(cx: &mu
         assert!(window.try_find_by_label("Type a command").is_some(), "the command palette is open");
     });
 }
+
+fn has_element(window: &oncode_ui::testing::TestWindow, id: &'static str, cx: &mut TestAppContext) -> bool {
+    window.update(cx, |window, cx| {
+        window.render_frame(cx);
+        !window.find_all(id).is_empty()
+    })
+}
+
+/// Waits for an element of a dialog; dialogs are not part of the shell's state that `wait_until` looks at.
+fn wait_for_element(window: &oncode_ui::testing::TestWindow, id: &'static str, cx: &mut TestAppContext) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while !has_element(window, id, cx) {
+        assert!(std::time::Instant::now() < deadline, "waited too long for {id}");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        cx.run_until_parked();
+    }
+}
+
+fn click_element(window: &oncode_ui::testing::TestWindow, id: &'static str, cx: &mut TestAppContext) {
+    window.update(cx, |window, cx| {
+        window.render_frame(cx);
+        window.click(id, cx);
+    });
+    cx.run_until_parked();
+}
+
+/// Trusting a folder rebuilds the workbench, editors included: unsaved changes are asked about first instead
+/// of being dropped.
+#[gpui_kit::test]
+async fn trusting_a_folder_asks_about_unsaved_changes(cx: &mut TestAppContext) {
+    let app = TestApp::new(cx);
+    let project = app.project(&[("a.txt", "a\n")]);
+    app.trust_revoke(&project);
+    let window = app.open(Some(&project), cx).await;
+    let workbench = window.workbench(cx);
+    let file = project.join("a.txt");
+    window.update(cx, |window, cx| workbench.update(cx, |workbench, cx| open_file(workbench, OpenFile::new(file.to_string_lossy()), window, cx)));
+    window.wait_until(cx, "file loaded", |_, cx| active_file(workbench.read(cx), cx).is_some_and(|(_, buffer, _)| buffer.read(cx).is_ready())).await;
+    let (_, buffer, _) = cx.update(|cx| active_file(workbench.read(cx), cx).unwrap());
+    window.update(cx, |window, cx| {
+        window.render_frame(cx);
+        window.input("edited ", cx);
+    });
+    cx.run_until_parked();
+    assert!(cx.update(|cx| buffer.read(cx).is_dirty()));
+    let trusted = |cx: &mut TestAppContext| cx.update(|cx| window.shell.read(cx).workspace().is_some_and(|w| w.trusted));
+    let shell = window.shell.clone();
+
+    // Cancel: nothing changes, the edit stays.
+    window.update(cx, |window, cx| shell.update(cx, |shell, cx| shell.set_trusted(true, window, cx)));
+    wait_for_element(&window, "choice-cancel", cx);
+    click_element(&window, "choice-cancel", cx);
+    assert!(!trusted(cx));
+    assert_eq!(window.workbench(cx), workbench);
+    assert!(cx.update(|cx| buffer.read(cx).is_dirty()));
+
+    // Save: the edit is written, then the folder is trusted and the tab comes back.
+    window.update(cx, |window, cx| shell.update(cx, |shell, cx| shell.set_trusted(true, window, cx)));
+    wait_for_element(&window, "choice-save", cx);
+    click_element(&window, "choice-save", cx);
+    window.wait_until(cx, "trusted", |shell, cx| shell.read(cx).workspace().is_some_and(|w| w.trusted)).await;
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "edited a\n");
+    let workbench = window.workbench(cx);
+    window.wait_until(cx, "tab restored", |_, cx| workbench.read(cx).model().all_tabs().count() == 1).await;
+    assert_eq!(tab_titles(&workbench, cx), ["a.txt"]);
+}
+
+/// `settings.json` saved from the editor takes effect, so a later change from the Settings page does not
+/// write the old values back over it.
+#[gpui_kit::test]
+async fn saving_settings_json_in_the_editor_applies_it(cx: &mut TestAppContext) {
+    let app = TestApp::new(cx);
+    let project = app.project(&[("a.txt", "a\n")]);
+    app.core.set_user_settings(app.core.user_settings()).unwrap();
+    let window = app.open(Some(&project), cx).await;
+    let workbench = window.workbench(cx);
+    let path = app.core.settings_path().to_string_lossy().into_owned();
+    window.update(cx, |window, cx| workbench.update(cx, |workbench, cx| open_file(workbench, OpenFile::new(&path), window, cx)));
+    window.wait_until(cx, "file loaded", |_, cx| active_file(workbench.read(cx), cx).is_some_and(|(_, buffer, _)| buffer.read(cx).is_ready())).await;
+    let (_, _, state) = cx.update(|cx| active_file(workbench.read(cx), cx).unwrap());
+
+    let mut edited: serde_json::Value = serde_json::to_value(app.core.user_settings()).unwrap();
+    edited["editor"]["fontSize"] = 21.into();
+    let text = serde_json::to_string_pretty(&edited).unwrap();
+    window.update(cx, |window, cx| state.update(cx, |state, cx| state.set_value(text, window, cx)));
+    assert!(window.run_command(cx, "file.save"));
+    window.wait_until(cx, "settings reloaded", |_, _| app.core.user_settings().editor.font_size == 21).await;
+    window.wait_until(cx, "window follows", |_, cx| workbench.read(cx).settings().editor.font_size == 21).await;
+}

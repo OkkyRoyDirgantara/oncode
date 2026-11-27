@@ -346,42 +346,204 @@ pub fn merge_json(base: &mut serde_json::Value, overlay: &serde_json::Value) {
     }
 }
 
+/// What reading a settings file found.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LoadedSettings {
+    pub settings: Settings,
+    /// Why some or all of the file was not used, in words for the user: a syntax error (nothing in the file
+    /// is used) or values of the wrong type (only those keys keep their default). `None` if all of it was used.
+    pub problem: Option<String>,
+    /// The file exists but is not readable JSON: writing the settings over it would lose what it holds.
+    pub unreadable: bool,
+}
+
 impl Settings {
-    /// Reads the settings. Keys missing from the file use the default value;
-    /// a missing or corrupt file yields all defaults.
+    /// Reads the settings. Keys missing from the file use the default value; a missing or corrupt file
+    /// yields all defaults. See [`Settings::read`] for what was wrong with the file.
     pub fn load(path: &Path) -> Self {
-        let Some(file) = std::fs::read_to_string(path).ok().and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok()) else {
-            return Self::default();
+        Self::read(path).settings
+    }
+
+    /// Reads the settings like [`Settings::load`], and says what in the file could not be used. Comments
+    /// and trailing commas are accepted (people copy settings from editors that allow them), and a value
+    /// of the wrong type only drops that key instead of the whole file.
+    pub fn read(path: &Path) -> LoadedSettings {
+        let text = match std::fs::read_to_string(path) {
+            Ok(text) => text,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return LoadedSettings { settings: Self::default(), problem: None, unreadable: false },
+            Err(error) => {
+                return LoadedSettings { settings: Self::default(), problem: Some(format!("{} could not be read: {error}.", file_name(path))), unreadable: true };
+            }
         };
-        Self::default().merged_with(&file)
+        let file = match parse_jsonc(&text) {
+            Ok(file) => file,
+            Err(error) => {
+                let problem = format!("{} has an error on line {}, column {}: {error}. Its settings are not used until it is fixed.", file_name(path), error.line(), error.column());
+                return LoadedSettings { settings: Self::default(), problem: Some(problem), unreadable: true };
+            }
+        };
+        let (settings, rejected) = Self::default().merged_with(&file);
+        let problem = (!rejected.is_empty()).then(|| format!("{} has values of the wrong type, which are ignored: {}.", file_name(path), rejected.join(", ")));
+        LoadedSettings { settings, problem, unreadable: false }
     }
 
-    /// Applies the `overlay` values onto these settings; if the result is invalid, these settings are kept.
-    fn merged_with(&self, overlay: &serde_json::Value) -> Self {
-        let Ok(mut base) = serde_json::to_value(self) else { return self.clone() };
-        merge_json(&mut base, overlay);
-        serde_json::from_value(base).unwrap_or_else(|_| self.clone())
+    /// Applies the `overlay` values onto these settings. A value that does not fit (a wrong type) is
+    /// skipped, and its key is returned, so one mistake does not throw away the rest of the file.
+    fn merged_with(&self, overlay: &serde_json::Value) -> (Self, Vec<String>) {
+        let Ok(mut base) = serde_json::to_value(self) else { return (self.clone(), Vec::new()) };
+        let mut whole = base.clone();
+        merge_json(&mut whole, overlay);
+        if let Ok(settings) = serde_json::from_value(whole) {
+            return (settings, Vec::new());
+        }
+        // Something does not fit: apply the values one at a time and keep those that do.
+        let mut rejected = Vec::new();
+        for (path, value) in leaves(overlay) {
+            let mut candidate = base.clone();
+            merge_json(&mut candidate, &nested(&path, value));
+            if serde_json::from_value::<Settings>(candidate.clone()).is_ok() {
+                base = candidate;
+            } else {
+                rejected.push(path.join("."));
+            }
+        }
+        (serde_json::from_value(base).unwrap_or_else(|_| self.clone()), rejected)
     }
 
+    /// Writes the settings through a temporary file next to `path`, then renames it over `path`, so a reader
+    /// never sees half a file. The temporary name is unique, so two saves at once cannot mix their content.
     pub fn save(&self, path: &Path) -> std::io::Result<()> {
+        static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
         let text = serde_json::to_string_pretty(self).map_err(std::io::Error::other)?;
-        let tmp = path.with_extension("json.tmp");
-        std::fs::write(&tmp, text)?;
-        std::fs::rename(tmp, path)
+        let unique = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let tmp = path.with_extension(format!("json.{}-{unique}.tmp", std::process::id()));
+        if let Err(error) = std::fs::write(&tmp, text).and_then(|()| std::fs::rename(&tmp, path)) {
+            let _ = std::fs::remove_file(&tmp);
+            return Err(error);
+        }
+        Ok(())
     }
 
     /// Effective settings for a project: the user's settings overridden by the project's
     /// `.oncode/settings.json`, except the [`USER_ONLY`] keys. Only called for trusted folders.
     pub fn with_project(&self, project_root: &Path) -> Self {
         let project = project_root.join(".oncode").join("settings.json");
-        match std::fs::read_to_string(project).ok().and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok()) {
-            Some(overlay) => self.merged_with(&without_user_only(overlay)),
+        match std::fs::read_to_string(project).ok().and_then(|t| parse_jsonc(&t).ok()) {
+            Some(overlay) => self.merged_with(&without_user_only(overlay)).0,
             None => self.clone(),
         }
     }
+}
+
+fn file_name(path: &Path) -> String {
+    path.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_else(|| path.display().to_string())
+}
+
+/// Every value in `value` that is not an object, with the keys leading to it. An empty object has none.
+fn leaves(value: &serde_json::Value) -> Vec<(Vec<String>, &serde_json::Value)> {
+    fn walk<'a>(value: &'a serde_json::Value, path: &mut Vec<String>, out: &mut Vec<(Vec<String>, &'a serde_json::Value)>) {
+        match value {
+            serde_json::Value::Object(map) => {
+                for (key, value) in map {
+                    path.push(key.clone());
+                    walk(value, path, out);
+                    path.pop();
+                }
+            }
+            _ => out.push((path.clone(), value)),
+        }
+    }
+    let mut out = Vec::new();
+    walk(value, &mut Vec::new(), &mut out);
+    out
+}
+
+/// `{"a": {"b": value}}` for the path `["a", "b"]`.
+fn nested(path: &[String], value: &serde_json::Value) -> serde_json::Value {
+    path.iter().rev().fold(value.clone(), |inner, key| serde_json::Value::Object([(key.clone(), inner)].into_iter().collect()))
+}
+
+/// Parses JSON that may contain `//` and `/* */` comments and trailing commas (JSONC, as in VS Code's
+/// settings). The error positions refer to the original text: comments are blanked out, not removed.
+pub fn parse_jsonc(text: &str) -> Result<serde_json::Value, serde_json::Error> {
+    serde_json::from_str(&strip_jsonc(text))
+}
+
+/// Replaces comments with spaces (keeping line breaks) and drops commas that are followed only by
+/// whitespace or comments before a closing `}` or `]`. Strings are left alone.
+fn strip_jsonc(text: &str) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    let mut out: Vec<char> = Vec::with_capacity(chars.len());
+    // Index in `out` of a comma that is so far followed only by whitespace and comments.
+    let mut pending_comma: Option<usize> = None;
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        match c {
+            '"' => {
+                pending_comma = None;
+                out.push(c);
+                i += 1;
+                while i < chars.len() {
+                    out.push(chars[i]);
+                    match chars[i] {
+                        '\\' if i + 1 < chars.len() => {
+                            out.push(chars[i + 1]);
+                            i += 2;
+                        }
+                        '"' => {
+                            i += 1;
+                            break;
+                        }
+                        _ => i += 1,
+                    }
+                }
+            }
+            '/' if chars.get(i + 1) == Some(&'/') => {
+                while i < chars.len() && chars[i] != '\n' {
+                    out.push(' ');
+                    i += 1;
+                }
+            }
+            '/' if chars.get(i + 1) == Some(&'*') => {
+                out.extend([' ', ' ']);
+                i += 2;
+                while i < chars.len() && !(chars[i] == '*' && chars.get(i + 1) == Some(&'/')) {
+                    out.push(if chars[i] == '\n' { '\n' } else { ' ' });
+                    i += 1;
+                }
+                if i < chars.len() {
+                    out.extend([' ', ' ']);
+                    i += 2;
+                }
+            }
+            ',' => {
+                pending_comma = Some(out.len());
+                out.push(c);
+                i += 1;
+            }
+            '}' | ']' => {
+                if let Some(comma) = pending_comma.take() {
+                    out[comma] = ' ';
+                }
+                out.push(c);
+                i += 1;
+            }
+            c if c.is_whitespace() => {
+                out.push(c);
+                i += 1;
+            }
+            _ => {
+                pending_comma = None;
+                out.push(c);
+                i += 1;
+            }
+        }
+    }
+    out.into_iter().collect()
 }
 
 #[cfg(test)]
@@ -398,9 +560,38 @@ mod tests {
         assert_eq!(s.editor.font_size, 18);
         assert_eq!(s.editor.tab_size, 4);
         assert!(s.lsp.enabled);
-        // A wrongly typed value does not corrupt the other settings: the file is ignored entirely.
-        std::fs::write(&path, r#"{ "editor": { "fontSize": "large" } }"#).unwrap();
-        assert_eq!(Settings::load(&path), Settings::default());
+        // A wrongly typed value only loses that value, not the rest of the file.
+        std::fs::write(&path, r#"{ "editor": { "fontSize": "large", "tabSize": 2 }, "workbench": { "theme": "dark" } }"#).unwrap();
+        let loaded = Settings::read(&path);
+        assert_eq!(loaded.settings.editor.font_size, Settings::default().editor.font_size);
+        assert_eq!(loaded.settings.editor.tab_size, 2);
+        assert_eq!(loaded.settings.workbench.theme, Theme::Dark);
+        assert!(!loaded.unreadable);
+        assert!(loaded.problem.as_deref().is_some_and(|p| p.contains("editor.fontSize") && !p.contains("tabSize")), "{loaded:?}");
+        // A syntax error: nothing in the file can be used, and it must not be written over unnoticed.
+        std::fs::write(&path, "{ \"editor\": { \"fontSize\": 18 }\n\"x\"").unwrap();
+        let loaded = Settings::read(&path);
+        assert_eq!(loaded.settings, Settings::default());
+        assert!(loaded.unreadable);
+        assert!(loaded.problem.as_deref().is_some_and(|p| p.contains("line 2")), "{loaded:?}");
+    }
+
+    /// Settings copied from editors that allow comments and trailing commas (VS Code) are read.
+    #[test]
+    fn comments_and_trailing_commas_are_accepted() {
+        let text = r#"{
+            // The font.
+            "editor": { "fontSize": 18, /* inline */ "fontFamily": "Fira // Code, /* not a comment */", },
+            "terminal": { "shell": "C:\\bin\\sh\"x\",]" },
+            "lsp": { "servers": {}, },
+        }"#;
+        let value = parse_jsonc(text).unwrap();
+        assert_eq!(value["editor"]["fontSize"], 18);
+        assert_eq!(value["editor"]["fontFamily"], "Fira // Code, /* not a comment */");
+        assert_eq!(value["terminal"]["shell"], "C:\\bin\\sh\"x\",]");
+        // An error position still points into the original text.
+        let error = parse_jsonc("{\n  // note\n  \"a\": x\n}").unwrap_err();
+        assert_eq!(error.line(), 3);
     }
 
     #[test]

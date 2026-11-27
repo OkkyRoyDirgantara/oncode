@@ -5422,6 +5422,8 @@ version = "0.2.0"
 name = "oncode-git"
 version = "0.2.0"
 dependencies = [
+ "chardetng",
+ "encoding_rs",
  "insta",
  "proptest",
  "serde",

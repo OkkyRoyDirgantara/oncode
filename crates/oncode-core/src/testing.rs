@@ -66,8 +66,18 @@ pub struct TestCore {
 
 impl TestCore {
     pub fn new() -> Self {
+        Self::with_settings_file(None)
+    }
+
+    /// Like [`TestCore::new`], with `settings.json` holding `settings` when the core starts.
+    pub fn with_settings_file(settings: Option<&str>) -> Self {
         isolate_git();
         let dir = tempfile::tempdir().unwrap();
+        if let Some(text) = settings {
+            let path = Dirs::under(dir.path().join("app")).settings_path();
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, text).unwrap();
+        }
         let (tx, events) = unbounded_channel();
         let tokens = Arc::new(FallbackStore::new(Arc::new(MemoryStore::new())));
         let core = Core::new(

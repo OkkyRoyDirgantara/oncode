@@ -5,6 +5,7 @@
 
 use std::collections::HashMap;
 use std::rc::Rc;
+use std::sync::Arc;
 use std::time::Duration;
 
 use gpui_kit::component::input::{EditorState, InputEditsEvent, InputEvent, Rope, RopeExt as _};
@@ -14,6 +15,7 @@ use oncode_core::settings::AutoSave;
 use oncode_core::AppError;
 use oncode_workspace::{Eol, OpenedFile};
 
+use crate::overlay::Choice;
 use crate::spawn_core;
 use crate::workbench::{Env, WorkbenchEvent};
 
@@ -57,6 +59,17 @@ pub enum BufferEvent {
     Saved,
 }
 
+/// What a save does when the file changed on disk since it was loaded or last saved.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OnDiskChange {
+    /// Ask whether to overwrite it or reload it.
+    Ask,
+    /// Write nothing and mark the buffer as conflicted.
+    Keep,
+    /// Write without checking.
+    Overwrite,
+}
+
 pub struct Buffer {
     path: String,
     env: Env,
@@ -77,6 +90,8 @@ pub struct Buffer {
     conflict: bool,
     /// Incremented every time the content is reloaded from disk.
     revision: u64,
+    /// Held by the save that is running (see [`Buffer::save`]).
+    save_turn: Arc<tokio::sync::Mutex<()>>,
     _load: Task<()>,
     _auto_save: Task<()>,
 }
@@ -101,6 +116,7 @@ impl Buffer {
             read_only: false,
             conflict: false,
             revision: 0,
+            save_turn: Arc::default(),
             _load: Task::ready(()),
             _auto_save: Task::ready(()),
         };
@@ -299,7 +315,7 @@ impl Buffer {
             cx.background_executor().timer(Duration::from_secs(1)).await;
             let _ = this.update_in(cx, |this, window, cx| {
                 if this.dirty && !this.conflict {
-                    this.save(window, cx).detach();
+                    this.auto_save(window, cx).detach();
                 }
             });
         });
@@ -360,12 +376,88 @@ impl Buffer {
         self.load(window, cx);
     }
 
-    /// Saves to disk with its original encoding and line ending. Resolves to `false` on failure.
-    /// A new file first asks where to save it.
+    /// Saves to disk with its original encoding and line ending. Resolves to `false` on failure or when the
+    /// user cancels. A new file first asks where to save it.
+    ///
+    /// If the file changed on disk since it was loaded or last saved, nothing is written until the user
+    /// chooses to overwrite it (or to reload it instead). The file is checked here and not only when the
+    /// watcher reports a change: the watcher skips gitignored paths such as `.env`, and its report can
+    /// arrive after the save.
     pub fn save(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Task<bool> {
+        self.save_checked(OnDiskChange::Ask, window, cx)
+    }
+
+    /// Saves even if the file changed on disk: the "Overwrite" choice.
+    pub fn overwrite(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Task<bool> {
+        self.save_checked(OnDiskChange::Overwrite, window, cx)
+    }
+
+    /// A save nobody asked for at that moment (auto-save): a file that changed on disk is left alone,
+    /// and the buffer is marked as conflicted, which shows the banner.
+    pub(crate) fn auto_save(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Task<bool> {
+        self.save_checked(OnDiskChange::Keep, window, cx)
+    }
+
+    fn save_checked(&mut self, on_change: OnDiskChange, window: &mut Window, cx: &mut Context<Self>) -> Task<bool> {
         if self.is_untitled() {
             return self.save_untitled(window, cx);
         }
+        if !self.is_ready() {
+            return Task::ready(false);
+        }
+        let turn = self.save_turn.clone();
+        cx.spawn_in(window, async move |this, cx| {
+            // One save at a time: otherwise a save could take the file written by the save before it,
+            // whose stat is not recorded yet, for a change made by another program.
+            let _turn = turn.lock_owned().await;
+            if on_change != OnDiskChange::Overwrite {
+                let Ok(stat) = this.update(cx, |this, cx| {
+                    let (core, label, path) = (this.env.core.clone(), this.env.window.to_string(), this.path.clone());
+                    spawn_core(cx, async move { fs::fs_stat(&core, &label, path).await })
+                }) else {
+                    return false;
+                };
+                // A failed stat tells nothing about a change; the write reports the real problem. A file
+                // that is gone is written again (the unsaved changes restore it).
+                let stat = stat.await.ok().flatten();
+                let Ok(changed) = this.update(cx, |this, _| this.conflict || stat.is_some_and(|stat| stat.mtime_ms != this.mtime_ms || stat.size != this.size)) else {
+                    return false;
+                };
+                if changed {
+                    let answer = this.update_in(cx, |this, window, cx| {
+                        this.conflict = true;
+                        cx.notify();
+                        (on_change == OnDiskChange::Ask).then(|| this.ask_about_disk_change(window, cx))
+                    });
+                    let Ok(Some(answer)) = answer else { return false };
+                    match answer.await {
+                        Some("overwrite") => {}
+                        Some("reload") => {
+                            let _ = this.update_in(cx, |this, window, cx| this.reload(window, cx));
+                            return false;
+                        }
+                        _ => return false,
+                    }
+                }
+            }
+            let Ok(write) = this.update_in(cx, |this, window, cx| this.write(window, cx)) else { return false };
+            write.await
+        })
+    }
+
+    fn ask_about_disk_change(&self, window: &mut Window, cx: &mut Context<Self>) -> Task<Option<&'static str>> {
+        let name = self.file_name().to_string();
+        let message = if self.dirty {
+            format!("{name} was changed by another program after you opened it. Overwrite it with your version, or reload it and lose your unsaved changes?")
+        } else {
+            format!("{name} was changed by another program after you opened it. Overwrite it with the content shown here, or reload it?")
+        };
+        let choices = vec![Choice::new("cancel", "Cancel"), Choice::new("reload", "Reload from Disk"), Choice::new("overwrite", "Overwrite").danger()];
+        crate::overlay::choose(format!("{name} changed on disk"), message, choices, window, cx)
+    }
+
+    /// Writes the current content, without checking the file on disk.
+    fn write(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Task<bool> {
         let Some(text) = self.text(cx) else { return Task::ready(false) };
         let (core, label, path) = (self.env.core.clone(), self.env.window.to_string(), self.path.clone());
         let (encoding, bom, eol) = (self.encoding.clone(), self.bom, self.eol);

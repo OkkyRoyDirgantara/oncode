@@ -4,6 +4,7 @@
 
 use std::future::Future;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use oncode_git::*;
 
@@ -301,21 +302,23 @@ pub async fn git_remote_set_url(core: &Shared, root: String, name: String, url: 
 pub async fn git_log_open(core: &Shared, root: String, query: LogQuery) -> AppResult<u32> {
     let stream = core.repo(&root)?.log_stream(&query)?;
     let id = core.next_id();
-    core.log_streams.lock().await.insert(id, stream);
+    core.log_streams.lock().unwrap().insert(id, Arc::new(tokio::sync::Mutex::new(stream)));
     Ok(id)
 }
 
 pub async fn git_log_next(core: &Shared, stream_id: u32, count: u32) -> AppResult<LogPage> {
-    let mut streams = core.log_streams.lock().await;
-    let Some(stream) = streams.get_mut(&stream_id) else {
+    let Some(stream) = core.log_streams.lock().unwrap().get(&stream_id).cloned() else {
         return Ok(LogPage { rows: Vec::new(), done: true });
     };
+    let mut stream = stream.lock().await;
     Ok(stream.next_page(count.clamp(1, 2000) as usize).await?)
 }
 
 pub async fn git_log_close(core: &Shared, stream_id: u32) -> AppResult<()> {
-    if let Some(stream) = core.log_streams.lock().await.remove(&stream_id) {
-        stream.close().await;
+    let stream = core.log_streams.lock().unwrap().remove(&stream_id);
+    // A page still being read holds the stream; it is stopped when that read ends (`kill_on_drop`).
+    if let Some(stream) = stream.and_then(|stream| Arc::try_unwrap(stream).ok()) {
+        stream.into_inner().close().await;
     }
     Ok(())
 }
@@ -414,14 +417,26 @@ pub async fn git_resolve_side(core: &Shared, root: String, path: String, side: C
     write(core, &root, false, |repo| async move { repo.resolve_with_side(&path, side).await }).await
 }
 
-/// Writes the result from the conflict editor to the file and then marks it resolved.
-pub async fn git_resolve_write(core: &Shared, root: String, path: String, content: String) -> AppResult<()> {
+/// Error code of [`git_resolve_write`] when the file changed after the conflict editor read it.
+pub const CHANGED_ON_DISK: &str = "changedOnDisk";
+
+/// Writes the result from the conflict editor to the file, encoded as `format` (the file's own encoding,
+/// byte order mark, and line ending), and then marks it resolved. With `expected` (the working tree file
+/// as the editor read it, see [`ConflictDetail::worktree`]), a file that has changed since is not written:
+/// the error code is [`CHANGED_ON_DISK`].
+pub async fn git_resolve_write(core: &Shared, root: String, path: String, content: String, format: TextFormat, expected: Option<Option<String>>) -> AppResult<()> {
     let repo = core.repo(&root)?;
     let full = repo.root().join(&path);
     if !oncode_workspace::is_inside(repo.root(), &full) {
         return Err(AppError::new("invalidPath", format!("Path is outside the repository: {path}")));
     }
-    tokio::fs::write(&full, content).await?;
+    if let Some(expected) = expected {
+        if repo.worktree_text(&path, &format.encoding).await? != expected {
+            return Err(AppError::new(CHANGED_ON_DISK, format!("{path} changed on disk after the conflict editor opened it.")));
+        }
+    }
+    let eol = if format.crlf { oncode_workspace::Eol::Crlf } else { oncode_workspace::Eol::Lf };
+    oncode_workspace::save_file(&full, &content, &format.encoding, format.bom, eol).await?;
     write(core, &root, false, |repo| async move { repo.mark_resolved(&path).await }).await
 }
 
@@ -635,6 +650,42 @@ mod tests {
         assert!(!parent.join("clone/lib/README.md").exists(), "the submodule is not fetched");
     }
 
+    /// The conflict editor's result is written in the file's own encoding and line endings, and not over a
+    /// file that changed after the editor read it.
+    #[tokio::test]
+    async fn resolving_a_conflict_keeps_the_encoding_and_refuses_a_changed_file() {
+        let mut t = TestCore::new();
+        let project = t.trusted_repo("project");
+        let root = open(&mut t, &project).await;
+        let latin1 = |text: &str| text.replace('\n', "\r\n").chars().map(|c| if c == '\u{e9}' { 0xE9u8 } else { c as u8 }).collect::<Vec<u8>>();
+        let commit = |text: &str, message: &str| {
+            std::fs::write(project.join("menu.txt"), latin1(text)).unwrap();
+            git(&project, &["add", "-A"]);
+            git(&project, &["commit", "-q", "-m", message]);
+        };
+        commit("caf\u{e9}\nprix = 1\n", "Base");
+        git(&project, &["switch", "-q", "-c", "feature"]);
+        commit("caf\u{e9}\nprix = 3\n", "Feature");
+        git(&project, &["switch", "-q", "main"]);
+        commit("caf\u{e9}\nprix = 2\n", "Main");
+        let merged = std::process::Command::new("git").current_dir(&project).args(["merge", "-q", "feature"]).output().unwrap();
+        assert!(!merged.status.success(), "the merge stops at the conflict");
+
+        let detail = git_conflict(&t.core, root.clone(), "menu.txt".into()).await.unwrap();
+        let write = |expected: Option<Option<String>>| git_resolve_write(&t.core, root.clone(), "menu.txt".into(), "caf\u{e9}\nprix = 23\n".into(), detail.format.clone(), expected);
+
+        // Edited elsewhere after the conflict editor read it: nothing is written.
+        let edited = latin1("caf\u{e9}\nprix = 4\n");
+        std::fs::write(project.join("menu.txt"), &edited).unwrap();
+        assert_eq!(write(Some(detail.worktree.clone())).await.unwrap_err().code, CHANGED_ON_DISK);
+        assert_eq!(std::fs::read(project.join("menu.txt")).unwrap(), edited);
+
+        // Overwriting writes Windows-1252 with CRLF, like the file was.
+        write(None).await.unwrap();
+        assert_eq!(std::fs::read(project.join("menu.txt")).unwrap(), latin1("caf\u{e9}\nprix = 23\n"));
+        assert!(git(&project, &["diff", "--name-only", "--diff-filter=U"]).is_empty(), "marked resolved");
+    }
+
     #[tokio::test]
     async fn revisions_and_paths_are_validated() {
         let mut t = TestCore::new();
@@ -648,7 +699,7 @@ mod tests {
         assert_eq!(file_at("HEAD:README.md", "x").await.unwrap_err().code, "invalidInput");
 
         let outside = t.dir.path().join("outside.txt");
-        let err = git_resolve_write(&t.core, root.clone(), "../outside.txt".into(), "x".into()).await.unwrap_err();
+        let err = git_resolve_write(&t.core, root.clone(), "../outside.txt".into(), "x".into(), TextFormat::default(), None).await.unwrap_err();
         assert_eq!(err.code, "invalidPath");
         assert!(!outside.exists(), "a file outside the repository must not be written");
         let err = git_discard(&t.core, root.clone(), Vec::new(), vec!["../outside.txt".into()]).await.unwrap_err();
@@ -667,7 +718,7 @@ mod tests {
         git_log_close(&t.core, id).await.unwrap();
         // A stream that has been closed (or never existed) yields an empty page that is done.
         assert_eq!(git_log_next(&t.core, id, 50).await.unwrap(), LogPage { rows: Vec::new(), done: true });
-        assert!(t.core.log_streams.lock().await.is_empty());
+        assert!(t.core.log_streams.lock().unwrap().is_empty());
 
         // A `limit` of 0 is raised to 1.
         let commits = git_log(&t.core, root, LogQuery::default(), 0).await.unwrap();

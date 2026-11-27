@@ -75,10 +75,14 @@ pub struct Core {
     pub store: Store,
     settings_path: PathBuf,
     settings: RwLock<Settings>,
+    /// What is known about `settings.json` on disk; held while the file is written, so writes take turns.
+    settings_file: Mutex<SettingsFile>,
     git: OnceCell<Result<Arc<Git>, AppError>>,
     repos: Mutex<HashMap<String, Arc<RepoEntry>>>,
     workspaces: Mutex<HashMap<String, Workspace>>,
-    pub log_streams: tokio::sync::Mutex<HashMap<u32, LogStream>>,
+    /// Open `git log` streams of Graph and File History tabs. Each has its own lock, so reading a page
+    /// of one (which can take long, e.g. a search through a big history) does not hold up the others.
+    pub log_streams: Mutex<HashMap<u32, Arc<tokio::sync::Mutex<LogStream>>>>,
     next_id: AtomicU32,
     operations: Mutex<HashMap<String, CancellationToken>>,
     prompts: Mutex<HashMap<String, oneshot::Sender<Option<String>>>>,
@@ -87,6 +91,22 @@ pub struct Core {
     pub tokens: Arc<FallbackStore>,
     /// Device flow logins currently waiting, keyed by user code.
     pub pending_logins: Mutex<HashMap<String, PendingLogin>>,
+}
+
+/// The state of `settings.json` as last read or written by this app.
+#[derive(Debug, Default)]
+struct SettingsFile {
+    /// Modification time and size: a different stamp means another program changed the file.
+    stamp: Option<(std::time::SystemTime, u64)>,
+    /// The file is not readable JSON; it is backed up before the settings are written over it.
+    unreadable: bool,
+    /// A problem found when the app started, not shown yet (see [`Core::take_settings_problem`]).
+    problem: Option<String>,
+}
+
+fn file_stamp(path: &Path) -> Option<(std::time::SystemTime, u64)> {
+    let meta = std::fs::metadata(path).ok()?;
+    Some((meta.modified().ok()?, meta.len()))
 }
 
 /// One device flow login waiting for approval in the browser.
@@ -103,16 +123,19 @@ impl Core {
     /// `events` receives every [`CoreEvent`] (called from any thread).
     pub fn new(runtime: Handle, dirs: Dirs, tokens: Arc<FallbackStore>, events: EventSink) -> Shared {
         let settings_path = dirs.settings_path();
+        let stamp = file_stamp(&settings_path);
+        let loaded = Settings::read(&settings_path);
         Arc::new(Self {
             runtime,
             events,
             store: Store::load(dirs.state_path()),
-            settings: RwLock::new(Settings::load(&settings_path)),
+            settings: RwLock::new(loaded.settings),
+            settings_file: Mutex::new(SettingsFile { stamp, unreadable: loaded.unreadable, problem: loaded.problem }),
             settings_path,
             git: OnceCell::new(),
             repos: Mutex::new(HashMap::new()),
             workspaces: Mutex::new(HashMap::new()),
-            log_streams: tokio::sync::Mutex::new(HashMap::new()),
+            log_streams: Mutex::new(HashMap::new()),
             next_id: AtomicU32::new(1),
             operations: Mutex::new(HashMap::new()),
             prompts: Mutex::new(HashMap::new()),
@@ -172,10 +195,57 @@ impl Core {
         self.settings.read().unwrap().clone()
     }
 
+    /// Stores the user's settings in `settings.json`. A file that could not be read is first copied to
+    /// `settings.json.bak`, so what the user wrote there is not lost.
     pub fn set_user_settings(&self, settings: Settings) -> std::io::Result<()> {
+        let mut file = self.settings_file.lock().unwrap();
+        if file.unreadable && self.settings_path.exists() {
+            let backup = self.settings_path.with_extension("json.bak");
+            std::fs::copy(&self.settings_path, &backup)?;
+            self.emit(CoreEvent::Notice {
+                kind: NoticeKind::Warning,
+                message: format!("settings.json could not be read, so it was copied to {} before the settings were saved.", backup.display()),
+            });
+        }
         settings.save(&self.settings_path)?;
+        *file = SettingsFile { stamp: file_stamp(&self.settings_path), unreadable: false, problem: None };
         *self.settings.write().unwrap() = settings;
         Ok(())
+    }
+
+    /// Reads `settings.json` again (it was edited by hand) and broadcasts [`CoreEvent::SettingsChanged`]
+    /// if the settings changed. With `only_if_changed`, a file whose modification time and size are the
+    /// same as when this app last read or wrote it is not read. A file with a syntax error leaves the
+    /// current settings in effect. Returns what was wrong with the file, in words for the user.
+    pub fn reload_user_settings(&self, only_if_changed: bool) -> Option<String> {
+        let mut file = self.settings_file.lock().unwrap();
+        let stamp = file_stamp(&self.settings_path);
+        if only_if_changed && stamp == file.stamp {
+            return None;
+        }
+        let loaded = Settings::read(&self.settings_path);
+        file.stamp = stamp;
+        file.unreadable = loaded.unreadable;
+        file.problem = None;
+        if loaded.unreadable {
+            return loaded.problem;
+        }
+        let changed = {
+            let mut current = self.settings.write().unwrap();
+            let changed = *current != loaded.settings;
+            *current = loaded.settings.clone();
+            changed
+        };
+        drop(file);
+        if changed {
+            self.emit(CoreEvent::SettingsChanged { settings: loaded.settings });
+        }
+        loaded.problem
+    }
+
+    /// A problem with `settings.json` found when the app started, once (for the first window to show).
+    pub fn take_settings_problem(&self) -> Option<String> {
+        self.settings_file.lock().unwrap().problem.take()
     }
 
     /// Effective settings for a window (project settings only apply to trusted folders).
@@ -605,6 +675,58 @@ mod tests {
         let local = account(ForgeKind::GitLab, "http://127.0.0.1:8080");
         assert!(account_serves(&local, &request("http", "127.0.0.1:9000", None)));
         assert!(!account_serves(&local, &request("https", "127.0.0.1:8080", None)));
+    }
+
+    /// A `settings.json` that is not readable JSON is reported, and copied aside before the settings page
+    /// (or any other change) writes over it.
+    #[tokio::test]
+    async fn a_broken_settings_file_is_reported_and_backed_up_before_it_is_replaced() {
+        let broken = "{ \"editor\": { \"fontSize\": 18 ";
+        let mut t = TestCore::with_settings_file(Some(broken));
+        let problem = t.core.take_settings_problem().expect("the problem is reported");
+        assert!(problem.contains("settings.json") && problem.contains("line 1"), "{problem}");
+        assert_eq!(t.core.take_settings_problem(), None, "reported once");
+        assert_eq!(t.core.user_settings(), Settings::default());
+
+        let mut settings = t.core.user_settings();
+        settings.editor.tab_size = 2;
+        t.core.set_user_settings(settings.clone()).unwrap();
+        let path = t.core.settings_path().to_path_buf();
+        assert_eq!(std::fs::read_to_string(path.with_extension("json.bak")).unwrap(), broken);
+        assert_eq!(Settings::load(&path), settings);
+        recv(&mut t.events, |event| matches!(event, CoreEvent::Notice { kind: NoticeKind::Warning, .. }).then_some(())).await;
+        let leftovers: Vec<_> = std::fs::read_dir(path.parent().unwrap()).unwrap().filter_map(|e| e.ok()).filter(|e| e.file_name().to_string_lossy().ends_with(".tmp")).collect();
+        assert!(leftovers.is_empty(), "no temporary files are left behind");
+    }
+
+    /// `settings.json` edited by hand is read again; a syntax error keeps the settings that were in effect.
+    #[tokio::test]
+    async fn settings_edited_by_hand_are_reloaded() {
+        let mut t = TestCore::new();
+        let path = t.core.settings_path().to_path_buf();
+        let mut settings = t.core.user_settings();
+        settings.editor.font_size = 16;
+        t.core.set_user_settings(settings).unwrap();
+        assert_eq!(t.core.reload_user_settings(true), None, "nothing changed since the app wrote it");
+
+        std::fs::write(&path, "{\n  // bigger\n  \"editor\": { \"fontSize\": 20, \"tabSize\": \"two\", },\n}\n").unwrap();
+        let problem = t.core.reload_user_settings(false).expect("the wrong type is reported");
+        assert!(problem.contains("editor.tabSize"), "{problem}");
+        assert_eq!(t.core.user_settings().editor.font_size, 20);
+        assert_eq!(t.core.user_settings().editor.tab_size, Settings::default().editor.tab_size);
+        let size = recv(&mut t.events, |event| match event {
+            CoreEvent::SettingsChanged { settings } => Some(settings.editor.font_size),
+            _ => None,
+        })
+        .await;
+        assert_eq!(size, 20);
+
+        std::fs::write(&path, "{ \"editor\": ").unwrap();
+        assert!(t.core.reload_user_settings(false).is_some());
+        assert_eq!(t.core.user_settings().editor.font_size, 20, "a broken file does not reset the settings");
+        // ... and is not lost when the settings are saved next.
+        t.core.set_user_settings(t.core.user_settings()).unwrap();
+        assert_eq!(std::fs::read_to_string(path.with_extension("json.bak")).unwrap(), "{ \"editor\": ");
     }
 
     #[test]

@@ -2,6 +2,7 @@
 //! graph lanes in the middle, and commit details on the right.
 
 use std::ops::Range;
+use std::rc::Rc;
 
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::menu::{ContextMenuExt as _, PopupMenu, PopupMenuItem};
@@ -54,6 +55,8 @@ pub struct GraphTab {
     search: Entity<InputState>,
     query: LogQuery,
     rows: Vec<GraphRow>,
+    /// The rightmost lane used by `rows`; kept up to date as pages arrive, so drawing does not scan every row.
+    lanes: i32,
     done: bool,
     stream: Option<u32>,
     loading: bool,
@@ -98,6 +101,13 @@ impl GraphTab {
                 }
                 _ => cx.notify(),
             }),
+            // A closed tab stops its `git log`; otherwise the process waits on its pipe until the app quits.
+            cx.on_release(|this: &mut Self, cx| {
+                if let Some(stream) = this.stream.take() {
+                    let core = this.env.core.clone();
+                    spawn_core(cx, async move { git::git_log_close(&core, stream).await }).detach();
+                }
+            }),
         ];
         store.update(cx, |store, cx| store.ensure(&root, cx));
         let mut this = Self {
@@ -107,6 +117,7 @@ impl GraphTab {
             search,
             query: LogQuery::default(),
             rows: Vec::new(),
+            lanes: -1,
             done: false,
             stream: None,
             loading: false,
@@ -178,6 +189,7 @@ impl GraphTab {
                 match result {
                     Ok((stream, page)) => {
                         this.stream = Some(stream);
+                        this.lanes = max_lane(page.rows.iter());
                         this.rows = page.rows;
                         this.done = page.done;
                         // The selection is kept if its commit still exists.
@@ -192,6 +204,7 @@ impl GraphTab {
                     }
                     Err(error) => {
                         this.rows.clear();
+                        this.lanes = -1;
                         this.error = Some(error.message);
                     }
                 }
@@ -219,6 +232,7 @@ impl GraphTab {
                 this.loading = false;
                 match result {
                     Ok(page) => {
+                        this.lanes = this.lanes.max(max_lane(page.rows.iter()));
                         this.rows.extend(page.rows);
                         this.done = page.done;
                         this.after_rows_changed(cx);
@@ -370,21 +384,21 @@ impl GraphTab {
         if range.end + 40 > self.rows.len() {
             self.load_more(cx);
         }
-        let lanes = max_lane(self.rows.iter());
-        let width = graph_width(lanes);
+        let width = graph_width(self.lanes);
         let snapshot = repo_snapshot(&self.ctx.root, cx);
         let head_oid = snapshot.as_ref().and_then(|s| s.head_oid.clone());
-        let filtered = is_filtered(&self.query);
+        let lane_colors: Rc<[Hsla]> = (0..8).map(|i| lane_color(i, cx)).collect();
+        let entity = cx.entity();
         range
             .filter_map(|index| {
-                let row = self.rows.get(index)?.clone();
+                let row = self.rows.get(index)?;
                 let theme = cx.theme();
                 let selected = self.selected.contains(&row.commit.oid);
                 let is_head = head_oid.as_deref() == Some(row.commit.oid.as_str());
                 let oid = row.commit.oid.clone();
                 let menu_oid = oid.clone();
-                let entity = cx.entity();
-                let lane_colors: Vec<Hsla> = (0..8).map(|i| lane_color(i, cx)).collect();
+                let (entity, menu_entity) = (entity.clone(), entity.clone());
+                let lane_colors = lane_colors.clone();
                 let graph_row = row.clone();
                 let graph = canvas(
                     |_, _, _| {},
@@ -404,8 +418,6 @@ impl GraphTab {
                     div().flex_none().px_1().rounded(px(3.)).border_1().border_color(color).text_color(color).text_xs().child(label.name.clone())
                 });
                 let menu_ctx = self.ctx.clone();
-                let rows_snapshot = self.rows.clone();
-                let selection = order_oldest_first(&self.rows, &self.selected);
                 Some(
                     h_flex()
                         .id(SharedString::from(format!("graph-row-{oid}")))
@@ -421,10 +433,13 @@ impl GraphTab {
                             let additive = event.modifiers().control || event.modifiers().platform;
                             entity.update(cx, |this, cx| this.select(&oid, additive, cx));
                         })
+                        // The rows and the selection are read when the menu opens, not copied into every row.
                         .context_menu(move |popup, _, cx| {
-                            let Some(row) = rows_snapshot.iter().find(|r| r.commit.oid == menu_oid) else { return popup };
+                            let this = menu_entity.read(cx);
+                            let Some(row) = this.rows.iter().find(|r| r.commit.oid == menu_oid) else { return popup };
+                            let selection = order_oldest_first(&this.rows, &this.selected);
                             let snapshot = repo_snapshot(&menu_ctx.root, cx);
-                            let entries = commit_menu(&CommitMenuContext { snapshot: snapshot.as_ref(), commit: &row.commit, rows: &rows_snapshot, filtered, selection: Some(&selection) });
+                            let entries = commit_menu(&CommitMenuContext { snapshot: snapshot.as_ref(), commit: &row.commit, rows: &this.rows, filtered: is_filtered(&this.query), selection: Some(&selection) });
                             graph_menu(&menu_ctx, entries, popup)
                         })
                         .child(graph)
@@ -640,5 +655,48 @@ mod tests {
         assert_eq!(message_body("Title", "Title\n\nLong explanation"), Some("Long explanation".to_string()));
         assert_eq!(message_body("Title", "Body only"), Some("Body only".to_string()));
         assert_eq!(message_body("Title", "  "), None);
+    }
+
+    /// Drawing the visible rows costs the same however long the loaded history is (the list used to be
+    /// copied for every visible row, so scrolling far down a big repository froze the view).
+    #[gpui_kit::test]
+    async fn drawing_rows_does_not_depend_on_the_length_of_the_history(cx: &mut gpui_kit::TestAppContext) {
+        use std::time::{Duration, Instant};
+
+        use gpui_kit::test::TestWindowExt as _;
+        use oncode_ui::testing::TestApp;
+        use oncode_ui::ViewTab;
+
+        use super::GraphTab;
+
+        let app = TestApp::new(cx);
+        cx.update(crate::init);
+        let project = app.git_project(&[("README.md", "# Project\n")]);
+        let window = app.open(Some(&project), cx).await;
+        let workbench = window.workbench(cx);
+        window.wait_until(cx, "graph store", |_, cx| crate::graph_store(workbench.read(cx)).is_some()).await;
+        assert!(window.run_command(cx, "git.showGraph"));
+        cx.run_until_parked();
+        let tab = cx.update(|cx| workbench.read(cx).active_content().and_then(|c| c.as_any().downcast_ref::<ViewTab<GraphTab>>().map(|t| t.0.clone())).expect("graph tab"));
+        window.wait_until(cx, "history loaded", |_, cx| !tab.read(cx).is_loading() && !tab.read(cx).rows().is_empty()).await;
+
+        // The time to draw a few frames with `count` more rows loaded below the visible ones.
+        let draw_with = |count: usize, cx: &mut gpui_kit::TestAppContext| {
+            tab.update(cx, |tab, _| {
+                tab.rows.truncate(1);
+                tab.rows.extend(crate::testing::linear_rows(1, count));
+                tab.done = true;
+            });
+            let started = Instant::now();
+            for _ in 0..5 {
+                tab.update(cx, |_, cx| cx.notify());
+                window.update(cx, |window, cx| window.render_frame(cx));
+            }
+            started.elapsed()
+        };
+        draw_with(50, cx);
+        let short = draw_with(50, cx);
+        let long = draw_with(30_000, cx);
+        assert!(long < short * 4 + Duration::from_millis(300), "50 rows: {short:?}, 30000 rows: {long:?}");
     }
 }
