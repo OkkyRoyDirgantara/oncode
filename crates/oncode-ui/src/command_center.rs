@@ -3,7 +3,7 @@
 
 use gpui_kit::component::button::Button;
 use gpui_kit::component::{h_flex, ActiveTheme as _, Icon, Sizable as _, TITLE_BAR_HEIGHT};
-use gpui_kit::{div, px, App, Decorations, IntoElement, ParentElement as _, Pixels, Styled as _, Window};
+use gpui_kit::{div, px, App, Decorations, InteractiveElement as _, IntoElement, ParentElement as _, Pixels, Styled as _, Window};
 use serde_json::Value;
 
 use crate::{commands, keys, Lucide};
@@ -52,6 +52,11 @@ fn command_center(folder: Option<&str>, window: &Window, cx: &App) -> impl IntoE
     // About 38% of the window, like VS Code, within 200–600 px; it may shrink further when the window is narrow.
     let width = (window.viewport_size().width.as_f32() * 0.38).clamp(200., 600.);
     Button::new("command-center")
+        // The title bar behind the box is a drag area. Without `occlude` the area still counts as hit under
+        // the box, so on Windows a press here is a press on the caption: the system's move loop swallows the
+        // release and the click only got through on a second press. The menus open on the press, so they are
+        // not affected.
+        .occlude()
         .outline()
         .xsmall()
         .icon(Icon::new(Lucide::Search))
