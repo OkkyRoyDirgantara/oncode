@@ -13,6 +13,7 @@ use gpui_kit::{
     WeakEntity, Window,
 };
 use oncode_core::api::app::{self, WorkspaceInfo};
+use oncode_core::api::backup as backup_api;
 use oncode_core::{AppResult, CoreEvent, NoticeKind, PromptKind, PromptRequest, Settings, Shared};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -45,13 +46,13 @@ impl SessionData {
         data
     }
 
-    /// Permanent (non-preview) file tabs from all groups.
+    /// Permanent (non-preview) file tabs from all groups. New, untitled files are included too: with hot
+    /// exit their content comes back from its backup (without one they are skipped when restoring).
     pub fn collect(model: &crate::model::Model) -> Self {
         let mut files: Vec<String> = Vec::new();
         for tab in model.all_tabs() {
             if tab.kind == "file" && !tab.preview {
-                // A new file that has not been saved cannot be reopened from disk.
-                if let Some(path) = tab.param_str("path").filter(|path| !crate::editor::is_untitled(path)) {
+                if let Some(path) = tab.param_str("path") {
                     if !files.iter().any(|f| f == path) {
                         files.push(path.to_string());
                     }
@@ -298,6 +299,13 @@ impl Shell {
         .detach();
     }
 
+    /// Closes this window like its close button: unsaved changes go to hot exit backups, or are asked about.
+    pub fn close_window(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.should_close(window, cx) {
+            window.remove_window();
+        }
+    }
+
     fn should_close(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
         let Some(closed) = self.confirm_close(window, cx) else {
             self.release_workspace(cx);
@@ -317,10 +325,25 @@ impl Shell {
 
     /// Saves the session. `None` if the window may be closed right away; otherwise all tabs are closed
     /// with a question for unsaved tabs, and the result is `true` if the user did not cancel.
+    ///
+    /// With hot exit on (and a folder open), unsaved changes are written to their backups instead and the
+    /// window closes without asking; if a backup cannot be written, it asks as usual.
     fn confirm_close(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Option<Task<bool>> {
         self.save_session_now(cx);
         if !self.workbench.read(cx).has_dirty_tabs(cx) {
             return None;
+        }
+        let hot_exit = self.workspace.is_some() && self.workbench.read(cx).settings().files.hot_exit;
+        if let Some(buffers) = crate::editor::buffers(self.workbench.read(cx)).filter(|_| hot_exit) {
+            let flush = buffers.update(cx, |buffers, cx| buffers.flush_backups(cx));
+            let workbench = self.workbench.downgrade();
+            return Some(cx.spawn_in(window, async move |_, cx| {
+                if flush.await {
+                    return true;
+                }
+                let Ok(ask) = workbench.update_in(cx, |workbench, window, cx| workbench.close_all_tabs(false, window, cx)) else { return false };
+                ask.await
+            }));
         }
         Some(self.workbench.update(cx, |workbench, cx| workbench.close_all_tabs(false, window, cx)))
     }
@@ -364,18 +387,31 @@ impl Shell {
         let core = self.core.clone();
         let expected = root.clone();
         let task = spawn_core(cx, async move {
-            let session = SessionData::parse(app::session_get(&core, root).await.ok().flatten().as_deref());
-            // Files that no longer exist are skipped.
-            let files: Vec<String> = session.files.iter().filter(|f| std::path::Path::new(f).is_file()).cloned().collect();
-            SessionData { active: session.active.filter(|a| files.contains(a)), files }
+            let session = SessionData::parse(app::session_get(&core, root.clone()).await.ok().flatten().as_deref());
+            let backups = backup_api::backup_list(&core, root).await.unwrap_or_default();
+            let backed_up = |path: &str| backups.iter().any(|backup| crate::editor::file_path(&backup.path) == crate::editor::file_path(path));
+            // Files that no longer exist are skipped; new files only come back with their backup.
+            let mut files: Vec<String> =
+                session.files.iter().filter(|f| if crate::editor::is_untitled(f) { backed_up(f) } else { std::path::Path::new(f).is_file() }).cloned().collect();
+            // Unsaved changes whose tab is not in the session (e.g. the session was not written) are not lost.
+            for backup in &backups {
+                let usable = crate::editor::is_untitled(&backup.path) || std::path::Path::new(&backup.path).is_file();
+                if usable && !files.iter().any(|f| crate::editor::file_path(f) == crate::editor::file_path(&backup.path)) {
+                    files.push(backup.path.clone());
+                }
+            }
+            (SessionData { active: session.active.filter(|a| files.contains(a)), files }, backups)
         });
         cx.spawn_in(window, async move |this, cx| {
-            let session = task.await;
+            let (session, backups) = task.await;
             let _ = this.update_in(cx, |this, window, cx| {
                 if this.workspace.as_ref().map(|w| &w.root) != Some(&expected) {
                     return;
                 }
                 this.last_session = serde_json::to_string(&session).unwrap_or_default();
+                if let Some(buffers) = crate::editor::buffers(this.workbench.read(cx)).filter(|_| !backups.is_empty()) {
+                    buffers.update(cx, |buffers, cx| buffers.restore_backups(backups, window, cx));
+                }
                 this.workbench.update(cx, |workbench, cx| {
                     for path in &session.files {
                         workbench.open_tab(file_tab(path), OpenOptions { background: true, ..Default::default() }, window, cx);

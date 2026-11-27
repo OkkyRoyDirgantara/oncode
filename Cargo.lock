@@ -5529,6 +5529,7 @@ dependencies = [
  "oncode-forge",
  "oncode-git",
  "oncode-ui",
+ "oncode-ui-diff",
  "oncode-ui-scm",
  "oncode-ui-settings",
  "serde",
@@ -5550,6 +5551,7 @@ dependencies = [
  "oncode-ui-diff",
  "serde",
  "serde_json",
+ "similar",
  "tempfile",
  "tokio",
 ]
@@ -5656,6 +5658,7 @@ dependencies = [
  "ignore",
  "notify",
  "nucleo-matcher",
+ "regex",
  "serde",
  "serde_json",
  "tempfile",

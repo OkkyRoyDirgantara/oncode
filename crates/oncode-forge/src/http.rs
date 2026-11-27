@@ -150,6 +150,23 @@ impl Api {
         self.decode(&reply)
     }
 
+    /// A `PUT` with a JSON body.
+    pub(crate) async fn put<B: Serialize + ?Sized, T: DeserializeOwned>(&self, path: &str, body: &B) -> Result<T> {
+        let request = self.request(Method::PUT, path)?.json(body);
+        let reply = send(request, &self.server).await?;
+        self.decode(&reply)
+    }
+
+    /// A `DELETE` whose answer has no body (e.g. 204).
+    pub(crate) async fn delete(&self, path: &str) -> Result<()> {
+        let request = self.request(Method::DELETE, path)?;
+        let reply = send(request, &self.server).await?;
+        if reply.status.is_success() {
+            return Ok(());
+        }
+        self.decode::<serde_json::Value>(&reply).map(drop)
+    }
+
     fn decode<T: DeserializeOwned>(&self, reply: &Reply) -> Result<T> {
         if !reply.status.is_success() {
             let mut error = status_error(reply, &self.server);
@@ -199,6 +216,9 @@ pub(crate) fn status_error(reply: &Reply, server: &str) -> ForgeError {
             ForgeErrorCode::NotFound,
             with_detail(format!("Not found on {server}, or this account does not have access")),
         ),
+        // GitHub answers 405 when an action is not possible in the current state, e.g. merging a pull
+        // request that has conflicts or failing required checks.
+        405 => ForgeError::invalid(with_detail(format!("{server} does not allow this right now"))),
         400 | 409 | 422 => ForgeError::invalid(with_detail(format!("Request rejected by {server}"))),
         code if status.is_server_error() => {
             ForgeError::network(with_detail(format!("{server} is having problems (HTTP {code}). Try again later.")))

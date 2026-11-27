@@ -96,9 +96,57 @@ pub fn language_for_path(path: &str) -> LanguageInfo {
     }
 }
 
+/// The comment tokens of a file's language, for Toggle Line/Block Comment.
+pub fn comment_tokens(path: &str) -> super::lines::CommentTokens {
+    use super::lines::CommentTokens;
+    const C: CommentTokens = CommentTokens { line: Some("//"), block: Some(("/*", "*/")) };
+    const HASH: CommentTokens = CommentTokens { line: Some("#"), block: None };
+    const MARKUP: CommentTokens = CommentTokens { line: None, block: Some(("<!--", "-->")) };
+    let language = language_for_path(path);
+    match language.lsp {
+        "rust" | "typescript" | "typescriptreact" | "javascript" | "javascriptreact" | "go" | "c" | "cpp" | "java" | "scss" | "kotlin" | "dart" | "swift" | "csharp" | "scala" | "proto" | "zig" => C,
+        "php" => C,
+        "css" => CommentTokens { line: None, block: Some(("/*", "*/")) },
+        // Plain JSON has no comments; JSON with comments (`.jsonc`, `.json5`, and VS Code's settings files) does.
+        "json" => {
+            let lower = path.to_lowercase();
+            let with_comments = lower.ends_with(".jsonc") || lower.ends_with(".json5") || ["tsconfig.json", "jsconfig.json", "settings.json", "keybindings.json", "launch.json", "tasks.json", "devcontainer.json"].iter().any(|name| lower.ends_with(&format!("/{name}")) || lower.ends_with(&format!("\\{name}")) || lower == *name);
+            if with_comments {
+                C
+            } else {
+                CommentTokens::default()
+            }
+        }
+        "python" => CommentTokens { line: Some("#"), block: Some(("\"\"\"", "\"\"\"")) },
+        "ruby" | "toml" | "yaml" | "shellscript" | "makefile" | "dockerfile" | "elixir" | "graphql" => HASH,
+        "cmake" => CommentTokens { line: Some("#"), block: Some(("#[[", "]]")) },
+        "sql" => CommentTokens { line: Some("--"), block: Some(("/*", "*/")) },
+        "lua" => CommentTokens { line: Some("--"), block: Some(("--[[", "]]")) },
+        "html" | "xml" | "markdown" | "vue" | "svelte" => MARKUP,
+        // `.gitignore` and friends share the `plaintext` id but use `#` comments.
+        "plaintext" if language.name == "Git Config" => HASH,
+        _ => CommentTokens::default(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn comment_tokens_by_language() {
+        assert_eq!(comment_tokens("main.rs").line, Some("//"));
+        assert_eq!(comment_tokens("app.py").line, Some("#"));
+        assert_eq!(comment_tokens("q.sql").line, Some("--"));
+        assert_eq!(comment_tokens("index.html").line, None);
+        assert_eq!(comment_tokens("index.html").block, Some(("<!--", "-->")));
+        assert_eq!(comment_tokens("style.css").block, Some(("/*", "*/")));
+        assert_eq!(comment_tokens("package.json"), Default::default());
+        assert_eq!(comment_tokens("/p/tsconfig.json").line, Some("//"));
+        assert_eq!(comment_tokens("conf.jsonc").line, Some("//"));
+        assert_eq!(comment_tokens(".gitignore").line, Some("#"));
+        assert_eq!(comment_tokens("notes.txt"), Default::default());
+    }
 
     #[test]
     fn detects_by_extension_and_file_name() {

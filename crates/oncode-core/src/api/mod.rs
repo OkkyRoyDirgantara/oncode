@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 pub mod ai;
 pub mod app;
+pub mod backup;
 pub mod forge;
 pub mod format;
 pub mod fs;

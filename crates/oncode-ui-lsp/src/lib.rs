@@ -5,6 +5,8 @@ pub mod diagnostics;
 pub mod edits;
 pub mod hub;
 pub mod model;
+mod signature;
+pub mod symbols;
 
 use std::collections::HashSet;
 use std::ops::Range;
@@ -36,6 +38,19 @@ pub const PROBLEMS_PANEL: &str = "problems";
 /// Registers this feature. Called once from `app/src/main.rs` after `oncode_ui::init`.
 pub fn init(cx: &mut App) {
     oncode_ui::editor::register_format_provider(oncode_ui::editor::LSP_PRIORITY, lsp_format_provider, cx);
+    oncode_ui::editor::register_document_symbol_provider(symbols::document_symbol_provider, cx);
+    oncode_ui::editor::register_workspace_symbol_provider(symbols::workspace_symbol_provider, cx);
+    oncode_ui::editor::set_signature_trigger(
+        |state, window, cx| {
+            // The request reads the hub, so it runs outside any update of it.
+            let watch = Workbench::for_window(window, cx).and_then(|workbench| hub(workbench.read(cx))).and_then(|hub| hub.read(cx).signature_watch(state, cx));
+            let shown = watch.is_some_and(|watch| watch.update(cx, |watch, cx| watch.request(signature::Trigger::Manual, window, cx)));
+            if !shown {
+                overlay::toast_info("No language server gives parameter hints for this file.", window, cx);
+            }
+        },
+        cx,
+    );
     oncode_ui::register_feature(cx, setup);
 }
 
@@ -248,9 +263,11 @@ fn lsp_format_provider(buffer: &Entity<Buffer>, state: &Entity<gpui_kit::compone
         return None;
     }
     let settings = workbench.read(cx).settings().editor.clone();
+    // `.editorconfig` first, then the settings.
+    let (tab_size, insert_spaces) = buffer.read(cx).indentation(&settings);
     let params = DocumentFormattingParams {
         text_document: TextDocumentIdentifier { uri: path_to_lsp_uri(&path)? },
-        options: FormattingOptions { tab_size: settings.tab_size, insert_spaces: settings.insert_spaces, ..Default::default() },
+        options: FormattingOptions { tab_size, insert_spaces, ..Default::default() },
         work_done_progress_params: WorkDoneProgressParams::default(),
     };
     let encoding = client.encoding();

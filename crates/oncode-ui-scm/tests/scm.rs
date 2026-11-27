@@ -91,3 +91,54 @@ async fn restricted_folder_has_no_source_control(cx: &mut TestAppContext) {
     assert!(!window.run_command(cx, "git.stageAll"), "Git commands do not exist in restricted mode");
     assert!(!window.run_command(cx, "scm.focus"));
 }
+
+/// While bisecting, the Source Control banner offers Good / Bad / Skip and, once the first bad commit is
+/// found, Finish (which returns to the branch).
+#[gpui_kit::test]
+async fn bisect_banner_marks_commits_until_the_first_bad_one(cx: &mut TestAppContext) {
+    let app = TestApp::new(cx);
+    cx.update(oncode_ui_scm::init);
+    let project = app.git_project(&[("n.txt", "0\n")]);
+    for i in 1..=4 {
+        std::fs::write(project.join("n.txt"), format!("{i}\n")).unwrap();
+        git(&project, &["commit", "-q", "-am", &format!("Step {i}")]);
+    }
+    let window = open_scm(&app, &project, cx).await;
+    let root = project.to_string_lossy().into_owned();
+    let bisecting = {
+        let root = root.clone();
+        move |cx: &gpui_kit::App| repos(cx).read(cx).snapshot(&root).map(|s| s.operation.clone())
+    };
+    git(&project, &["bisect", "start", "HEAD", "HEAD~4", "--"]);
+    window.wait_until(cx, "bisect shown", |_, cx| matches!(bisecting(cx), Some(Some(oncode_git::Operation::Bisect { .. })))).await;
+
+    // "Step 3" brought the problem.
+    for _ in 0..6 {
+        if matches!(cx.update(|cx| bisecting(cx)), Some(Some(oncode_git::Operation::Bisect { first_bad: Some(_), .. }))) {
+            break;
+        }
+        let value: u32 = std::fs::read_to_string(project.join("n.txt")).unwrap().trim().parse().unwrap();
+        let before = git(&project, &["rev-parse", "HEAD"]);
+        let button = if value >= 3 { "scm-bisect-bad" } else { "scm-bisect-good" };
+        window.update(cx, |window, cx| {
+            window.render_frame(cx);
+            window.click(button, cx);
+        });
+        let (root, project) = (root.clone(), project.clone());
+        window
+            .wait_until(cx, "the next step", move |_, cx| {
+                git(&project, &["rev-parse", "HEAD"]) != before || matches!(repos(cx).read(cx).snapshot(&root).and_then(|s| s.operation.clone()), Some(oncode_git::Operation::Bisect { first_bad: Some(_), .. }))
+            })
+            .await;
+    }
+    match cx.update(|cx| bisecting(cx)) {
+        Some(Some(oncode_git::Operation::Bisect { first_bad: Some(found), .. })) => assert!(found.ends_with("Step 3"), "{found}"),
+        other => panic!("not found: {other:?}"),
+    }
+    window.update(cx, |window, cx| {
+        window.render_frame(cx);
+        window.click("scm-bisect-reset", cx);
+    });
+    window.wait_until(cx, "bisect finished", |_, cx| matches!(bisecting(cx), Some(None))).await;
+    assert_eq!(git(&project, &["rev-parse", "--abbrev-ref", "HEAD"]).trim(), "main");
+}

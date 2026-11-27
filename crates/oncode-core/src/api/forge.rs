@@ -285,6 +285,59 @@ pub async fn forge_pr_create(core: &Shared, account_id: String, repo: RepoRef, i
     Ok(provider.create_pull_request(&repo, &input).await?)
 }
 
+/// Merges a PR/MR on the server.
+pub async fn forge_pr_merge(core: &Shared, account_id: String, repo: RepoRef, number: u32, input: oncode_forge::MergeInput) -> AppResult<()> {
+    let (_, provider) = client(core, &account_id).await?;
+    Ok(provider.merge_pull_request(&repo, number, &input).await?)
+}
+
+/// The line comments of a PR/MR.
+pub async fn forge_review_comments(core: &Shared, account_id: String, repo: RepoRef, number: u32) -> AppResult<Vec<oncode_forge::ReviewComment>> {
+    let (_, provider) = client(core, &account_id).await?;
+    Ok(provider.list_review_comments(&repo, number).await?)
+}
+
+/// Submits a review (line comments, an overall comment, and the verdict).
+pub async fn forge_review_submit(core: &Shared, account_id: String, repo: RepoRef, number: u32, input: oncode_forge::ReviewInput) -> AppResult<()> {
+    let (_, provider) = client(core, &account_id).await?;
+    Ok(provider.submit_review(&repo, number, &input).await?)
+}
+
+/// Replies in a review conversation.
+pub async fn forge_review_reply(core: &Shared, account_id: String, repo: RepoRef, number: u32, thread: String, body: String) -> AppResult<()> {
+    let (_, provider) = client(core, &account_id).await?;
+    Ok(provider.reply_to_review_comment(&repo, number, &thread, &body).await?)
+}
+
+/// The files a PR/MR changes, compared locally.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PrFiles {
+    /// The merge base of the target branch and the PR/MR head.
+    pub base: String,
+    /// The hidden ref holding the PR/MR head (`refs/oncode/pr/<n>`).
+    pub head: String,
+    pub files: Vec<oncode_git::CommitFile>,
+}
+
+/// The hidden ref a PR/MR head is fetched into for showing its changes; the Graph leaves `refs/oncode/*` out.
+pub fn pr_head_ref(number: u32) -> String {
+    format!("refs/oncode/pr/{number}")
+}
+
+/// Fetches the PR/MR head into a hidden ref (no branch is created or switched) and the target branch, then
+/// lists the files changed since their merge base.
+pub async fn forge_pr_files(core: &Shared, root: String, kind: ForgeKind, remote: String, number: u32, target: String) -> AppResult<PrFiles> {
+    let repo = core.repo(&root)?;
+    let head = pr_head_ref(number);
+    repo.fetch_refspec(&remote, &format!("+{}:{head}", pull_request_ref(kind, number)), None, None).await?;
+    let tracking = format!("{remote}/{target}");
+    repo.fetch_refspec(&remote, &format!("+refs/heads/{target}:refs/remotes/{tracking}"), None, None).await?;
+    let base = repo.merge_base(&tracking, &head).await?.ok_or_else(|| AppError::invalid(format!("The changes have no history in common with {tracking}")))?;
+    let files = repo.diff_files(&base, &head).await?;
+    Ok(PrFiles { base, head, files })
+}
+
 /// Fetches the PR/MR ref into the local branch `pr/<number>` and then switches to it. Returns the branch name.
 pub async fn forge_pr_checkout(
     core: &Shared,
@@ -361,6 +414,31 @@ mod tests {
         assert!(t.core.tokens.load(&account.id).unwrap().is_none());
         // An account that has logged out can no longer be used.
         assert_eq!(forge_repos(&t.core, account.id, String::new(), 1).await.err().map(|e| e.code).as_deref(), Some("unauthorized"));
+    }
+
+    /// A PR's changed files: its head is fetched into a hidden ref (no branch is created) and compared with the
+    /// merge base of the target branch, so the target's own new commits do not show up.
+    #[tokio::test]
+    async fn pr_files_come_from_a_hidden_ref_and_the_merge_base() {
+        let t = TestCore::new();
+        let origin = t.trusted_repo("origin");
+        git(&origin, &["switch", "-q", "-c", "feature"]);
+        std::fs::write(origin.join("feature.txt"), "f\n").unwrap();
+        git(&origin, &["add", "-A"]);
+        git(&origin, &["commit", "-q", "-m", "Feature"]);
+        git(&origin, &["update-ref", "refs/pull/3/head", "feature"]);
+        git(&origin, &["switch", "-q", "main"]);
+        std::fs::write(origin.join("main.txt"), "m\n").unwrap();
+        git(&origin, &["add", "-A"]);
+        git(&origin, &["commit", "-q", "-m", "Main moves on"]);
+
+        let local = t.trusted_repo("local");
+        git(&local, &["remote", "add", "origin", &origin.to_string_lossy()]);
+        let root = git_open(&t.core, "w1", local.to_string_lossy().into_owned()).await.unwrap();
+        let files = forge_pr_files(&t.core, root, ForgeKind::GitHub, "origin".into(), 3, "main".into()).await.unwrap();
+        assert_eq!(files.head, "refs/oncode/pr/3");
+        assert_eq!(files.files.iter().map(|f| f.path.as_str()).collect::<Vec<_>>(), ["feature.txt"]);
+        assert!(!git(&local, &["branch", "--list"]).contains("pr/"), "no branch was created");
     }
 
     #[tokio::test]

@@ -364,8 +364,51 @@ impl Repo {
             }
             Operation::CherryPick { .. } => ("cherry-pick", EditorMode::AcceptDefault),
             Operation::Revert { .. } => ("revert", EditorMode::AcceptDefault),
+            Operation::Bisect { .. } => {
+                let args: &[&str] = match action {
+                    OperationAction::Abort => &["bisect", "reset"],
+                    OperationAction::Skip => &["bisect", "skip"],
+                    OperationAction::Continue => return Err(GitError::invalid("Mark the commit as good or bad to continue the bisect")),
+                };
+                return self.run(Cmd::new(args.iter().copied()).write().context(self.ctx(EditorMode::AcceptDefault))).await.map(drop);
+            }
         };
         self.run(Cmd::new([command, flag]).write().context(self.ctx(editor))).await.map(drop)
+    }
+
+    // ----- Bisect -----
+
+    /// Starts a bisect between a commit known to be bad and one known to be good; git checks out a commit
+    /// halfway between them. Returns git's message ("Bisecting: N revisions left to test …").
+    pub async fn bisect_start(&self, bad: &str, good: &str) -> Result<String> {
+        let (bad, good) = (check_ref(bad)?, check_ref(good)?);
+        let _guard = self.lock().await;
+        // `bisect start` does not take `--end-of-options`; `check_ref` already refuses values that start with `-`.
+        let out = self.run(Cmd::new(["bisect", "start", bad, good, "--"]).write().context(self.ctx(EditorMode::AcceptDefault))).await?;
+        Ok(out.trimmed())
+    }
+
+    /// Marks the commit being tested (or `rev`) as good, bad, or untestable. Returns git's message: the next
+    /// step, or "<id> is the first bad commit" when the search is done.
+    pub async fn bisect_mark(&self, mark: BisectMark, rev: Option<&str>) -> Result<String> {
+        let verb = match mark {
+            BisectMark::Good => "good",
+            BisectMark::Bad => "bad",
+            BisectMark::Skip => "skip",
+        };
+        let mut cmd = Cmd::new(["bisect", verb]);
+        if let Some(rev) = rev {
+            cmd = cmd.arg(check_ref(rev)?);
+        }
+        let _guard = self.lock().await;
+        let out = self.run(cmd.write().context(self.ctx(EditorMode::AcceptDefault))).await?;
+        Ok(out.trimmed())
+    }
+
+    /// Ends the bisect and returns to the branch it started from.
+    pub async fn bisect_reset(&self) -> Result<()> {
+        let _guard = self.lock().await;
+        self.run(Cmd::new(["bisect", "reset"]).write().context(self.ctx(EditorMode::AcceptDefault))).await.map(drop)
     }
 
     // ----- Remote -----

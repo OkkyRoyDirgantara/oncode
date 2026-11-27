@@ -16,7 +16,7 @@ use oncode_git::{BlameRange, DiffSource};
 use oncode_ui::editor::{active_file, active_text_file, buffers, Buffer, BufferEvent, Buffers, BuffersEvent};
 use oncode_ui::{overlay, repos, spawn_core, Env, Lucide, ReposEvent, StatusAlign, StatusItem, Workbench, WorkbenchEvent};
 
-use crate::gutter::{blame_at, blame_label, blame_summary, gutter_ranges, inline_blame_text, repo_for_path, ChangeKind};
+use crate::gutter::{blame_at, blame_label, blame_summary, format_blame_date, gutter_ranges, inline_blame_text, repo_for_path, ChangeKind};
 use crate::lines::LineDiff;
 
 /// Delay before markers are recomputed after an edit.
@@ -56,6 +56,11 @@ pub struct ChangeMarkers {
     identities: HashMap<String, Option<Option<String>>>,
     /// Latest value of `editor.inlineBlame`.
     inline_blame: bool,
+    /// Files whose blame column is shown (Toggle Blame).
+    columns: HashSet<String>,
+    /// Editors created before their repository was known (e.g. tabs restored with the session while the
+    /// folder is still opening); attached when a repository snapshot arrives.
+    waiting: Vec<(WeakEntity<Buffer>, WeakEntity<EditorState>)>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -65,6 +70,7 @@ impl ChangeMarkers {
     pub fn new(env: Env, buffers: Option<Entity<oncode_ui::editor::Buffers>>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let mut subscriptions = vec![cx.subscribe(&repos(cx), |this: &mut Self, _, event: &ReposEvent, cx| {
             if let ReposEvent::Changed(root) = event {
+                this.attach_waiting(cx);
                 let paths: Vec<String> = this.files.iter().filter(|(_, t)| &t.root == root).map(|(p, _)| p.clone()).collect();
                 for path in paths {
                     this.reload_base(&path, cx);
@@ -83,6 +89,10 @@ impl ChangeMarkers {
             let markers = cx.weak_entity();
             let provider: oncode_ui::editor::LineHintProvider = Rc::new(move |path, row, cx| markers.upgrade()?.read(cx).inline_hint(path, row));
             buffers.update(cx, |buffers, cx| buffers.set_line_hint_provider("git.blame", provider, cx));
+            // The blame column (Toggle Blame) beside the editor.
+            let markers = cx.weak_entity();
+            let column: oncode_ui::editor::AnnotationProvider = Rc::new(move |path, cx| markers.upgrade()?.read(cx).blame_column(path));
+            buffers.update(cx, |buffers, cx| buffers.set_annotation_provider("git.blame", column, cx));
         }
         if let Some(workbench) = env.workbench.upgrade() {
             subscriptions.push(cx.subscribe(&workbench, |this: &mut Self, workbench, event: &WorkbenchEvent, cx| {
@@ -102,14 +112,54 @@ impl ChangeMarkers {
             blame_tasks: HashMap::new(),
             identities: HashMap::new(),
             inline_blame,
+            columns: HashSet::new(),
+            waiting: Vec::new(),
             _subscriptions: subscriptions,
         }
+    }
+
+    /// The blame column of a file, if it is shown and its blame is up to date.
+    pub fn blame_column(&self, path: &str) -> Option<oncode_ui::editor::AnnotationColumn> {
+        if !self.columns.contains(path) || self.stale_blame.contains(path) {
+            return None;
+        }
+        let ranges = self.blame.get(path)?;
+        let root = self.files.get(path)?.root.clone();
+        let now = now();
+        let annotations: Vec<oncode_ui::editor::LineAnnotation> = ranges
+            .iter()
+            .map(|range| oncode_ui::editor::LineAnnotation {
+                start_line: range.start_line,
+                line_count: range.line_count,
+                text: if range.uncommitted { "Not committed yet".into() } else { format!("{} · {} · {}", format_blame_date(range.time, now), range.author, range.summary).into() },
+                id: if range.uncommitted { "".into() } else { range.oid.clone().into() },
+            })
+            .collect();
+        Some(oncode_ui::editor::AnnotationColumn {
+            annotations: Rc::new(annotations),
+            on_click: Rc::new(move |oid, window, cx| {
+                if !oid.is_empty() {
+                    oncode_ui::commands::execute("git.showCommit", serde_json::json!([root, oid]), window, cx);
+                }
+            }),
+        })
+    }
+
+    /// Whether the blame column of a file is shown.
+    pub fn has_blame_column(&self, path: &str) -> bool {
+        self.columns.contains(path)
     }
 
     fn attach(&mut self, buffer: Entity<Buffer>, state: Entity<EditorState>, cx: &mut Context<Self>) {
         let path = buffer.read(cx).path().to_string();
         let roots = repos(cx).read(cx).roots();
-        let Some((root, relative)) = repo_for_path(&path, &roots) else { return };
+        let Some((root, relative)) = repo_for_path(&path, &roots) else {
+            // Not in a known repository (yet): tried again when a repository snapshot arrives.
+            if !self.waiting.iter().any(|(_, waiting)| waiting.upgrade().is_some_and(|waiting| waiting == state)) {
+                self.waiting.push((buffer.downgrade(), state.downgrade()));
+            }
+            return;
+        };
         let collection = state.update(cx, |state, cx| state.create_gutter_decorations_collection(Vec::new(), cx));
         if !self.identities.contains_key(&root) {
             self.load_identity(root.clone(), cx);
@@ -130,6 +180,7 @@ impl ChangeMarkers {
                         this.load_blame(&path, BLAME_DEBOUNCE, cx);
                     }
                     BufferEvent::Loaded | BufferEvent::Saved => this.load_blame(&path, Duration::ZERO, cx),
+                    BufferEvent::ConfigChanged => {}
                 }
             });
             let release = cx.observe_release(&buffer, |this: &mut Self, buffer, _| {
@@ -169,9 +220,11 @@ impl ChangeMarkers {
                 self.load_blame(&path, Duration::ZERO, cx);
             }
         } else {
-            self.blame.clear();
-            self.stale_blame.clear();
-            self.blame_tasks.clear();
+            // Files with their blame column shown keep their blame.
+            let columns = &self.columns;
+            self.blame.retain(|path, _| columns.contains(path));
+            self.stale_blame.retain(|path| columns.contains(path));
+            self.blame_tasks.retain(|path, _| columns.contains(path));
             self.blame_changed(cx);
         }
     }
@@ -264,6 +317,16 @@ impl ChangeMarkers {
         blame_at(self.blame.get(path)?, line)
     }
 
+    /// Attaches the editors that were waiting for their repository to be known.
+    fn attach_waiting(&mut self, cx: &mut Context<Self>) {
+        let waiting = std::mem::take(&mut self.waiting);
+        for (buffer, state) in waiting {
+            if let (Some(buffer), Some(state)) = (buffer.upgrade(), state.upgrade()) {
+                self.attach(buffer, state, cx);
+            }
+        }
+    }
+
     /// Inline blame text for line `row` (starting at 0).
     pub fn inline_hint(&self, path: &str, row: u32) -> Option<gpui_kit::SharedString> {
         let range = self.line_blame(path, row + 1)?;
@@ -275,18 +338,26 @@ impl ChangeMarkers {
         Some(inline_blame_text(range, now(), me).into())
     }
 
-    /// Turns this file's blame on or off. Returns `false` if the file is not part of a repository.
+    /// Shows or hides this file's blame column. Returns `false` if the file is not part of a repository.
     pub fn toggle_blame(&mut self, path: &str, cx: &mut Context<Self>) -> bool {
         if !self.files.contains_key(path) {
             return false;
         }
-        if self.blame.contains_key(path) || self.blame_tasks.contains_key(path) {
-            self.blame.remove(path);
-            self.stale_blame.remove(path);
-            self.blame_tasks.remove(path);
+        if self.columns.remove(path) {
+            // Inline blame still needs the blame when it is on.
+            if !self.inline_blame {
+                self.blame.remove(path);
+                self.stale_blame.remove(path);
+                self.blame_tasks.remove(path);
+            }
             self.blame_changed(cx);
         } else {
-            self.load_blame(path, Duration::ZERO, cx);
+            self.columns.insert(path.to_string());
+            if self.blame.contains_key(path) || self.blame_tasks.contains_key(path) {
+                self.blame_changed(cx);
+            } else {
+                self.load_blame(path, Duration::ZERO, cx);
+            }
         }
         true
     }

@@ -172,7 +172,7 @@ pub(crate) async fn perform(env: &Env, query: SearchQuery, replacement: String, 
                 if open.was_dirty {
                     outcome.unsaved += 1;
                 } else {
-                    let saved = match cx.update(|window, cx| open.buffer.update(cx, |buffer, cx| buffer.save(window, cx))) {
+                    let saved = match cx.update(|window, cx| open.buffer.update(cx, |buffer, cx| buffer.save_as_is(window, cx))) {
                         Ok(task) => task.await,
                         Err(_) => false,
                     };

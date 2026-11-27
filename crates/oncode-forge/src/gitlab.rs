@@ -8,8 +8,8 @@ use crate::http::{
     encode_segment, next_page_from_gitlab, non_empty, timestamp_or_zero, Api, Flavor, PER_PAGE, SCAN_PER_PAGE,
 };
 use crate::model::{
-    Account, Check, CheckState, ForgeHost, NewPullRequest, Page, PrFilter, PrState, PullRequest, PullRequestDetail,
-    RemoteRepo, RepoRef,
+    Account, Check, CheckState, ForgeHost, MergeInput, MergeMethod, MergeState, NewPullRequest, Page, PrFilter, PrState, PullRequest, PullRequestDetail,
+    RemoteRepo, RepoRef, ReviewComment, ReviewEvent, ReviewInput, ReviewSide,
 };
 use crate::provider::ForgeProvider;
 
@@ -148,8 +148,13 @@ impl ForgeProvider for GitLabProvider {
     async fn get_pull_request(&self, repo: &RepoRef, number: u32) -> Result<PullRequestDetail> {
         let path = format!("{}/merge_requests/{number}", project_path(repo)?);
         // The commit count is not in the MR response, so it is taken from its commit list.
-        let ((mr, _), commits) =
-            tokio::try_join!(self.api.get::<GlMergeRequest>(&path, &[]), self.commit_count(&path))?;
+        let main = async { tokio::try_join!(self.api.get::<GlMergeRequest>(&path, &[]), self.commit_count(&path)) };
+        // The allowed merge methods; not essential, so a failure is ignored.
+        let settings = async { self.api.get::<GlProject>(&project_path(repo)?, &[]).await.map(|(found, _)| found) };
+        let (main, settings) = tokio::join!(main, settings);
+        let ((mr, _), commits) = main?;
+        let merge_methods = gitlab_merge_methods(settings.ok().as_ref());
+        let merge_state = gitlab_merge_state(&mr);
 
         let mergeable = if mr.has_conflicts == Some(true) {
             Some(false)
@@ -180,6 +185,8 @@ impl ForgeProvider for GitLabProvider {
             .collect();
 
         Ok(PullRequestDetail {
+            merge_state,
+            merge_methods,
             body: mr.description.clone().unwrap_or_default(),
             reviewers: mr.reviewers.iter().map(|r| r.username.clone()).collect(),
             labels,
@@ -265,6 +272,187 @@ impl ForgeProvider for GitLabProvider {
         non_empty(project.default_branch)
             .ok_or_else(|| ForgeError::invalid_response("This repository has no default branch yet"))
     }
+
+    async fn merge_pull_request(&self, repo: &RepoRef, number: u32, input: &MergeInput) -> Result<()> {
+        if input.method == MergeMethod::Rebase {
+            return Err(ForgeError::invalid("GitLab merges with the project's own merge method; choose Merge or Squash"));
+        }
+        let squash = input.method == MergeMethod::Squash;
+        let message = match (input.title.as_deref(), input.message.as_deref()) {
+            (Some(title), Some(body)) if !body.trim().is_empty() => Some(format!("{title}\n\n{body}")),
+            (Some(title), _) if !title.trim().is_empty() => Some(title.to_string()),
+            _ => None,
+        };
+        let body = GlMerge {
+            squash,
+            sha: input.sha.as_deref(),
+            should_remove_source_branch: input.delete_branch,
+            merge_commit_message: if squash { None } else { message.as_deref() },
+            squash_commit_message: if squash { message.as_deref() } else { None },
+        };
+        let path = format!("{}/merge_requests/{number}/merge", project_path(repo)?);
+        let _: serde_json::Value = self.api.put(&path, &body).await?;
+        Ok(())
+    }
+
+    async fn list_review_comments(&self, repo: &RepoRef, number: u32) -> Result<Vec<ReviewComment>> {
+        let path = format!("{}/merge_requests/{number}/discussions", project_path(repo)?);
+        let mut comments = Vec::new();
+        for page in 1..=10u32 {
+            let (batch, headers) = self.api.get::<Vec<GlDiscussion>>(&path, &[("per_page", SCAN_PER_PAGE.to_string()), ("page", page.to_string())]).await?;
+            let more = next_page_from_gitlab(&headers).is_some();
+            for discussion in batch {
+                for (index, note) in discussion.notes.into_iter().filter(|note| !note.system).enumerate() {
+                    // Only comments on lines of the changes; general comments are not line comments.
+                    let Some(position) = note.position else { continue };
+                    let (path, line, side) = match (position.new_line, position.old_line) {
+                        (Some(line), _) => (position.new_path.unwrap_or_default(), Some(line), ReviewSide::Right),
+                        (None, Some(line)) => (position.old_path.unwrap_or_default(), Some(line), ReviewSide::Left),
+                        (None, None) => (position.new_path.unwrap_or_default(), None, ReviewSide::Right),
+                    };
+                    comments.push(ReviewComment {
+                        id: note.id.to_string(),
+                        thread: discussion.id.clone(),
+                        path,
+                        line,
+                        side,
+                        body: note.body,
+                        author: note.author.map(|a| a.username).unwrap_or_default(),
+                        created_at: timestamp_or_zero(note.created_at.as_deref()),
+                        is_reply: index > 0,
+                    });
+                }
+            }
+            if !more {
+                break;
+            }
+        }
+        Ok(comments)
+    }
+
+    async fn submit_review(&self, repo: &RepoRef, number: u32, input: &ReviewInput) -> Result<()> {
+        if input.event != ReviewEvent::Approve && input.body.trim().is_empty() && input.comments.is_empty() {
+            return Err(ForgeError::invalid("Write a comment first"));
+        }
+        let mr_path = format!("{}/merge_requests/{number}", project_path(repo)?);
+        if !input.comments.is_empty() {
+            // Line comments are placed with the MR's diff refs.
+            let (mr, _) = self.api.get::<GlMergeRequest>(&mr_path, &[]).await?;
+            let refs = mr.diff_refs.ok_or_else(|| ForgeError::invalid_response("The merge request has no diff yet"))?;
+            for comment in &input.comments {
+                let mut position = serde_json::json!({
+                    "position_type": "text",
+                    "base_sha": refs.base_sha,
+                    "start_sha": refs.start_sha,
+                    "head_sha": refs.head_sha,
+                    "new_path": comment.path,
+                    "old_path": comment.path,
+                });
+                let key = if comment.side == ReviewSide::Left { "old_line" } else { "new_line" };
+                position[key] = serde_json::json!(comment.line);
+                let _: serde_json::Value = self.api.post(&format!("{mr_path}/discussions"), &serde_json::json!({ "body": comment.body, "position": position })).await?;
+            }
+        }
+        if !input.body.trim().is_empty() {
+            let _: serde_json::Value = self.api.post(&format!("{mr_path}/notes"), &serde_json::json!({ "body": input.body })).await?;
+        }
+        if input.event == ReviewEvent::Approve {
+            let _: serde_json::Value = self.api.post(&format!("{mr_path}/approve"), &serde_json::json!({})).await?;
+        }
+        Ok(())
+    }
+
+    async fn reply_to_review_comment(&self, repo: &RepoRef, number: u32, thread: &str, body: &str) -> Result<()> {
+        if body.trim().is_empty() {
+            return Err(ForgeError::invalid("Write a reply first"));
+        }
+        let path = format!("{}/merge_requests/{number}/discussions/{}/notes", project_path(repo)?, encode_segment(thread));
+        let _: serde_json::Value = self.api.post(&path, &serde_json::json!({ "body": body })).await?;
+        Ok(())
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct GlDiscussion {
+    id: String,
+    #[serde(default)]
+    notes: Vec<GlNote>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GlNote {
+    id: u64,
+    #[serde(default)]
+    body: String,
+    #[serde(default)]
+    author: Option<GlActor>,
+    #[serde(default)]
+    created_at: Option<String>,
+    #[serde(default)]
+    system: bool,
+    #[serde(default)]
+    position: Option<GlPosition>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GlPosition {
+    #[serde(default)]
+    new_path: Option<String>,
+    #[serde(default)]
+    old_path: Option<String>,
+    #[serde(default)]
+    new_line: Option<u32>,
+    #[serde(default)]
+    old_line: Option<u32>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GlDiffRefs {
+    base_sha: String,
+    start_sha: String,
+    head_sha: String,
+}
+
+#[derive(Debug, Serialize)]
+struct GlMerge<'a> {
+    squash: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    sha: Option<&'a str>,
+    should_remove_source_branch: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    merge_commit_message: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    squash_commit_message: Option<&'a str>,
+}
+
+/// GitLab merges with the project's merge method; squashing is allowed unless the project forbids it.
+fn gitlab_merge_methods(project: Option<&GlProject>) -> Vec<MergeMethod> {
+    match project.and_then(|p| p.squash_option.as_deref()) {
+        Some("never") => vec![MergeMethod::Merge],
+        Some("always") => vec![MergeMethod::Squash],
+        _ => vec![MergeMethod::Merge, MergeMethod::Squash],
+    }
+}
+
+/// GitLab's `detailed_merge_status` (or the older `merge_status`).
+fn gitlab_merge_state(mr: &GlMergeRequest) -> MergeState {
+    if mr.has_conflicts == Some(true) {
+        return MergeState::Conflicts;
+    }
+    match mr.detailed_merge_status.as_deref() {
+        Some("mergeable") => MergeState::Clean,
+        Some("conflict") | Some("broken_status") => MergeState::Conflicts,
+        Some("need_rebase") => MergeState::Behind,
+        Some("draft_status") => MergeState::Draft,
+        Some("ci_must_pass") | Some("ci_still_running") => MergeState::Unstable,
+        Some("checking") | Some("unchecked") | Some("preparing") | Some("approvals_syncing") => MergeState::Checking,
+        Some(_) => MergeState::Blocked,
+        None => match mr.merge_status.as_deref() {
+            Some("can_be_merged") => MergeState::Clean,
+            Some("cannot_be_merged") => MergeState::Conflicts,
+            _ => MergeState::Checking,
+        },
+    }
 }
 
 /// `/projects/{id}` with the project path encoded (`group%2Fproject`).
@@ -345,6 +533,8 @@ struct GlProject {
     updated_at: Option<String>,
     #[serde(default)]
     web_url: Option<String>,
+    #[serde(default)]
+    squash_option: Option<String>,
 }
 
 impl From<GlProject> for RemoteRepo {
@@ -396,6 +586,10 @@ struct GlMergeRequest {
     labels: Vec<serde_json::Value>,
     #[serde(default)]
     merge_status: Option<String>,
+    #[serde(default)]
+    detailed_merge_status: Option<String>,
+    #[serde(default)]
+    diff_refs: Option<GlDiffRefs>,
     #[serde(default)]
     has_conflicts: Option<bool>,
     #[serde(default)]

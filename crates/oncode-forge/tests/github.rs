@@ -5,7 +5,7 @@ mod common;
 use common::{assert_error, header, query_value, received, repo};
 use oncode_forge::{
     provider, CheckState, ForgeErrorCode, ForgeHost, ForgeKind, ForgeProvider, NewPullRequest, PrFilter, PrState,
-    RepoRef,
+    RepoRef, MergeInput, MergeMethod, MergeState, NewReviewComment, ReviewEvent, ReviewInput, ReviewSide,
 };
 use serde_json::{json, Value};
 use wiremock::matchers::{body_json, method, path, query_param};
@@ -684,6 +684,7 @@ async fn http_status_maps_to_error_code() {
             body: json!({ "message": "Too Many Requests" }),
             expected: ForgeErrorCode::RateLimited,
         },
+        Case { status: 405, headers: &[], body: json!({ "message": "Pull Request is not mergeable" }), expected: ForgeErrorCode::InvalidInput },
         Case { status: 422, headers: &[], body: json!({ "message": "Validation Failed" }), expected: ForgeErrorCode::InvalidInput },
         Case { status: 500, headers: &[], body: json!({ "message": "Server Error" }), expected: ForgeErrorCode::Network },
         Case { status: 503, headers: &[], body: json!("unavailable"), expected: ForgeErrorCode::Network },
@@ -772,4 +773,97 @@ async fn empty_repo_ref_is_rejected_before_any_request() {
     let err = client.list_pull_requests(&broken, PrFilter::Mine, 1).await.expect_err("empty owner");
     assert_error(&err, ForgeErrorCode::InvalidInput, TOKEN);
     assert!(received(&server).await.is_empty());
+}
+
+/// Merge: the chosen method and the head commit seen are sent; the source branch is deleted afterwards when it
+/// is in the same repository. A PR that cannot be merged (405) is reported clearly.
+#[tokio::test]
+async fn merge_pull_request_sends_the_method_and_deletes_the_branch() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET")).and(path("/repos/octo/hello/pulls/7")).respond_with(ResponseTemplate::new(200).set_body_json(pull_json(7, "Feature"))).mount(&server).await;
+    Mock::given(method("PUT"))
+        .and(path("/repos/octo/hello/pulls/7/merge"))
+        .and(body_json(json!({ "merge_method": "squash", "sha": "6dcb09b5b57875f334f61aebed695e2e4193db5e", "commit_title": "Feature (#7)" })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "merged": true, "sha": "abc" })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("DELETE")).and(path("/repos/octo/hello/git/refs/heads/feature")).respond_with(ResponseTemplate::new(204)).expect(1).mount(&server).await;
+
+    let input = MergeInput { method: MergeMethod::Squash, sha: Some("6dcb09b5b57875f334f61aebed695e2e4193db5e".into()), title: Some("Feature (#7)".into()), message: None, delete_branch: true };
+    client(&server).merge_pull_request(&hello(), 7, &input).await.expect("merged");
+
+    let refused = MockServer::start().await;
+    Mock::given(method("PUT"))
+        .and(path("/repos/octo/hello/pulls/8/merge"))
+        .respond_with(ResponseTemplate::new(405).set_body_json(json!({ "message": "Pull Request is not mergeable" })))
+        .mount(&refused)
+        .await;
+    let input = MergeInput { method: MergeMethod::Merge, sha: None, title: None, message: None, delete_branch: false };
+    let err = client(&refused).merge_pull_request(&hello(), 8, &input).await.expect_err("405");
+    assert_error(&err, ForgeErrorCode::InvalidInput, TOKEN);
+    assert!(err.message.contains("not mergeable"), "{}", err.message);
+}
+
+/// The detail carries GitHub's merge state and the merge methods the repository allows.
+#[tokio::test]
+async fn pull_request_detail_has_merge_state_and_methods() {
+    let server = MockServer::start().await;
+    let mut pull = pull_json(9, "Feature");
+    pull["mergeable"] = json!(true);
+    pull["mergeable_state"] = json!("unstable");
+    Mock::given(method("GET")).and(path("/repos/octo/hello/pulls/9")).respond_with(ResponseTemplate::new(200).set_body_json(pull)).mount(&server).await;
+    Mock::given(method("GET")).and(path("/repos/octo/hello/pulls/9/reviews")).respond_with(ResponseTemplate::new(200).set_body_json(json!([]))).mount(&server).await;
+    let mut settings = repo_json("octo/hello");
+    settings["allow_merge_commit"] = json!(false);
+    settings["allow_squash_merge"] = json!(true);
+    settings["allow_rebase_merge"] = json!(true);
+    Mock::given(method("GET")).and(path("/repos/octo/hello")).respond_with(ResponseTemplate::new(200).set_body_json(settings)).mount(&server).await;
+    let detail = client(&server).get_pull_request(&hello(), 9).await.expect("detail");
+    assert_eq!(detail.merge_state, MergeState::Unstable);
+    assert_eq!(detail.merge_methods, [MergeMethod::Squash, MergeMethod::Rebase]);
+}
+
+/// Review comments: read with their conversation, then a review with a line comment and a reply are sent.
+#[tokio::test]
+async fn review_comments_are_read_submitted_and_replied_to() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/repos/octo/hello/pulls/5/comments"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!([
+            { "id": 10, "path": "src/a.rs", "line": 4, "side": "RIGHT", "body": "Why?", "user": { "login": "carol" }, "created_at": "2026-01-01T00:00:00Z" },
+            { "id": 11, "path": "src/a.rs", "line": 4, "side": "RIGHT", "body": "Because.", "user": { "login": "octocat" }, "in_reply_to_id": 10 },
+            { "id": 12, "path": "src/b.rs", "line": null, "side": "LEFT", "body": "Old", "user": { "login": "carol" } },
+        ])))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/repos/octo/hello/pulls/5/reviews"))
+        .and(body_json(json!({ "commit_id": "abc", "body": "Looks good", "event": "APPROVE", "comments": [{ "path": "src/a.rs", "line": 7, "side": "RIGHT", "body": "nit" }] })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "id": 1 })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/repos/octo/hello/pulls/5/comments/10/replies"))
+        .and(body_json(json!({ "body": "Thanks" })))
+        .respond_with(ResponseTemplate::new(201).set_body_json(json!({ "id": 13 })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = client(&server);
+    let comments = client.list_review_comments(&hello(), 5).await.expect("comments");
+    let shown: Vec<(&str, &str, Option<u32>, bool)> = comments.iter().map(|c| (c.id.as_str(), c.thread.as_str(), c.line, c.is_reply)).collect();
+    assert_eq!(shown, [("10", "10", Some(4), false), ("11", "10", Some(4), true), ("12", "12", None, false)]);
+    assert_eq!(comments[2].side, ReviewSide::Left);
+
+    let input = ReviewInput {
+        event: ReviewEvent::Approve,
+        body: "Looks good".into(),
+        comments: vec![NewReviewComment { path: "src/a.rs".into(), line: 7, side: ReviewSide::Right, body: "nit".into() }],
+        commit_id: "abc".into(),
+    };
+    client.submit_review(&hello(), 5, &input).await.expect("review");
+    client.reply_to_review_comment(&hello(), 5, "10", "Thanks").await.expect("reply");
 }

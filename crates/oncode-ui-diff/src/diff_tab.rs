@@ -365,6 +365,10 @@ impl DiffView {
             return;
         }
         let Some(loaded) = &self.loaded else { return };
+        if loaded.contents.lfs {
+            overlay::toast_info("This file is stored with Git LFS: stage or discard it as a whole from Source Control.", window, cx);
+            return;
+        }
         if ops.is_empty() {
             overlay::toast_info("The selection does not contain any changes.", window, cx);
             return;
@@ -508,8 +512,9 @@ impl DiffView {
     fn render_toolbar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
         let params = &self.params;
-        let actions = actions_for(&params.source);
         let loaded = self.loaded.as_ref();
+        let lfs = loaded.is_some_and(|loaded| loaded.contents.lfs);
+        let actions: &[(&str, SpliceTarget)] = if lfs { &[] } else { actions_for(&params.source) };
         let problem = loaded.is_some_and(|loaded| loaded.problem.is_some());
         let changes = self.change_count();
         let comparable = loaded.is_some() && !problem;
@@ -532,6 +537,7 @@ impl DiffView {
             .border_color(theme.border)
             .child(div().min_w_0().overflow_hidden().whitespace_nowrap().child(SharedString::from(title)))
             .child(div().flex_none().text_color(theme.muted_foreground).child(SharedString::from(source_label(&params.source))))
+            .when(lfs, |el| el.child(div().id("diff-lfs").flex_none().text_xs().text_color(theme.warning).child("Git LFS file: stage or discard it as a whole")))
             .when(comparable, |el| {
                 let text = match changes {
                     0 => "no changes".to_string(),
@@ -616,7 +622,8 @@ impl DiffView {
         }
         let model = loaded.model.clone();
         let total = model.chunks.len();
-        let actions = actions_for(&self.params.source);
+        // A Git LFS file is shown with its real content, but its index holds the pointer: no per-change actions.
+        let actions: &[(&str, SpliceTarget)] = if loaded.contents.lfs { &[] } else { actions_for(&self.params.source) };
         let split = self.mode(cx) == DiffMode::Split;
         let busy = self.busy;
 

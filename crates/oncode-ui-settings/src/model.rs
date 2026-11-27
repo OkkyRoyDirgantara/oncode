@@ -2,7 +2,7 @@
 //! validation. The form is rendered from this list, so search, the "overridden by project" marker,
 //! and tests share a single source. Pure logic: does not depend on GPUI.
 
-use oncode_core::settings::{AiProvider, ApiFormat, AutoSave, SidebarPosition, StartupView, Theme};
+use oncode_core::settings::{AiProvider, ApiFormat, AutoSave, RestoreFolders, SidebarPosition, StartupView, Theme};
 use oncode_core::Settings;
 use oncode_git::PullStrategy;
 use oncode_lsp::ServerSpec;
@@ -247,6 +247,7 @@ const THEME: &[ChoiceOption] = &{
     options
 };
 const STARTUP_VIEW: &[ChoiceOption] = &[ChoiceOption { value: "scm", label: "Source Control" }, ChoiceOption { value: "explorer", label: "Explorer" }];
+const RESTORE_FOLDERS: &[ChoiceOption] = &[ChoiceOption { value: "last", label: "Last folder" }, ChoiceOption { value: "none", label: "None" }];
 const SIDEBAR_POSITION: &[ChoiceOption] = &[ChoiceOption { value: "left", label: "Left" }, ChoiceOption { value: "right", label: "Right" }];
 const PULL_STRATEGY: &[ChoiceOption] =
     &[ChoiceOption { value: "ffOnly", label: "Fast-forward only" }, ChoiceOption { value: "merge", label: "Merge" }, ChoiceOption { value: "rebase", label: "Rebase" }];
@@ -288,7 +289,7 @@ fn validate_custom_model(text: &str) -> Option<&'static str> {
     None
 }
 
-pub static FIELDS: [Field; 32] = [
+pub static FIELDS: [Field; 34] = [
     Field {
         id: "editor.fontFamily",
         section: SectionId::Editor,
@@ -393,6 +394,35 @@ pub static FIELDS: [Field; 32] = [
                     "off" => AutoSave::Off,
                     "onFocusChange" => AutoSave::OnFocusChange,
                     "afterDelay" => AutoSave::AfterDelay,
+                    _ => return,
+                }
+            },
+        }),
+    },
+    Field {
+        id: "files.hotExit",
+        section: SectionId::Files,
+        label: "Hot exit",
+        description: "When you close a window or quit with unsaved changes, keep them (also in new files) instead of asking, and bring them back the next time the folder opens.",
+        keywords: "backup unsaved restore quit close",
+        kind: FieldKind::Checkbox(CheckboxSpec { get: |s| s.files.hot_exit, set: |s, value| s.files.hot_exit = value }),
+    },
+    Field {
+        id: "workbench.restoreFolders",
+        section: SectionId::Files,
+        label: "Reopen folder at startup",
+        description: "When OnCode starts without a folder on the command line: open the folder you used last, or show the welcome screen.",
+        keywords: "startup restore last folder session",
+        kind: FieldKind::Select(SelectSpec {
+            options: RESTORE_FOLDERS,
+            get: |s| match s.workbench.restore_folders {
+                RestoreFolders::Last => "last",
+                RestoreFolders::None => "none",
+            },
+            set: |s, value| {
+                s.workbench.restore_folders = match value {
+                    "last" => RestoreFolders::Last,
+                    "none" => RestoreFolders::None,
                     _ => return,
                 }
             },
@@ -978,6 +1008,8 @@ mod tests {
                 "editor.inlineBlame",
                 "editor.formatOnSave",
                 "files.autoSave",
+                "files.hotExit",
+                "workbench.restoreFolders",
                 "workbench.theme",
                 "workbench.startupView",
                 "workbench.sidebarPosition",
@@ -1053,6 +1085,7 @@ mod tests {
         assert_eq!(values("workbench.theme")[..4], ["system=System", "dark=Default Dark", "oneDark=One Dark", "dracula=Dracula"]);
         assert_eq!(values("workbench.theme").len(), Theme::ALL.len());
         assert_eq!(values("workbench.startupView"), ["scm=Source Control", "explorer=Explorer"]);
+        assert_eq!(values("workbench.restoreFolders"), ["last=Last folder", "none=None"]);
         assert_eq!(values("workbench.sidebarPosition"), ["left=Left", "right=Right"]);
         assert_eq!(values("git.pullStrategy"), ["ffOnly=Fast-forward only", "merge=Merge", "rebase=Rebase"]);
         assert_eq!(values("ai.provider"), ["auto=Automatic", "claudeCode=Claude Code CLI", "api=Anthropic API", "custom=Custom endpoint"]);

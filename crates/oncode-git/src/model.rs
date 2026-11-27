@@ -95,6 +95,10 @@ pub enum Operation {
     Rebase { interactive: bool, step: u32, total: u32, onto: String, head_name: String, stopped_at: Option<String> },
     CherryPick { commit: String },
     Revert { commit: String },
+    /// `git bisect` is running: `original` is the branch (or commit) to return to; `first_bad` is set
+    /// once the first bad commit has been found (its short id and subject).
+    #[serde(rename_all = "camelCase")]
+    Bisect { original: String, first_bad: Option<String> },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -113,6 +117,8 @@ pub enum RefKind {
     Remote,
     Tag,
     Stash,
+    /// `refs/bisect/bad` or `refs/bisect/good-*` while bisecting.
+    Bisect,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -182,6 +188,9 @@ pub struct LogQuery {
     pub until: Option<String>,
     /// Limit to the history of a single file (with `--follow`).
     pub path: Option<String>,
+    /// With `path`: only the commits that changed these lines (from 1, inclusive) of that file as it is
+    /// at HEAD (`git log -L`).
+    pub lines: Option<(u32, u32)>,
 }
 
 impl LogQuery {
@@ -364,6 +373,9 @@ pub struct DiffContents {
     pub orig_path: Option<String>,
     pub a: DiffSide,
     pub b: DiffSide,
+    /// A side was a Git LFS pointer and is shown with its real content (through git's filters). Such a file
+    /// can only be staged or discarded as a whole: its index holds the pointer, not these lines.
+    pub lfs: bool,
 }
 
 /// The diff source requested by the UI.
@@ -507,6 +519,15 @@ pub enum OperationAction {
     Continue,
     Skip,
     Abort,
+}
+
+/// A verdict on the commit being tested during `git bisect`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum BisectMark {
+    Good,
+    Bad,
+    Skip,
 }
 
 /// One segment of a three-way merge result for the conflict editor.

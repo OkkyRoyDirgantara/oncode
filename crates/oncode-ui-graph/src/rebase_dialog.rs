@@ -4,14 +4,23 @@ use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
 use gpui_kit::component::{h_flex, v_flex, ActiveTheme as _, Disableable as _, Icon, Sizable as _, WindowExt as _};
 use gpui_kit::prelude::FluentBuilder as _;
-use gpui_kit::{div, px, App, AppContext as _, Context, Entity, InteractiveElement as _, IntoElement, ParentElement as _, Render, SharedString, StatefulInteractiveElement as _, Styled as _, Window};
+use gpui_kit::{
+    div, px, App, AppContext as _, Context, Entity, InteractiveElement as _, IntoElement, ParentElement as _, Render, SharedString, StatefulInteractiveElement as _, Styled as _,
+    TestSupportExt as _, Window,
+};
 use oncode_core::api::git;
 use oncode_git::{RebaseAction, RebaseTodoItem};
-use oncode_ui::{overlay, spawn_core, Lucide};
+use oncode_ui::{overlay, spawn_core, Lucide, TabDragPreview};
 
 use crate::actions::{handle_git_error, Ctx};
 use crate::format::short_oid;
 use crate::rebase_plan::{action_hint, move_item, set_action, validate_plan, REBASE_ACTIONS};
+
+/// A commit row being dragged to a new place in the plan.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DraggedRebaseItem {
+    pub from: usize,
+}
 
 pub struct RebaseDialog {
     ctx: Ctx,
@@ -40,6 +49,15 @@ impl RebaseDialog {
 
     fn set(&mut self, index: usize, action: RebaseAction, cx: &mut Context<Self>) {
         set_action(&mut self.items, index, action);
+        cx.notify();
+    }
+
+    /// Moves the commit at `from` to `to` (a row dropped on another row).
+    pub fn move_to(&mut self, from: usize, to: usize, cx: &mut Context<Self>) {
+        if from == to || from >= self.items.len() || to >= self.items.len() {
+            return;
+        }
+        move_item(&mut self.items, from, to);
         cx.notify();
     }
 
@@ -98,13 +116,19 @@ impl Render for RebaseDialog {
                 let action = item.action;
                 let entity = cx.entity();
                 let dropped = action == RebaseAction::Drop;
+                let subject = item.subject.clone();
                 h_flex()
                     .id(SharedString::from(format!("rebase-item-{index}")))
+                    .test_support()
                     .w_full()
                     .gap_2()
                     .px_1()
                     .py_0p5()
                     .rounded(theme.radius)
+                    // Drag a row onto another row to move it there; the up/down buttons stay for the keyboard.
+                    .on_drag(DraggedRebaseItem { from: index }, move |_, _, _, cx| cx.new(|_| TabDragPreview::new(subject.clone(), Some(Lucide::GitCommitHorizontal))))
+                    .drag_over::<DraggedRebaseItem>(|style, _, _, cx| style.bg(cx.theme().drop_target))
+                    .on_drop(cx.listener(move |this, dragged: &DraggedRebaseItem, _, cx| this.move_to(dragged.from, index, cx)))
                     .hover(|s| s.bg(theme.list_hover))
                     .child(
                         Button::new(SharedString::from(format!("rebase-action-{index}")))

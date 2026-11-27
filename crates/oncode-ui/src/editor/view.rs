@@ -8,12 +8,14 @@ use gpui_kit::component::input::{Editor, EditorState, InputEvent, Position, Rope
 use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::{h_flex, v_flex, ActiveTheme as _, Sizable as _};
 use gpui_kit::{
-    canvas, div, font, point, px, relative, size, App, AppContext as _, Bounds, ContentMask, Context, Entity, EntityInputHandler as _, FocusHandle, Focusable, Global, Hsla,
-    IntoElement, ParentElement as _, Pixels, Point, Render, SharedString, Styled as _, Subscription, Task, TextAlign, TextRun, Window,
+    anchored, canvas, deferred, div, font, point, px, relative, size, AnyElement, App, AppContext as _, Bounds, ContentMask, Context, Anchor, Entity, EntityInputHandler as _,
+    FocusHandle, Focusable, FontWeight, Global, HighlightStyle, Hsla, InteractiveElement as _, IntoElement, KeyDownEvent, MouseButton, ParentElement as _, Pixels, Point, Render, SharedString,
+    TestSupportExt as _,
+    Styled as _, StyledText, Subscription, Task, TextAlign, TextRun, Window,
 };
 use oncode_core::settings::EditorSettings;
 
-use super::buffer::{Buffer, BufferEvent, BufferStatus, Buffers, BuffersEvent, Reveal};
+use super::buffer::{AnnotationColumn, Buffer, BufferEvent, BufferStatus, Buffers, BuffersEvent, Reveal};
 use super::image::ImageView;
 use super::language::language_for_path;
 use crate::overlay::{self, Choice};
@@ -60,7 +62,35 @@ pub struct FileView {
     settings: EditorSettings,
     /// The end-of-line hint painted in the last frame, with its position (for tests).
     painted_hint: Rc<RefCell<Option<(SharedString, Bounds<Pixels>)>>>,
+    /// The current run of Add Selection to Next Find Match (Ctrl+D) presses.
+    pub(crate) occurrences: Option<super::occurrences::Tracker>,
+    /// The lines painted in the annotation column in the last frame, with their top (for clicks).
+    annotation_rows: Rc<RefCell<Vec<(u32, Pixels)>>>,
     _subscriptions: Vec<Subscription>,
+}
+
+/// Width of the annotation column (e.g. blame) to the left of the editor.
+const ANNOTATION_WIDTH: f32 = 260.;
+
+/// The visible lines (from 1) and the top of each in window coordinates, from the editor layout of this
+/// frame (folded lines have no position and are left out).
+fn visible_lines(state: &mut EditorState, window: &mut Window, cx: &mut Context<EditorState>) -> Option<(Vec<(u32, Pixels)>, Pixels)> {
+    let rows = state.visible_row_range()?;
+    let line_height = state.line_height()?;
+    let text_bounds = state.text_bounds()?;
+    let text = state.text().clone();
+    let count = text.lines_len();
+    let mut lines = Vec::new();
+    for row in rows {
+        if row >= count {
+            break;
+        }
+        let start = text.offset_to_offset_utf16(text.line_start_offset(row));
+        if let Some(bounds) = state.bounds_for_range(start..start, text_bounds, window, cx) {
+            lines.push((row as u32 + 1, bounds.origin.y));
+        }
+    }
+    Some((lines, line_height))
 }
 
 /// Where the end of a line is on screen, from the editor layout of this frame.
@@ -128,14 +158,14 @@ impl FileView {
 
         let mut subscriptions = vec![
             cx.observe(&buffer, |_, _, cx| cx.notify()),
-            cx.subscribe_in(&buffer, window, |this, _, event: &BufferEvent, window, cx| {
-                if matches!(event, BufferEvent::Loaded) {
-                    this.apply_reveal(window, cx);
-                }
+            cx.subscribe_in(&buffer, window, |this, _, event: &BufferEvent, window, cx| match event {
+                BufferEvent::Loaded => this.apply_reveal(window, cx),
+                BufferEvent::ConfigChanged => this.apply_indentation(cx),
+                _ => {}
             }),
             cx.subscribe_in(&buffers, window, |this, _, event: &BuffersEvent, window, cx| match event {
                 BuffersEvent::Reveal(path) if path == this.buffer.read(cx).path() => this.apply_reveal(window, cx),
-                BuffersEvent::LineHintsChanged => cx.notify(),
+                BuffersEvent::LineHintsChanged | BuffersEvent::SignatureChanged => cx.notify(),
                 _ => {}
             }),
             // The end-of-line hint follows the cursor line.
@@ -160,7 +190,7 @@ impl FileView {
             }));
         }
 
-        let mut this = Self { env, buffers, buffer, state, image, settings, painted_hint: Rc::default(), _subscriptions: subscriptions };
+        let mut this = Self { env, buffers, buffer, state, image, settings, painted_hint: Rc::default(), occurrences: None, annotation_rows: Rc::default(), _subscriptions: subscriptions };
         // `Workbench` is borrowed while tabs are built; the settings are read afterwards.
         cx.defer_in(window, |this, window, cx| {
             if let Some(workbench) = this.env.workbench.upgrade() {
@@ -190,13 +220,20 @@ impl FileView {
         if settings == self.settings {
             return;
         }
+        let (tab_size, spaces) = self.buffer.read(cx).indentation(&settings);
         self.state.update(cx, |state, cx| {
             state.set_line_number(settings.line_numbers, window, cx);
             state.set_soft_wrap(settings.word_wrap, window, cx);
-            state.set_tab_size(TabSize { tab_size: settings.tab_size as usize, hard_tabs: !settings.insert_spaces }, cx);
+            state.set_tab_size(TabSize { tab_size: tab_size as usize, hard_tabs: !spaces }, cx);
         });
         self.settings = settings;
         cx.notify();
+    }
+
+    /// The file's `.editorconfig` changed what its indentation should be.
+    fn apply_indentation(&mut self, cx: &mut Context<Self>) {
+        let (tab_size, spaces) = self.buffer.read(cx).indentation(&self.settings);
+        self.state.update(cx, |state, cx| state.set_tab_size(TabSize { tab_size: tab_size as usize, hard_tabs: !spaces }, cx));
     }
 
     /// Jumps to the pending position for this file, if there is one and its content has been loaded.
@@ -224,6 +261,28 @@ impl FileView {
                 let end = line_start + byte_at(reveal.column + length);
                 state.set_selected_range(start..end, cx);
             }
+            state.focus(window, cx);
+        });
+    }
+
+    /// Moves the cursor to a position and scrolls it into view without taking focus: a preview while
+    /// moving through a list (Go to Symbol), which keeps the keyboard.
+    pub fn preview_reveal(&mut self, reveal: &Reveal, _: &mut Window, cx: &mut Context<Self>) {
+        self.state.update(cx, |state, cx| {
+            let line = reveal.line.saturating_sub(1);
+            let text = state.text().clone();
+            let line_start = text.line_start_offset(line as usize);
+            let line_text = text.slice_line(line as usize).to_string();
+            let at = line_start + line_text.char_indices().nth(reveal.column as usize).map_or(line_text.len(), |(index, _)| index);
+            // Not `set_cursor_position`: that also focuses the editor, which would take the keys from the list.
+            state.set_selected_range(at..at, cx);
+        });
+    }
+
+    /// Puts back a selection saved earlier (after a cancelled preview) and focuses the editor.
+    pub fn restore_selection(&mut self, range: std::ops::Range<usize>, window: &mut Window, cx: &mut Context<Self>) {
+        self.state.update(cx, |state, cx| {
+            state.set_selected_range(range, cx);
             state.focus(window, cx);
         });
     }
@@ -265,6 +324,98 @@ impl FileView {
         .top_0()
         .left_0()
         .size_full()
+    }
+
+    /// The annotation column (e.g. blame) beside the editor: each run of lines shows its text at its first
+    /// visible line, with a thin line between runs; clicking a run calls the column's handler.
+    fn annotation_column(&self, column: AnnotationColumn, family: SharedString, font_size: Pixels, cx: &App) -> AnyElement {
+        let state = self.state.clone();
+        let painted = self.annotation_rows.clone();
+        let (text_color, rule_color, background) = (cx.theme().muted_foreground, cx.theme().border, cx.theme().background);
+        let annotations = column.annotations.clone();
+        let text_size = font_size * 0.85;
+        let layer = canvas(
+            move |_, window, cx| state.update(cx, |state, cx| visible_lines(state, window, cx)),
+            move |bounds, lines, window, cx| {
+                let Some((lines, line_height)) = lines else { return };
+                *painted.borrow_mut() = lines.clone();
+                window.with_content_mask(Some(ContentMask { bounds }), |window| {
+                    let mut previous: Option<usize> = None;
+                    for (line, top) in &lines {
+                        let index = annotations.partition_point(|a| a.start_line + a.line_count <= *line);
+                        let Some(annotation) = annotations.get(index).filter(|a| *line >= a.start_line) else {
+                            previous = None;
+                            continue;
+                        };
+                        if previous == Some(index) {
+                            continue;
+                        }
+                        // A new run: a rule above it (unless it starts above the view) and its text.
+                        if annotation.start_line == *line && previous.is_some() {
+                            window.paint_quad(gpui_kit::fill(Bounds::new(point(bounds.origin.x, *top), size(bounds.size.width, px(1.))), rule_color));
+                        }
+                        let run = TextRun { len: annotation.text.len(), font: font(family.clone()), color: text_color, background_color: None, underline: None, strikethrough: None };
+                        let shaped = window.text_system().shape_line(annotation.text.clone(), text_size, &[run], None);
+                        let _ = shaped.paint(point(bounds.origin.x + px(8.), *top), line_height, TextAlign::Left, None, window, cx);
+                        previous = Some(index);
+                    }
+                });
+            },
+        )
+        .size_full();
+        let rows = self.annotation_rows.clone();
+        let (annotations, on_click) = (column.annotations.clone(), column.on_click.clone());
+        div()
+            .id("annotation-column")
+            .test_support()
+            .flex_none()
+            .w(px(ANNOTATION_WIDTH))
+            .h_full()
+            .bg(background)
+            .border_r_1()
+            .border_color(rule_color)
+            .cursor_pointer()
+            .child(layer)
+            .on_mouse_down(MouseButton::Left, move |event, window, cx| {
+                // The painted line whose top is the last one above the click.
+                let line = rows.borrow().iter().rev().find(|(_, top)| *top <= event.position.y).map(|(line, _)| *line);
+                let Some(line) = line else { return };
+                let annotation = annotations.iter().find(|a| line >= a.start_line && line < a.start_line + a.line_count).cloned();
+                if let Some(annotation) = annotation {
+                    on_click(&annotation.id, window, cx);
+                }
+            })
+            .into_any_element()
+    }
+
+    /// Signature help above the cursor, if the language server gave some for this editor. Placed from the
+    /// cursor of the last frame; the editor redraws when the cursor moves.
+    fn signature_popup(&self, family: SharedString, font_size: Pixels, cx: &App) -> Option<AnyElement> {
+        let popup = self.buffers.read(cx).signature(self.state.entity_id())?.clone();
+        let (cursor, _) = self.state.read(cx).cursor_layout()?;
+        let theme = cx.theme();
+        let active = popup.active.clone().filter(|range| range.start < range.end && popup.label.get(range.clone()).is_some());
+        let highlights: Vec<(std::ops::Range<usize>, HighlightStyle)> =
+            active.map(|range| (range, HighlightStyle { font_weight: Some(FontWeight::BOLD), color: Some(theme.primary), ..Default::default() })).into_iter().collect();
+        let content = v_flex()
+            .id("signature-help")
+            .max_w(px(640.))
+            .px_2()
+            .py_1()
+            .gap_1()
+            .bg(theme.popover)
+            .border_1()
+            .border_color(theme.border)
+            .rounded(theme.radius)
+            .shadow_md()
+            .child(
+                h_flex()
+                    .gap_2()
+                    .children(popup.overload.map(|(index, count)| div().text_xs().text_color(theme.muted_foreground).child(format!("{}/{count}", index + 1))))
+                    .child(div().font_family(family).text_size(font_size * 0.9).child(StyledText::new(popup.label).with_highlights(highlights))),
+            )
+            .children(popup.documentation.filter(|text| !text.trim().is_empty()).map(|text| div().text_xs().text_color(theme.muted_foreground).child(text)));
+        Some(deferred(anchored().position(point(cursor.origin.x, cursor.origin.y - px(2.))).anchor(Anchor::BottomLeft).snap_to_window().child(content)).with_priority(1).into_any_element())
     }
 
     /// The cursor position (line and column starting at 1) and the number of selected characters.
@@ -326,12 +477,24 @@ impl Render for FileView {
                     *self.painted_hint.borrow_mut() = None;
                     let color = cx.theme().muted_foreground.opacity(0.6);
                     let hint = self.cursor_line_hint(cx).map(|(row, text)| self.line_hint_layer(row, text, font.clone(), font_size, color));
-                    div()
+                    let signature = self.signature_popup(font.clone(), font_size, cx);
+                    let annotations = self.buffers.read(cx).annotation_column(self.buffer.read(cx).path(), cx).map(|column| self.annotation_column(column, font.clone(), font_size, cx));
+                    let editor = div()
                         .relative()
-                        .size_full()
+                        .flex_1()
+                        .min_w_0()
+                        .h_full()
+                        // Escape closes signature help; the editor still gets the key (e.g. to close completions).
+                        .capture_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
+                            if event.keystroke.key == "escape" {
+                                let state = this.state.entity_id();
+                                this.buffers.update(cx, |buffers, cx| buffers.set_signature(state, None, cx));
+                            }
+                        }))
                         .child(Editor::new(&self.state).readonly(read_only).bordered(false).p_0().h(relative(1.)).font_family(font).text_size(font_size))
                         .children(hint)
-                        .into_any_element()
+                        .children(signature);
+                    h_flex().size_full().children(annotations).child(editor).into_any_element()
                 }
             },
         };

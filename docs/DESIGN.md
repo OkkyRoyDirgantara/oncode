@@ -117,6 +117,8 @@ The v0.2 end-to-end tests (34 scenarios in `e2e/`) become the **parity checklist
 - Bisect, `git log -L`, dedicated LFS support, `.editorconfig`. (Image and Markdown previews were listed here at first; both exist now: the `oncode-ui-markdown` extension, and image files in the editor, see [4.6](#46-file-buffers).)
 - Splitting the editor in more than one direction at once.
 
+Most of these were added after v0.2, following the [roadmap](ROADMAP.md): hot exit, dragging a branch onto a branch, hash search, date filters, review comments, merging pull requests, bisect, `git log -L`, LFS content in diffs, and `.editorconfig`. Automatic updates and code signing still need the project owner's keys ([roadmap §9](ROADMAP.md#9-not-planned-or-needs-the-project-owner)).
+
 ---
 
 ## 3. Technology Decisions
@@ -697,11 +699,12 @@ All feature crates are wired into the app (`app/src/main.rs`) and have headless 
 
 | Item | Notes |
 |---|---|
-| Blame | Shown for the cursor line in the status bar, not as a per-line annotation in the gutter: the editor component provides no per-line annotations. |
+| Blame | Inline blame and the status bar show the cursor line; Toggle Blame shows a column beside the editor instead of a gutter annotation, since the editor component has no per-line annotations ([roadmap §6.4](ROADMAP.md#64-blame-column)). |
 | Diagnostics underlines | Drawn only on files that have a syntax highlighter (a rule of the editor component); the Problems panel and status bar still contain everything. |
-| Signature help | Not yet available; the editor component has no hook for it. |
-| Terminal | No IME (text input goes through `key_char`), no mouse reporting to TUI programs, search through a dialog. |
-| Interactive rebase | Order is changed with up/down buttons, without dragging. |
+| Signature help | Drawn by OnCode itself above the cursor, since the editor component has no hook for it ([roadmap §4.5](ROADMAP.md#45-signature-help)). |
+| Terminal | IME, mouse reporting (clicks, drags, motion, focus), and an inline find bar were added after v0.2 ([roadmap §8](ROADMAP.md#8-phase-5-terminal)). |
+| Interactive rebase | Rows are dragged to a new place, or moved with the up/down buttons ([roadmap §6.6](ROADMAP.md#66-drag-to-reorder-in-interactive-rebase)). |
+| Pull request details | The changed files (opening their diff), merge, and review comments are in the PR tab ([roadmap §7](ROADMAP.md#7-phase-4-pull-requests)); the commit list of v0.2 is still only a count. Review comments are listed in the tab, not inside the diff. |
 | Graph | Columns do not hide themselves when narrow. |
 | v0.2 end-to-end tests | Every scenario has an equivalent headless view test, including moving an untracked file to the trash (`crates/oncode-ui-scm/tests/trash.rs`). Its test servers (git smart-HTTP with Basic auth, a private `sshd`, mock GitHub/GitLab) were rewritten in Rust. |
 | `.deb` package | The package name is `on-code` (derived by the tool from the product name) and the Maintainer field is empty. |

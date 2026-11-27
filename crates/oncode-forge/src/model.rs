@@ -233,6 +233,115 @@ pub struct PullRequestDetail {
     pub additions: u32,
     /// See the note on `additions`.
     pub deletions: u32,
+    /// Whether it can be merged now, and if not, why.
+    #[serde(default)]
+    pub merge_state: MergeState,
+    /// The ways the repository allows merging (merge commit, squash, rebase).
+    #[serde(default)]
+    pub merge_methods: Vec<MergeMethod>,
+}
+
+/// Which side of a diff a review comment is on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ReviewSide {
+    /// The old version (a removed line).
+    Left,
+    /// The new version (an added or unchanged line).
+    Right,
+}
+
+/// A comment on a line of a PR/MR's changes.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReviewComment {
+    pub id: String,
+    /// The conversation it belongs to (GitHub: the first comment's id; GitLab: the discussion id).
+    pub thread: String,
+    pub path: String,
+    /// `None` when the line no longer exists in the latest changes (an outdated comment).
+    pub line: Option<u32>,
+    pub side: ReviewSide,
+    pub body: String,
+    pub author: String,
+    pub created_at: Timestamp,
+    /// `false` for the first comment of its conversation.
+    pub is_reply: bool,
+}
+
+/// A new line comment, sent with a review.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NewReviewComment {
+    pub path: String,
+    pub line: u32,
+    pub side: ReviewSide,
+    pub body: String,
+}
+
+/// The verdict of a review.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ReviewEvent {
+    Comment,
+    Approve,
+    RequestChanges,
+}
+
+/// A review: its line comments, an overall comment, and the verdict.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReviewInput {
+    pub event: ReviewEvent,
+    pub body: String,
+    pub comments: Vec<NewReviewComment>,
+    /// The head commit the comments refer to.
+    pub commit_id: String,
+}
+
+/// Whether a PR/MR can be merged now.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum MergeState {
+    /// Ready to merge.
+    Clean,
+    /// Required reviews or other rules are not met yet.
+    Blocked,
+    /// The source branch must be updated with the target first.
+    Behind,
+    Conflicts,
+    /// Can be merged, but checks are failing or still running.
+    Unstable,
+    Draft,
+    /// The provider is still working it out.
+    Checking,
+    #[default]
+    Unknown,
+}
+
+/// How a PR/MR is merged.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum MergeMethod {
+    /// A merge commit (on GitLab: the project's own merge method).
+    Merge,
+    Squash,
+    /// Rebase the commits onto the target (GitHub).
+    Rebase,
+}
+
+/// Input for merging a PR/MR.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MergeInput {
+    pub method: MergeMethod,
+    /// The head commit the user saw; the merge fails if someone pushed since.
+    pub sha: Option<String>,
+    /// Title and message of the merge or squash commit; `None` = the provider's default.
+    pub title: Option<String>,
+    pub message: Option<String>,
+    /// Delete the source branch afterwards (only when it is in the same repository).
+    pub delete_branch: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

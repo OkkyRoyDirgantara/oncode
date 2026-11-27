@@ -8,14 +8,22 @@ use std::time::Instant;
 
 use alacritty_terminal::event::{Event, EventListener};
 use alacritty_terminal::grid::{Dimensions, Scroll};
-use alacritty_terminal::index::{Boundary, Column, Direction, Line, Point, Side};
+use alacritty_terminal::index::{Column, Direction, Line, Point, Side};
 use alacritty_terminal::selection::{Selection, SelectionType};
 use alacritty_terminal::term::cell::{Cell, Flags};
-use alacritty_terminal::term::search::RegexSearch;
+use alacritty_terminal::term::search::{RegexIter, RegexSearch};
 use alacritty_terminal::term::{Config, Osc52, Term, TermMode};
 use alacritty_terminal::vte::ansi::Processor;
 
 use crate::links::{find_urls, is_web_url};
+
+/// How the terminal's find bar matches text.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct FindOptions {
+    pub case_sensitive: bool,
+    pub regex: bool,
+    pub whole_word: bool,
+}
 
 /// Number of scrollback lines, same as version 0.2.
 pub const SCROLLBACK: usize = 10_000;
@@ -228,28 +236,28 @@ impl Emulator {
 
     // ----- Search -----
 
-    /// Searches for `query` (literal text, case-insensitive) forward or backward from the current
-    /// selection, wrapping around at the end of the buffer. The match is selected and scrolled into view.
-    pub fn find(&mut self, query: &str, forward: bool) -> bool {
+    /// Every match of `query` in the buffer (history and screen), top to bottom, at most `limit`. An invalid
+    /// regular expression finds nothing.
+    pub fn find_all(&self, query: &str, options: FindOptions, limit: usize) -> Vec<RangeInclusive<Point>> {
         if query.is_empty() {
-            return false;
+            return Vec::new();
         }
-        let Ok(mut regex) = RegexSearch::new(&format!("(?i){}", escape_regex(query))) else { return false };
-        let selected = self.term.selection.as_ref().and_then(|selection| selection.to_range(&self.term));
-        let viewport_top = Line(-(self.display_offset() as i32));
-        let (origin, direction, side) = match (selected, forward) {
-            (Some(range), true) => (range.end.add(&self.term, Boundary::None, 1), Direction::Right, Side::Left),
-            (Some(range), false) => (range.start.sub(&self.term, Boundary::None, 1), Direction::Left, Side::Right),
-            (None, true) => (Point::new(viewport_top, Column(0)), Direction::Right, Side::Left),
-            (None, false) => (Point::new(Line(viewport_top.0 + self.term.bottommost_line().0), self.term.last_column()), Direction::Left, Side::Right),
-        };
-        let Some(found) = self.term.search_next(&mut regex, origin, direction, side, None) else { return false };
-        let (start, end) = (*found.start(), *found.end());
-        let mut selection = Selection::new(SelectionType::Simple, start, Side::Left);
-        selection.update(end, Side::Right);
+        let body = if options.regex { query.to_string() } else { escape_regex(query) };
+        let body = if options.whole_word { format!(r"(?-u:\b)(?:{body})(?-u:\b)") } else { body };
+        // RegexSearch ignores case unless the pattern has an upper-case letter; the flag makes it explicit.
+        let pattern = format!("{}{body}", if options.case_sensitive { "(?-i)" } else { "(?i)" });
+        let Ok(mut regex) = RegexSearch::new(&pattern) else { return Vec::new() };
+        let start = Point::new(self.term.topmost_line(), Column(0));
+        let end = Point::new(self.term.bottommost_line(), self.term.last_column());
+        RegexIter::new(start, end, Direction::Right, &self.term, &mut regex).take(limit).collect()
+    }
+
+    /// Selects a range of the buffer and scrolls it into view.
+    pub fn select_range(&mut self, range: &RangeInclusive<Point>) {
+        let mut selection = Selection::new(SelectionType::Simple, *range.start(), Side::Left);
+        selection.update(*range.end(), Side::Right);
         self.term.selection = Some(selection);
-        self.term.scroll_to_point(start);
-        true
+        self.term.scroll_to_point(*range.start());
     }
 
     // ----- Links -----
@@ -474,6 +482,20 @@ mod tests {
     }
 
     #[test]
+    fn find_all_matches_with_case_regex_and_whole_word_options() {
+        let e = emulator(40, 4, "foo Foo food\r\nbar foo");
+        let count = |query: &str, options: FindOptions| e.find_all(query, options, 100).len();
+        assert_eq!(count("foo", FindOptions::default()), 4, "case-insensitive, also inside 'food'");
+        assert_eq!(count("foo", FindOptions { case_sensitive: true, ..Default::default() }), 3);
+        assert_eq!(count("foo", FindOptions { whole_word: true, ..Default::default() }), 3);
+        assert_eq!(count("f.o", FindOptions { regex: true, ..Default::default() }), 4);
+        assert_eq!(count("f.o", FindOptions::default()), 0, "literal unless regex is on");
+        assert_eq!(count("(", FindOptions { regex: true, ..Default::default() }), 0, "an invalid regex finds nothing");
+        let first = e.find_all("bar", FindOptions::default(), 1);
+        assert_eq!(first[0].start().column, Column(0));
+    }
+
+    #[test]
     fn injected_text_is_not_swallowed_by_a_pending_escape_sequence() {
         let mut e = emulator(40, 4, "abc\x1b[3");
         e.inject(b"\r\n[Process exited with code 0]");
@@ -504,50 +526,17 @@ mod tests {
     }
 
     #[test]
-    fn find_walks_matches_in_both_directions_and_wraps() {
-        let mut e = emulator(30, 4, "");
-        for n in 1..=12 {
-            e.feed(format!("line {n} Error (x.y)\r\n").as_bytes());
-        }
-        assert!(!e.find("not found", true));
-        assert!(!e.find("", true));
-
-        // Without a selection, a forward search starts from the top of the view.
-        assert!(e.find("error", true));
-        let first = e.term().selection.as_ref().unwrap().to_range(e.term()).unwrap();
-        assert_eq!(e.selection_text().as_deref(), Some("Error"), "case-insensitive");
-        assert!(e.find("error", true));
-        let second = e.term().selection.as_ref().unwrap().to_range(e.term()).unwrap();
-        assert_eq!(second.start.line.0, first.start.line.0 + 1);
-        assert!(e.find("error", false));
-        assert_eq!(e.term().selection.as_ref().unwrap().to_range(e.term()).unwrap(), first);
-
-        // Going backward from the topmost match in the buffer wraps to the bottommost, and vice versa.
-        e.clear_selection();
-        e.scroll(Scroll::Top);
-        assert!(e.find("line 1 ", true));
-        assert_eq!(e.term().selection.as_ref().unwrap().to_range(e.term()).unwrap().start.line, e.term().topmost_line());
-        assert!(e.find("error", false));
-        assert_eq!(e.selection_text().as_deref(), Some("Error"));
-        let wrapped = e.term().selection.as_ref().unwrap().to_range(e.term()).unwrap();
-        assert_eq!(wrapped.start.line, Line(2), "the last match is on line 12");
-        assert!(e.display_offset() <= 1, "the view follows the match until it is visible");
-
-        // Regex special characters are searched for literally.
-        assert!(e.find("(x.y)", true));
-        assert_eq!(e.selection_text().as_deref(), Some("(x.y)"));
-        assert!(!e.find("x+y", true));
-    }
-
-    #[test]
     fn find_scrolls_history_matches_into_view() {
         let mut e = emulator(20, 3, "needle\r\n");
         for n in 1..=20 {
             e.feed(format!("hay {n}\r\n").as_bytes());
         }
         assert_eq!(e.display_offset(), 0);
-        assert!(e.find("needle", false));
-        assert_eq!(e.display_offset(), e.history_size());
+        let found = e.find_all("needle", FindOptions::default(), 10);
+        assert_eq!(found.len(), 1);
+        e.select_range(&found[0]);
+        assert_eq!(e.display_offset(), e.history_size(), "the match in the history is scrolled into view");
+        assert_eq!(e.selection_text().as_deref(), Some("needle"));
     }
 
     #[test]

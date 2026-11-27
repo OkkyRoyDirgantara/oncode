@@ -1,5 +1,7 @@
 //! Flow control for terminal output: if the emulator falls behind processing, reading the PTY in the backend is paused.
 
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
 /// Pause when the queue exceeds this number (in bytes).
 pub const HIGH_WATERMARK: usize = 500_000;
 /// Resume when the queue drops below this number.
@@ -8,10 +10,13 @@ pub const LOW_WATERMARK: usize = 100_000;
 /// Counts the bytes that have been received from the PTY but not yet finished processing by the
 /// emulator. `written` and `processed` return `Some(paused)` only when the state changes, so the
 /// backend is not called on every chunk.
+///
+/// Shared between the thread that delivers PTY output (`written`, so reading pauses as soon as the
+/// queue is too long, even while the UI thread is busy drawing) and the UI thread (`processed`).
 #[derive(Debug)]
 pub struct FlowControl {
-    pending: usize,
-    paused: bool,
+    pending: AtomicUsize,
+    paused: AtomicBool,
     high: usize,
     low: usize,
 }
@@ -26,35 +31,35 @@ impl FlowControl {
     /// Panics if `low > high` (inverted configuration).
     pub fn new(high: usize, low: usize) -> Self {
         assert!(low <= high, "low watermark must not be greater than the high watermark");
-        Self { pending: 0, paused: false, high, low }
+        Self { pending: AtomicUsize::new(0), paused: AtomicBool::new(false), high, low }
     }
 
     /// A chunk was received and entered the queue.
-    pub fn written(&mut self, length: usize) -> Option<bool> {
-        self.pending += length;
-        if !self.paused && self.pending > self.high {
-            self.paused = true;
-            return Some(true);
-        }
-        None
+    pub fn written(&self, length: usize) -> Option<bool> {
+        let pending = self.pending.fetch_add(length, Ordering::AcqRel) + length;
+        (pending > self.high && !self.paused.swap(true, Ordering::AcqRel)).then_some(true)
     }
 
     /// The emulator finished processing part of the queue.
-    pub fn processed(&mut self, length: usize) -> Option<bool> {
-        self.pending = self.pending.saturating_sub(length);
-        if self.paused && self.pending < self.low {
-            self.paused = false;
-            return Some(false);
-        }
-        None
+    pub fn processed(&self, length: usize) -> Option<bool> {
+        // A compare-exchange loop (not `fetch_update`, which newer toolchains deprecate) that never goes below zero.
+        let mut current = self.pending.load(Ordering::Acquire);
+        let pending = loop {
+            let next = current.saturating_sub(length);
+            match self.pending.compare_exchange_weak(current, next, Ordering::AcqRel, Ordering::Acquire) {
+                Ok(_) => break next,
+                Err(actual) => current = actual,
+            }
+        };
+        (pending < self.low && self.paused.swap(false, Ordering::AcqRel)).then_some(false)
     }
 
     pub fn is_paused(&self) -> bool {
-        self.paused
+        self.paused.load(Ordering::Acquire)
     }
 
     pub fn pending(&self) -> usize {
-        self.pending
+        self.pending.load(Ordering::Acquire)
     }
 }
 

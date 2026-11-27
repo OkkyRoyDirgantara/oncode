@@ -144,6 +144,14 @@ pub fn operation_text(operation: &Operation) -> OperationText {
         },
         Operation::CherryPick { commit } => OperationText { title: "Cherry-pick in progress".into(), detail: format!("Applying {commit}"), can_skip: true },
         Operation::Revert { commit } => OperationText { title: "Revert in progress".into(), detail: format!("Reverting {commit}"), can_skip: true },
+        Operation::Bisect { original, first_bad } => OperationText {
+            title: "Bisect in progress".into(),
+            detail: match first_bad {
+                Some(found) => format!("First bad commit: {found}"),
+                None => format!("Test the checked-out commit, then mark it good or bad · started from {original}"),
+            },
+            can_skip: true,
+        },
     }
 }
 
@@ -154,6 +162,7 @@ pub fn operation_name(operation: Option<&Operation>) -> &'static str {
         Some(Operation::Rebase { .. }) => "rebase",
         Some(Operation::CherryPick { .. }) => "cherry-pick",
         Some(Operation::Revert { .. }) => "revert",
+        Some(Operation::Bisect { .. }) => "bisect",
         None => "operation",
     }
 }

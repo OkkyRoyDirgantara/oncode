@@ -66,6 +66,16 @@ pub fn open_from_command_line(folder: Option<std::path::PathBuf>, cx: &mut gpui_
     }
 }
 
+/// The folder to open at startup when none was given on the command line: the most recently used folder
+/// that still exists, if `workbench.restoreFolders` is `last`.
+pub fn startup_folder(cx: &gpui_kit::App) -> Option<std::path::PathBuf> {
+    let core = crate::core(cx);
+    if core.user_settings().workbench.restore_folders != oncode_core::settings::RestoreFolders::Last {
+        return None;
+    }
+    core.store.recent().into_iter().map(std::path::PathBuf::from).find(|path| path.is_dir())
+}
+
 /// Like [`open_window`], but the failure is returned to the caller (e.g. to be written to a log
 /// when the first window fails to open, since GUI apps on Windows have no console).
 pub fn try_open_window(folder: Option<std::path::PathBuf>, cx: &mut gpui_kit::App) -> gpui_kit::Result<()> {

@@ -1,7 +1,7 @@
 //! Context menus for commits and refs as plain data: labels, disabled state, and actions.
 //! The view turns them into a `PopupMenu`; their actions are run by `actions::run_action`.
 
-use oncode_git::{Branch, Commit, GraphRow, Head, RefKind, RemoteBranch, RepoSnapshot, ResetMode, Stash, Tag};
+use oncode_git::{BisectMark, Branch, Commit, GraphRow, Head, Operation, RefKind, RemoteBranch, RepoSnapshot, ResetMode, Stash, Tag};
 
 use crate::format::short_oid;
 use crate::refs::is_ancestor_of_head;
@@ -36,8 +36,15 @@ pub enum GitAction {
     StashDrop { name: String, message: String },
     /// Select this commit together with HEAD to see the list of files that differ.
     CompareWithHead(String),
+    /// The changes on a branch since it split from the current branch (merge base to branch).
+    CompareWithCurrent(String),
     ShowInGraph { oid: String, label: String },
     Copy { text: String, what: &'static str },
+    /// Start a bisect with this commit as the bad one; the good one is asked for.
+    BisectStart { bad: String },
+    /// Mark a commit (or, with `None`, the one being tested) during a bisect.
+    BisectMark { mark: BisectMark, oid: Option<String> },
+    BisectReset,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -134,6 +141,22 @@ pub fn commit_menu(context: &CommitMenuContext) -> Vec<MenuEntry> {
         MenuEntry::Separator,
         MenuEntry::new("Compare with HEAD", GitAction::CompareWithHead(oid.clone())).disabled(is_head || head_oid.is_none()),
         MenuEntry::Separator,
+    ]);
+    // Bisect: start here (this commit is bad), or, while bisecting, mark this commit.
+    let bisecting = matches!(snapshot.and_then(|s| s.operation.as_ref()), Some(Operation::Bisect { .. }));
+    if bisecting {
+        let mark = |mark| GitAction::BisectMark { mark, oid: Some(oid.clone()) };
+        entries.extend([
+            MenuEntry::new("Bisect: Mark as Good", mark(BisectMark::Good)),
+            MenuEntry::new("Bisect: Mark as Bad", mark(BisectMark::Bad)),
+            MenuEntry::new("Bisect: Skip", mark(BisectMark::Skip)),
+            MenuEntry::new("Stop Bisect", GitAction::BisectReset),
+        ]);
+    } else {
+        entries.push(MenuEntry::new("Start Bisect (This Commit Is Bad)…", GitAction::BisectStart { bad: oid.clone() }).disabled(snapshot.is_some_and(|s| s.operation.is_some())));
+    }
+    entries.extend([
+        MenuEntry::Separator,
         MenuEntry::new("Copy Hash", GitAction::Copy { text: oid.clone(), what: "Hash" }),
         MenuEntry::new("Copy Subject", GitAction::Copy { text: commit.subject.clone(), what: "Subject" }),
     ]);
@@ -149,6 +172,7 @@ pub fn branch_menu(branch: &Branch) -> Vec<MenuEntry> {
         MenuEntry::new("Checkout", GitAction::CheckoutBranch(name.clone())).disabled(branch.is_head || elsewhere),
         MenuEntry::new("Merge into Current…", GitAction::Merge(name.clone())).disabled(branch.is_head),
         MenuEntry::new("Rebase Current onto…", GitAction::RebaseOnto(name.clone())).disabled(branch.is_head),
+        MenuEntry::new("Compare with Current Branch", GitAction::CompareWithCurrent(name.clone())).disabled(branch.is_head),
         MenuEntry::Separator,
         MenuEntry::new("Rename…", GitAction::RenameBranch(name.clone())),
         MenuEntry::new("Delete…", GitAction::DeleteBranch(name.clone())).danger().disabled(branch.is_head || elsewhere),
@@ -166,6 +190,7 @@ pub fn remote_branch_menu(branch: &RemoteBranch) -> Vec<MenuEntry> {
         MenuEntry::new("Checkout (tracking)", GitAction::CheckoutRemote(name.clone())),
         MenuEntry::new("Merge into Current…", GitAction::Merge(name.clone())),
         MenuEntry::new("Rebase Current onto…", GitAction::RebaseOnto(name.clone())),
+        MenuEntry::new("Compare with Current Branch", GitAction::CompareWithCurrent(name.clone())),
         MenuEntry::Separator,
         MenuEntry::new("Delete on Remote…", GitAction::DeleteRemoteBranch(name.clone())).danger(),
         MenuEntry::Separator,
@@ -250,6 +275,7 @@ mod tests {
                 "Reset Current Branch to Here (Hard)…",
                 "Interactive Rebase from Here…",
                 "Compare with HEAD",
+                "Start Bisect (This Commit Is Bad)…",
                 "Copy Hash",
                 "Copy Subject",
             ]
@@ -315,8 +341,8 @@ mod tests {
         current.is_head = true;
         current.upstream = Some("origin/main".into());
         let menu = branch_menu(&current);
-        assert_eq!(labels(&menu), ["Checkout", "Merge into Current…", "Rebase Current onto…", "Rename…", "Delete…", "Push", "Set Upstream…", "Copy Name"]);
-        for label in ["Checkout", "Merge into Current…", "Rebase Current onto…", "Delete…"] {
+        assert_eq!(labels(&menu), ["Checkout", "Merge into Current…", "Rebase Current onto…", "Compare with Current Branch", "Rename…", "Delete…", "Push", "Set Upstream…", "Copy Name"]);
+        for label in ["Checkout", "Merge into Current…", "Rebase Current onto…", "Compare with Current Branch", "Delete…"] {
             assert!(is_disabled(&menu, label), "{label}");
         }
         assert_eq!(find(&menu, "Push").unwrap().0, &GitAction::Push { branch: None, set_upstream: false });
@@ -346,7 +372,7 @@ mod tests {
     fn remote_tag_stash_and_reflog_menus() {
         let remote = RemoteBranch { name: "origin/feature/x".into(), remote: "origin".into(), oid: oid(1) };
         let menu = remote_branch_menu(&remote);
-        assert_eq!(labels(&menu), ["Checkout (tracking)", "Merge into Current…", "Rebase Current onto…", "Delete on Remote…", "Copy Name"]);
+        assert_eq!(labels(&menu), ["Checkout (tracking)", "Merge into Current…", "Rebase Current onto…", "Compare with Current Branch", "Delete on Remote…", "Copy Name"]);
         assert_eq!(find(&menu, "Delete on Remote…").unwrap().0, &GitAction::DeleteRemoteBranch("origin/feature/x".into()));
 
         let tag = Tag { name: "v1.0.0".into(), oid: oid(2), annotated: false, message: String::new() };

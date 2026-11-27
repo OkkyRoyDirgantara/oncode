@@ -48,10 +48,30 @@ pub enum AutoSave {
     AfterDelay,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FilesSettings {
     pub auto_save: AutoSave,
+    /// Hot exit: closing a window or quitting keeps unsaved changes (also of new files) instead of asking,
+    /// and they come back when the folder is opened again.
+    pub hot_exit: bool,
+}
+
+impl Default for FilesSettings {
+    fn default() -> Self {
+        Self { auto_save: AutoSave::Off, hot_exit: true }
+    }
+}
+
+/// Which folder OnCode opens when it starts without one on the command line.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum RestoreFolders {
+    /// The folder open most recently (if it still exists).
+    #[default]
+    Last,
+    /// None: the welcome screen.
+    None,
 }
 
 /// The color theme. `dark` and `light` are the default themes (their names in `settings.json` date from
@@ -165,6 +185,7 @@ pub struct WorkbenchSettings {
     pub theme: Theme,
     pub startup_view: StartupView,
     pub sidebar_position: SidebarPosition,
+    pub restore_folders: RestoreFolders,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

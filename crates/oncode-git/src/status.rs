@@ -199,6 +199,18 @@ pub fn detect_operation(git_dir: &Path) -> Option<Operation> {
     if let Some(head) = read_trimmed(&git_dir.join("REVERT_HEAD")) {
         return Some(Operation::Revert { commit: short(&head) });
     }
+    // Last: a cherry-pick (or merge) can stop in the middle of a bisect, and it is the one to finish first.
+    if let Some(start) = read_trimmed(&git_dir.join("BISECT_START")) {
+        let original = start.trim_start_matches("refs/heads/").to_string();
+        let original = if original.len() == 40 && original.chars().all(|c| c.is_ascii_hexdigit()) { short(&original) } else { original };
+        let first_bad = read_trimmed(&git_dir.join("BISECT_LOG")).and_then(|log| {
+            let line = log.lines().rev().find_map(|line| line.strip_prefix("# first bad commit: "))?.to_string();
+            // `[<full id>] <subject>`
+            let (id, subject) = line.strip_prefix('[')?.split_once("] ")?;
+            Some(format!("{} {subject}", short(id)))
+        });
+        return Some(Operation::Bisect { original, first_bad });
+    }
     None
 }
 

@@ -1,4 +1,4 @@
-//! Menus in the title bar (File, Edit, View, Go, Git, Terminal, Help) for Windows and Linux; macOS
+//! Menus in the title bar (File, Edit, Selection, View, Go, Git, Terminal, Help) for Windows and Linux; macOS
 //! uses the same [`MENUS`] content in the system menu bar (see [`crate::app_menu`]). Each item runs a
 //! command from the window's registry, so its label and shortcut always match the command palette.
 //! Items whose command is not registered in this window are hidden (e.g. Git in a folder without a
@@ -42,12 +42,27 @@ pub const MENUS: &[(&str, &[Option<&str>])] = &[
             Some("search.focus"),
             Some("search.replace"),
             None,
+            Some("editor.toggleLineComment"),
+            Some("editor.toggleBlockComment"),
             Some("editor.format"),
-            Some("editor.moveLineUp"),
-            Some("editor.moveLineDown"),
             None,
             Some("editor.rename"),
             Some("editor.copyPath"),
+        ],
+    ),
+    (
+        "Selection",
+        &[
+            Some("editor.copyLinesUp"),
+            Some("editor.copyLinesDown"),
+            Some("editor.moveLineUp"),
+            Some("editor.moveLineDown"),
+            Some("editor.deleteLines"),
+            None,
+            Some("editor.addCursorAbove"),
+            Some("editor.addCursorBelow"),
+            Some("editor.addSelectionToNextFindMatch"),
+            Some("editor.selectHighlights"),
         ],
     ),
     (
@@ -75,6 +90,8 @@ pub const MENUS: &[(&str, &[Option<&str>])] = &[
         &[
             Some("workbench.quickOpen"),
             Some("editor.gotoLine"),
+            Some("editor.gotoSymbol"),
+            Some("workbench.gotoSymbol"),
             None,
             Some("editor.goToDefinition"),
             Some("editor.findReferences"),
@@ -100,6 +117,8 @@ pub const MENUS: &[(&str, &[Option<&str>])] = &[
             None,
             Some("git.toggleInlineBlame"),
             Some("git.toggleBlame"),
+            Some("git.fileHistoryActive"),
+            Some("git.lineHistory"),
             None,
             Some("git.init"),
             Some("forge.signIn"),

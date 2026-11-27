@@ -120,19 +120,31 @@ pub(crate) fn external_provider(buffer: &Entity<Buffer>, _: &Entity<EditorState>
     }))
 }
 
-/// Saves the buffer; with Format on Save on, it is formatted first (a failed format is still saved).
-pub fn save_with_format(buffer: &Entity<Buffer>, state: &Entity<EditorState>, window: &mut Window, cx: &mut App) {
+/// The "before save" step that every save path runs (see [`Buffer::save`]): Format on Save, when it is
+/// on, then the `.editorconfig` whitespace rules (`trim_trailing_whitespace`, `insert_final_newline`).
+/// A failed format still lets the save go ahead.
+pub(crate) fn before_save(buffer: &Entity<Buffer>, window: &mut Window, cx: &mut App) -> Task<()> {
+    let Some(state) = buffer.read(cx).primary() else { return Task::ready(()) };
     let format_on_save = Workbench::for_window(window, cx).is_some_and(|w| w.read(cx).settings().editor.format_on_save);
-    if !format_on_save || buffer.read(cx).is_untitled() {
-        buffer.update(cx, |buffer, cx| buffer.save(window, cx)).detach();
+    let format = (format_on_save && !buffer.read(cx).is_untitled()).then(|| format_buffer(buffer, &state, true, window, cx));
+    let buffer = buffer.clone();
+    window.spawn(cx, async move |cx| {
+        if let Some(format) = format {
+            format.await;
+        }
+        let _ = cx.update(|window, cx| apply_whitespace_rules(&buffer, &state, window, cx));
+    })
+}
+
+/// The `.editorconfig` whitespace rules, as one undoable edit. The editor holds `\n` line breaks; the
+/// file's own line ending is restored when it is written.
+fn apply_whitespace_rules(buffer: &Entity<Buffer>, state: &Entity<EditorState>, window: &mut Window, cx: &mut App) {
+    let config = buffer.read(cx).editorconfig().clone();
+    if config.trim_trailing_whitespace.is_none() && config.insert_final_newline.is_none() {
         return;
     }
-    let format = format_buffer(buffer, state, true, window, cx);
-    let buffer = buffer.clone();
-    window
-        .spawn(cx, async move |cx| {
-            format.await;
-            let _ = buffer.update_in(cx, |buffer, window, cx| buffer.save(window, cx).detach());
-        })
-        .detach();
+    let text = state.read(cx).text().to_string();
+    if let Some(cleaned) = oncode_workspace::editorconfig::apply_whitespace_rules(&text, &config, "\n") {
+        apply_formatted(state, cleaned, window, cx);
+    }
 }

@@ -337,6 +337,11 @@ pub async fn git_diff_files(core: &Shared, root: String, from: String, to: Strin
 }
 
 /// The common ancestor of two revisions (e.g. to show a pull request's changes).
+/// The full commit id a revision (a branch, tag, or abbreviated hash) names.
+pub async fn git_rev_parse(core: &Shared, root: String, rev: String) -> AppResult<String> {
+    read(core, &root, |repo| async move { repo.rev_parse(&format!("{rev}^{{commit}}")).await }).await
+}
+
 pub async fn git_merge_base(core: &Shared, root: String, a: String, b: String) -> AppResult<Option<String>> {
     read(core, &root, |repo| async move { repo.merge_base(&a, &b).await }).await
 }
@@ -394,6 +399,21 @@ pub async fn git_tag_delete_remote(core: &Shared, root: String, remote: String, 
 }
 
 // ----- Cherry-pick, revert, reset -----
+
+/// Starts `git bisect` between a bad and a good commit; returns git's message about the next step.
+pub async fn git_bisect_start(core: &Shared, root: String, bad: String, good: String) -> AppResult<String> {
+    write(core, &root, true, |repo| async move { repo.bisect_start(&bad, &good).await }).await
+}
+
+/// Marks the commit being tested (or `rev`) during a bisect; returns git's message (the next step or the result).
+pub async fn git_bisect_mark(core: &Shared, root: String, mark: oncode_git::BisectMark, rev: Option<String>) -> AppResult<String> {
+    write(core, &root, true, |repo| async move { repo.bisect_mark(mark, rev.as_deref()).await }).await
+}
+
+/// Ends the bisect and returns to where it started.
+pub async fn git_bisect_reset(core: &Shared, root: String) -> AppResult<()> {
+    write(core, &root, true, |repo| async move { repo.bisect_reset().await }).await
+}
 
 pub async fn git_cherry_pick(core: &Shared, root: String, oids: Vec<String>) -> AppResult<()> {
     write(core, &root, true, |repo| async move { repo.cherry_pick(&oids).await }).await

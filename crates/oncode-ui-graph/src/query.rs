@@ -1,6 +1,6 @@
 //! Pure logic of the Graph view: the log query from toolbar choices and the commit selection rules.
 
-use oncode_git::{GraphRow, LogQuery, Refs};
+use oncode_git::{GraphRow, LogQuery};
 
 /// Scope choice values: `"all"`, `"current"`, or `"ref:<name>"`.
 pub fn build_query(scope: &str, grep: &str, author: &str, path: &str) -> LogQuery {
@@ -25,21 +25,6 @@ pub fn build_query(scope: &str, grep: &str, author: &str, path: &str) -> LogQuer
 /// The list is filtered (message, author, or path), so ancestry cannot be inferred from the rows.
 pub fn is_filtered(query: &LogQuery) -> bool {
     query.is_filtered()
-}
-
-/// A `ref:<name>` scope still points to an existing ref.
-pub fn scope_exists(scope: &str, refs: Option<&Refs>) -> bool {
-    let (Some(name), Some(refs)) = (scope.strip_prefix("ref:"), refs) else { return true };
-    refs.branches.iter().any(|b| b.name == name) || refs.remote_branches.iter().any(|b| b.name == name) || refs.tags.iter().any(|t| t.name == name)
-}
-
-/// The scope label for the toolbar button.
-pub fn scope_label(scope: &str) -> String {
-    match scope {
-        "all" => "All branches".into(),
-        "current" => "Current branch".into(),
-        other => other.strip_prefix("ref:").unwrap_or(other).to_string(),
-    }
 }
 
 /// The next selection after a commit is clicked. A plain click selects one commit;
@@ -74,8 +59,7 @@ pub fn order_oldest_first(rows: &[GraphRow], oids: &[String]) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testing::{branch, linear_rows, oid};
-    use oncode_git::{RemoteBranch, Tag};
+    use crate::testing::{linear_rows, oid};
 
     #[test]
     fn scope_maps_to_all_head_or_one_ref() {
@@ -92,24 +76,6 @@ mod tests {
         assert!(!is_filtered(&build_query("all", "", "", "")));
         assert!(is_filtered(&build_query("all", "x", "", "")));
         assert!(is_filtered(&build_query("all", "", "", "a.txt")));
-    }
-
-    #[test]
-    fn scope_exists_checks_every_kind_of_ref() {
-        let refs = Refs {
-            branches: vec![branch("main")],
-            remote_branches: vec![RemoteBranch { name: "origin/main".into(), remote: "origin".into(), oid: oid(0) }],
-            tags: vec![Tag { name: "v1".into(), oid: oid(0), annotated: false, message: String::new() }],
-            remotes: vec![],
-        };
-        for scope in ["all", "current", "ref:main", "ref:origin/main", "ref:v1"] {
-            assert!(scope_exists(scope, Some(&refs)), "{scope}");
-        }
-        assert!(!scope_exists("ref:gone", Some(&refs)));
-        assert!(scope_exists("ref:gone", None), "before refs are loaded, the scope is assumed to exist");
-        assert_eq!(scope_label("all"), "All branches");
-        assert_eq!(scope_label("current"), "Current branch");
-        assert_eq!(scope_label("ref:origin/main"), "origin/main");
     }
 
     #[test]

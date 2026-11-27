@@ -38,6 +38,12 @@ fn parse_refs(decoration: &str) -> Vec<RefLabel> {
             }
         } else if name == "refs/stash" {
             labels.push(RefLabel { kind: RefKind::Stash, name: "stash".into() });
+        } else if name == "refs/bisect/bad" {
+            labels.push(RefLabel { kind: RefKind::Bisect, name: "bisect: bad".into() });
+        } else if name.starts_with("refs/bisect/good") {
+            labels.push(RefLabel { kind: RefKind::Bisect, name: "bisect: good".into() });
+        } else if name.starts_with("refs/bisect/skip") {
+            labels.push(RefLabel { kind: RefKind::Bisect, name: "bisect: skip".into() });
         }
     }
     labels
@@ -63,7 +69,8 @@ pub fn parse_commit(record: &str) -> Option<Commit> {
         time: fields.next()?.parse::<i64>().unwrap_or(0) as Timestamp,
     };
     let refs = parse_refs(fields.next()?);
-    let subject = fields.next().unwrap_or("").to_string();
+    // Only the first line: before Git 2.42, `log -L` printed its patch after each commit even with `--no-patch`.
+    let subject = fields.next().unwrap_or("").lines().next().unwrap_or("").to_string();
     Some(Commit { oid, parents, author, committer, subject, refs })
 }
 
@@ -115,8 +122,9 @@ impl LogStream {
 
 impl Repo {
     fn log_args(&self, query: &LogQuery) -> Result<Vec<String>> {
+        // `--clear-decorations` (Git 2.39+): also label refs git hides by default, such as `refs/bisect/*`.
         let mut args: Vec<String> =
-            vec!["log".into(), "-z".into(), "--topo-order".into(), "--decorate=full".into(), FORMAT.into()];
+            vec!["log".into(), "-z".into(), "--topo-order".into(), "--decorate=full".into(), "--clear-decorations".into(), FORMAT.into()];
         if let Some(grep) = query.grep.as_deref().filter(|g| !g.is_empty()) {
             args.extend(["--regexp-ignore-case".into(), "--fixed-strings".into(), format!("--grep={grep}")]);
         }
@@ -129,10 +137,19 @@ impl Repo {
         if let Some(until) = query.until.as_deref().filter(|s| !s.is_empty()) {
             args.push(format!("--until={until}"));
         }
+        // Line history: `-L` follows the lines itself (also across renames), from HEAD only, without a pathspec.
+        if let (Some(path), Some((start, end))) = (&query.path, query.lines) {
+            let path = check_path(path)?;
+            args.push("--no-patch".into());
+            args.push(format!("-L{},{}:{path}", start.max(1), end.max(start.max(1))));
+            return Ok(args);
+        }
         if query.path.is_some() {
             args.push("--follow".into());
         }
         if query.all {
+            // Hidden refs OnCode fetches for itself (a pull request's head, to show its changes) stay out.
+            args.push("--exclude=refs/oncode/*".into());
             args.push("--all".into());
         } else {
             args.push("--end-of-options".into());

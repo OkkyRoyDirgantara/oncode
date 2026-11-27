@@ -35,6 +35,30 @@ pub fn locate_in_repo<'a>(roots: impl IntoIterator<Item = &'a str>, absolute: &s
     best
 }
 
+/// Line History is asked about lines of the editor's text, but `git log -L` counts lines of the file at
+/// HEAD. Maps the lines `start..=end` (from 1) of `current` to the lines of `head` they come from. Lines
+/// added since HEAD are skipped; `None` when all of them were added (nothing to look up yet).
+pub fn map_lines_to_head(head: &str, current: &str, start: u32, end: u32) -> Option<(u32, u32)> {
+    use similar::{ChangeTag, TextDiff};
+    let diff = TextDiff::from_lines(head, current);
+    let (mut old_line, mut new_line) = (0u32, 0u32);
+    let mut mapped: Option<(u32, u32)> = None;
+    for change in diff.iter_all_changes() {
+        match change.tag() {
+            ChangeTag::Equal => {
+                old_line += 1;
+                new_line += 1;
+                if (start..=end).contains(&new_line) {
+                    mapped = Some(mapped.map_or((old_line, old_line), |(first, _)| (first, old_line)));
+                }
+            }
+            ChangeTag::Delete => old_line += 1,
+            ChangeTag::Insert => new_line += 1,
+        }
+    }
+    mapped
+}
+
 /// Joins a folder and a name using the separator that folder uses.
 pub fn join_path(dir: &str, name: &str) -> String {
     let sep = if dir.contains('\\') && !dir.contains('/') { '\\' } else { '/' };
@@ -97,6 +121,18 @@ pub fn validate_ref_name(value: &str) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn editor_lines_map_to_the_committed_lines() {
+        let head = "a\nb\nc\nd\n";
+        assert_eq!(map_lines_to_head(head, head, 2, 3), Some((2, 3)));
+        // Two lines inserted at the top: the editor's lines 4..5 are HEAD's 2..3.
+        assert_eq!(map_lines_to_head(head, "x\ny\na\nb\nc\nd\n", 4, 5), Some((2, 3)));
+        // A new line inside the selection is skipped.
+        assert_eq!(map_lines_to_head(head, "a\nb\nnew\nc\nd\n", 2, 4), Some((2, 3)));
+        // Only new lines: nothing to look up.
+        assert_eq!(map_lines_to_head(head, "a\nnew\nb\nc\nd\n", 2, 2), None);
+    }
 
     #[test]
     fn repo_relative_path_maps_files_inside_the_repository() {

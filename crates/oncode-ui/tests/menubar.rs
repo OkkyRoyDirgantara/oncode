@@ -36,7 +36,7 @@ async fn file_menu_creates_a_new_text_file(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-async fn edit_menu_runs_editor_commands_on_the_active_file(cx: &mut TestAppContext) {
+async fn edit_and_selection_menus_run_editor_commands_on_the_active_file(cx: &mut TestAppContext) {
     let app = TestApp::new(cx);
     let project = app.project(&[("list.txt", "one\ntwo\n")]);
     let window = app.open(Some(&project), cx).await;
@@ -46,7 +46,10 @@ async fn edit_menu_runs_editor_commands_on_the_active_file(cx: &mut TestAppConte
     window.wait_until(cx, "file loaded", |_, cx| active_file(workbench.read(cx), cx).is_some_and(|(_, buffer, _)| buffer.read(cx).is_ready())).await;
     let (_, _, state) = cx.update(|cx| active_file(workbench.read(cx), cx).unwrap());
 
-    // Edit: Find, ─, Format Document, Move Line Up, Move Line Down, …
-    pick(&window, cx, "menu-edit", 4);
+    // Edit: Find, ─, Toggle Line Comment, …
+    pick(&window, cx, "menu-edit", 2);
+    assert_eq!(cx.update(|cx| state.read(cx).value().to_string()), "one\ntwo\n", "plain text has no comments");
+    // Selection: Copy Line Up, Copy Line Down, Move Line Up, Move Line Down, …
+    pick(&window, cx, "menu-selection", 3);
     assert_eq!(cx.update(|cx| state.read(cx).value().to_string()), "two\none\n");
 }

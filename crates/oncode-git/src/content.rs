@@ -29,6 +29,11 @@ pub fn is_binary(data: &[u8]) -> bool {
     data.iter().take(8000).any(|b| *b == 0)
 }
 
+/// A Git LFS pointer file (the text stored in git instead of the content).
+fn is_lfs_pointer(bytes: &[u8]) -> bool {
+    bytes.len() < 1024 && bytes.starts_with(b"version https://git-lfs.github.com/spec/v1\n")
+}
+
 fn side(data: Option<Vec<u8>>, label: String) -> DiffSide {
     let fingerprint = fingerprint(data.as_deref());
     match data {
@@ -126,6 +131,18 @@ impl Repo {
         Ok((out.code == 0).then_some(out.stdout))
     }
 
+    /// The blob for showing in a diff: a Git LFS pointer is replaced by the file's real content through git's
+    /// filters (`cat-file --filters`), when git-lfs is installed. The flag says whether that happened.
+    async fn display_blob(&self, spec: &str) -> Result<(Option<Vec<u8>>, bool)> {
+        let raw = self.blob(spec).await?;
+        let Some(pointer) = raw.as_ref().filter(|bytes| is_lfs_pointer(bytes)) else { return Ok((raw, false)) };
+        let out = self.run_raw(Cmd::new(["cat-file", "--filters", "--end-of-options", spec])).await?;
+        if out.code == 0 && !out.stdout.is_empty() && out.stdout != *pointer {
+            return Ok((Some(out.stdout), true));
+        }
+        Ok((raw, false))
+    }
+
     async fn worktree_file(&self, path: &str) -> Option<Vec<u8>> {
         let full = self.root().join(path);
         match tokio::fs::symlink_metadata(&full).await {
@@ -144,44 +161,39 @@ impl Repo {
             Some(p) => check_path(p)?,
             None => path,
         };
+        let mut lfs = false;
+        let mut shown = async |spec: String| -> Result<Option<Vec<u8>>> {
+            let (data, smudged) = self.display_blob(&spec).await?;
+            lfs |= smudged;
+            Ok(data)
+        };
         let (a, b) = match source {
-            DiffSource::Worktree => (
-                side(self.blob(&format!(":{path}")).await?, "Index".into()),
-                side(self.worktree_file(path).await, "Working tree".into()),
-            ),
-            DiffSource::Staged => (
-                side(self.blob(&format!("HEAD:{old_path}")).await?, "HEAD".into()),
-                side(self.blob(&format!(":{path}")).await?, "Index".into()),
-            ),
+            DiffSource::Worktree => (side(shown(format!(":{path}")).await?, "Index".into()), side(self.worktree_file(path).await, "Working tree".into())),
+            DiffSource::Staged => (side(shown(format!("HEAD:{old_path}")).await?, "HEAD".into()), side(shown(format!(":{path}")).await?, "Index".into())),
             DiffSource::Commit { oid, parent } => {
                 let oid = check_ref(oid)?;
                 let parent = match parent {
                     Some(p) => check_ref(p)?.to_string(),
                     None => format!("{oid}^"),
                 };
-                (
-                    side(self.blob(&format!("{parent}:{old_path}")).await?, short(&parent)),
-                    side(self.blob(&format!("{oid}:{path}")).await?, short(oid)),
-                )
+                (side(shown(format!("{parent}:{old_path}")).await?, short(&parent)), side(shown(format!("{oid}:{path}")).await?, short(oid)))
             }
             DiffSource::Range { from, to } => {
                 let (from, to) = (check_ref(from)?, check_ref(to)?);
-                (
-                    side(self.blob(&format!("{from}:{old_path}")).await?, short(from)),
-                    side(self.blob(&format!("{to}:{path}")).await?, short(to)),
-                )
+                (side(shown(format!("{from}:{old_path}")).await?, short(from)), side(shown(format!("{to}:{path}")).await?, short(to)))
             }
             DiffSource::Stash { name } => {
                 let name = check_ref(name)?;
-                let mut after = self.blob(&format!("{name}:{path}")).await?;
+                let mut after = shown(format!("{name}:{path}")).await?;
                 if after.is_none() {
                     // Untracked files are stored in the stash's third parent.
-                    after = self.blob(&format!("{name}^3:{path}")).await?;
+                    after = shown(format!("{name}^3:{path}")).await?;
                 }
-                (side(self.blob(&format!("{name}^1:{old_path}")).await?, "Before".into()), side(after, name.to_string()))
+                (side(shown(format!("{name}^1:{old_path}")).await?, "Before".into()), side(after, name.to_string()))
             }
         };
-        Ok(DiffContents { path: path.to_string(), orig_path: orig_path.map(String::from), a, b })
+        drop(shown);
+        Ok(DiffContents { path: path.to_string(), orig_path: orig_path.map(String::from), a, b, lfs })
     }
 
     /// The index mode of a file (e.g. `100644`), if it is in the index.

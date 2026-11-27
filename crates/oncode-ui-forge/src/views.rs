@@ -9,16 +9,17 @@ use gpui_kit::component::input::{Input, InputState, Textarea, TextareaState};
 use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::tab::{Tab, TabBar};
 use gpui_kit::component::text::TextView;
-use gpui_kit::component::{h_flex, v_flex, ActiveTheme as _, Icon, Sizable as _, WindowExt as _};
+use gpui_kit::component::menu::DropdownMenu as _;
+use gpui_kit::component::{h_flex, v_flex, ActiveTheme as _, Disableable as _, Icon, Sizable as _, WindowExt as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
-    div, px, App, AppContext as _, Context, Entity, FocusHandle, Focusable, InteractiveElement as _, IntoElement, ParentElement as _, PathPromptOptions, Render,
+    div, px, AnyElement, App, AppContext as _, Context, Entity, FocusHandle, Focusable, InteractiveElement as _, IntoElement, ParentElement as _, PathPromptOptions, Render,
     SharedString, StatefulInteractiveElement as _, Styled as _, Subscription, Task, TestSupportExt as _, Window,
 };
-use oncode_core::api::forge::{self as forge_api, ForgeContext};
+use oncode_core::api::forge::{self as forge_api, ForgeContext, PrFiles};
 use oncode_core::api::git as git_api;
 use oncode_core::{CoreEvent, Shared};
-use oncode_forge::{Check, NewPullRequest, PrFilter, PullRequest, PullRequestDetail};
+use oncode_forge::{Check, MergeInput, MergeMethod, MergeState, NewPullRequest, NewReviewComment, PrFilter, PrState, PullRequest, PullRequestDetail, ReviewComment, ReviewEvent, ReviewInput, ReviewSide};
 use oncode_git::Head;
 use oncode_ui::overlay::{self, TextPrompt};
 use oncode_ui::quick_pick::{PickItem, QuickPickOptions};
@@ -26,7 +27,7 @@ use oncode_ui::{core_bus, repos, spawn_core, Env, Lucide, OpenOptions, Shell, Wo
 
 use crate::accounts::{core_call, pick, sign_in};
 use crate::clone::{repo_name_from_url, validate_clone_url, validate_folder_name};
-use crate::logic::{check_label, create_problem, effective_target, pr_tab, push_need, source_branch_name, summarize_checks, PrBadge, PrTabParams, FILTERS};
+use crate::logic::{change_letter, check_label, create_problem, effective_target, mergeable_text, pr_tab, push_need, source_branch_name, summarize_checks, PrBadge, PrTabParams, FILTERS};
 use crate::util::{describe_forge_error, forge_name, open_external, pr_noun, pr_noun_plural, pr_number, relative_time};
 
 pub const SIDEBAR_ID: &str = "pullRequests";
@@ -210,13 +211,33 @@ enum DetailState {
     Failed(String),
 }
 
+/// The PR/MR's changed files, fetched and compared locally.
+enum FilesState {
+    Idle,
+    Loading,
+    Ready(PrFiles),
+    Failed(String),
+}
+
 pub struct PullRequestTab {
     env: Env,
     params: PrTabParams,
     state: DetailState,
     checking_out: bool,
     focus_handle: FocusHandle,
+    files: FilesState,
+    /// Line comments already on the server.
+    comments: Vec<ReviewComment>,
+    /// Line comments of the review being written (sent together on submit).
+    pending: Vec<NewReviewComment>,
+    /// The merge method chosen; `None` = the first one the repository allows.
+    merge_method: Option<MergeMethod>,
+    delete_branch: bool,
+    /// A merge or a review is being sent.
+    sending: bool,
     _load: Task<()>,
+    _files: Task<()>,
+    _comments: Task<()>,
 }
 
 impl Focusable for PullRequestTab {
@@ -227,9 +248,79 @@ impl Focusable for PullRequestTab {
 
 impl PullRequestTab {
     pub fn new(env: Env, params: PrTabParams, cx: &mut Context<Self>) -> Self {
-        let mut this = Self { env, params, state: DetailState::Loading, checking_out: false, focus_handle: cx.focus_handle(), _load: Task::ready(()) };
+        let mut this = Self {
+            env,
+            params,
+            state: DetailState::Loading,
+            checking_out: false,
+            focus_handle: cx.focus_handle(),
+            files: FilesState::Idle,
+            comments: Vec::new(),
+            pending: Vec::new(),
+            merge_method: None,
+            delete_branch: true,
+            sending: false,
+            _load: Task::ready(()),
+            _files: Task::ready(()),
+            _comments: Task::ready(()),
+        };
         this.reload(cx);
         this
+    }
+
+    /// The changed files, once fetched and compared.
+    pub fn changed_files(&self) -> Option<Vec<String>> {
+        match &self.files {
+            FilesState::Ready(files) => Some(files.files.iter().map(|f| f.path.clone()).collect()),
+            _ => None,
+        }
+    }
+
+    pub fn review_comments(&self) -> &[ReviewComment] {
+        &self.comments
+    }
+
+    pub fn pending_comments(&self) -> &[NewReviewComment] {
+        &self.pending
+    }
+
+    /// Adds a line comment to the review being written.
+    pub fn add_pending_comment(&mut self, comment: NewReviewComment, cx: &mut Context<Self>) {
+        self.pending.push(comment);
+        cx.notify();
+    }
+
+    /// Fetches the head into a hidden ref and compares it with the target branch (needs a trusted folder: it runs git).
+    fn load_files(&mut self, detail: &PullRequestDetail, cx: &mut Context<Self>) {
+        if !self.env.trusted {
+            return;
+        }
+        self.files = FilesState::Loading;
+        let (core, params, target) = (self.env.core.clone(), self.params.clone(), detail.pull_request.target_branch.clone());
+        let task = spawn_core(cx, async move { forge_api::forge_pr_files(&core, params.root, params.kind, params.remote, params.number, target).await });
+        self._files = cx.spawn(async move |this, cx| {
+            let result = task.await;
+            let _ = this.update(cx, |this, cx| {
+                this.files = match result {
+                    Ok(files) => FilesState::Ready(files),
+                    Err(error) => FilesState::Failed(error.message),
+                };
+                cx.notify();
+            });
+        });
+    }
+
+    fn load_comments(&mut self, cx: &mut Context<Self>) {
+        let (core, params) = (self.env.core.clone(), self.params.clone());
+        let task = spawn_core(cx, async move { forge_api::forge_review_comments(&core, params.account_id, params.repo, params.number).await });
+        self._comments = cx.spawn(async move |this, cx| {
+            let result = task.await;
+            let _ = this.update(cx, |this, cx| {
+                // Comments are extra: a failure (e.g. no permission) leaves the list empty.
+                this.comments = result.unwrap_or_default();
+                cx.notify();
+            });
+        });
     }
 
     pub fn detail(&self) -> Option<&PullRequestDetail> {
@@ -251,7 +342,11 @@ impl PullRequestTab {
             let result = task.await;
             let _ = this.update(cx, |this, cx| {
                 this.state = match result {
-                    Ok((detail, checks)) => DetailState::Ready { detail: Box::new(detail), checks },
+                    Ok((detail, checks)) => {
+                        this.load_files(&detail, cx);
+                        this.load_comments(cx);
+                        DetailState::Ready { detail: Box::new(detail), checks }
+                    }
                     Err(error) => DetailState::Failed(describe_forge_error(&error, Some(&this.params.repo.host)).line()),
                 };
                 cx.notify();
@@ -285,8 +380,352 @@ impl PullRequestTab {
     }
 }
 
+impl PullRequestTab {
+    fn ready(&self) -> Option<&PullRequestDetail> {
+        self.detail()
+    }
+
+    /// Merges on the server after a confirmation, then reloads this tab and the list.
+    fn merge(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(detail) = self.ready().cloned() else { return };
+        if self.sending {
+            return;
+        }
+        let method = self.merge_method.or_else(|| detail.merge_methods.first().copied()).unwrap_or(MergeMethod::Merge);
+        let pr = detail.pull_request.clone();
+        let noun = pr_noun(Some(self.params.kind));
+        let how = match method {
+            MergeMethod::Merge => "with a merge commit",
+            MergeMethod::Squash => "as one squashed commit",
+            MergeMethod::Rebase => "by rebasing its commits",
+        };
+        let branch = if self.delete_branch && !pr.is_cross_repo { format!(" The branch {} is deleted afterwards.", pr.source_branch) } else { String::new() };
+        let question = overlay::confirm(overlay::Confirm::new(format!("Merge {noun} {}?", pr_number(Some(self.params.kind), pr.number)), format!("{} is merged into {} {how}.{branch}", pr.source_branch, pr.target_branch), "Merge"), window, cx);
+        let input = MergeInput {
+            method,
+            sha: Some(pr.head_sha.clone()).filter(|sha| !sha.is_empty()),
+            title: (method == MergeMethod::Squash).then(|| format!("{} ({})", pr.title, pr_number(Some(self.params.kind), pr.number))),
+            message: None,
+            delete_branch: self.delete_branch && !pr.is_cross_repo,
+        };
+        let (core, params) = (self.env.core.clone(), self.params.clone());
+        cx.spawn_in(window, async move |this, cx| {
+            if !question.await {
+                return;
+            }
+            let _ = this.update(cx, |this, cx| {
+                this.sending = true;
+                cx.notify();
+            });
+            let Ok(task) = cx.update(|_, cx| spawn_core(cx, async move { forge_api::forge_pr_merge(&core, params.account_id, params.repo, params.number, input).await })) else { return };
+            let result = task.await;
+            let _ = this.update_in(cx, |this, window, cx| {
+                this.sending = false;
+                match result {
+                    Ok(()) => {
+                        overlay::toast_success(format!("The {noun} was merged."), window, cx);
+                        this.reload(cx);
+                        oncode_ui::commands::execute("forge.refresh", serde_json::Value::Null, window, cx);
+                    }
+                    Err(error) => overlay::toast_error(format!("Could not merge: {}", error.message), window, cx),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Opens a changed file's diff (merge base → PR head).
+    fn open_file_diff(&self, path: &str, window: &mut Window, cx: &mut App) {
+        let FilesState::Ready(files) = &self.files else { return };
+        let Some(file) = files.files.iter().find(|f| f.path == path) else { return };
+        let request = oncode_ui_diff::DiffRequest {
+            root: self.params.root.clone(),
+            path: file.path.clone(),
+            orig_path: file.orig_path.clone(),
+            source: oncode_git::DiffSource::Range { from: files.base.clone(), to: files.head.clone() },
+            preview: true,
+        };
+        if let Some(workbench) = Workbench::for_window(window, cx) {
+            workbench.update(cx, |workbench, cx| oncode_ui_diff::open_diff(workbench, request, window, cx));
+        }
+    }
+
+    /// Add Line Comment: which file, which line, and the comment; kept until the review is submitted.
+    fn add_line_comment(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let FilesState::Ready(files) = &self.files else {
+            overlay::toast_info("The changed files are not loaded yet.", window, cx);
+            return;
+        };
+        let items: Vec<PickItem> = files.files.iter().map(|f| PickItem::new(f.path.clone(), f.path.clone())).collect();
+        let entity = cx.entity().downgrade();
+        oncode_ui::quick_pick::quick_pick(
+            QuickPickOptions::new("Comment on which file?", items),
+            move |item, window, cx| {
+                let Some(item) = item else { return };
+                let path = item.value.clone();
+                let line = overlay::prompt_text(TextPrompt::new(format!("Comment on {path}"), "Next").message("Line number in the new version (prefix with - for a removed line, e.g. -12)").placeholder("12"), window, cx);
+                let entity = entity.clone();
+                window
+                    .spawn(cx, async move |cx| {
+                        let Some(line) = line.await else { return };
+                        let Some((side, line)) = parse_comment_line(&line) else {
+                            let _ = cx.update(|window, cx| overlay::toast_info("Type a line number, e.g. 12 or -12.", window, cx));
+                            return;
+                        };
+                        let Ok(body) = cx.update(|window, cx| overlay::prompt_text(TextPrompt::new(format!("{path}:{line}"), "Add to Review").placeholder("Your comment"), window, cx)) else { return };
+                        let Some(body) = body.await.filter(|b| !b.trim().is_empty()) else { return };
+                        let _ = entity.update(cx, |this, cx| this.add_pending_comment(NewReviewComment { path, line, side, body }, cx));
+                    })
+                    .detach();
+            },
+            window,
+            cx,
+        );
+    }
+
+    /// Sends the review: the pending line comments, an optional overall comment, and the verdict.
+    fn submit_review(&mut self, event: ReviewEvent, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(detail) = self.ready() else { return };
+        if self.sending {
+            return;
+        }
+        let commit_id = detail.pull_request.head_sha.clone();
+        let comments = self.pending.clone();
+        let title = match event {
+            ReviewEvent::Comment => "Submit review",
+            ReviewEvent::Approve => "Approve",
+            ReviewEvent::RequestChanges => "Request changes",
+        };
+        let optional = event == ReviewEvent::Approve || !comments.is_empty();
+        let answer = overlay::prompt_text(TextPrompt::new(title, title).message(if optional { "Overall comment (optional)" } else { "Overall comment" }).placeholder("Looks good"), window, cx);
+        let (core, params) = (self.env.core.clone(), self.params.clone());
+        cx.spawn_in(window, async move |this, cx| {
+            let Some(body) = answer.await else { return };
+            let input = ReviewInput { event, body, comments, commit_id };
+            let _ = this.update(cx, |this, cx| {
+                this.sending = true;
+                cx.notify();
+            });
+            let Ok(task) = cx.update(|_, cx| spawn_core(cx, async move { forge_api::forge_review_submit(&core, params.account_id, params.repo, params.number, input).await })) else { return };
+            let result = task.await;
+            let _ = this.update_in(cx, |this, window, cx| {
+                this.sending = false;
+                match result {
+                    Ok(()) => {
+                        this.pending.clear();
+                        overlay::toast_success("Review submitted.", window, cx);
+                        this.load_comments(cx);
+                    }
+                    Err(error) => overlay::toast_error(format!("Could not submit the review: {}", error.message), window, cx),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    fn reply(&mut self, thread: String, window: &mut Window, cx: &mut Context<Self>) {
+        let answer = overlay::prompt_text(TextPrompt::new("Reply", "Reply").placeholder("Your reply"), window, cx);
+        let (core, params) = (self.env.core.clone(), self.params.clone());
+        cx.spawn_in(window, async move |this, cx| {
+            let Some(body) = answer.await.filter(|b| !b.trim().is_empty()) else { return };
+            let Ok(task) = cx.update(|_, cx| spawn_core(cx, async move { forge_api::forge_review_reply(&core, params.account_id, params.repo, params.number, thread, body).await })) else { return };
+            let result = task.await;
+            let _ = this.update_in(cx, |this, window, cx| match result {
+                Ok(()) => this.load_comments(cx),
+                Err(error) => overlay::toast_error(format!("Could not reply: {}", error.message), window, cx),
+            });
+        })
+        .detach();
+    }
+}
+
+/// A line typed for a comment: `12` (new version) or `-12` (a removed line of the old version).
+pub fn parse_comment_line(text: &str) -> Option<(ReviewSide, u32)> {
+    let text = text.trim();
+    let (side, number) = match text.strip_prefix('-') {
+        Some(rest) => (ReviewSide::Left, rest.trim()),
+        None => (ReviewSide::Right, text.trim_start_matches('+')),
+    };
+    number.parse::<u32>().ok().filter(|n| *n > 0).map(|n| (side, n))
+}
+
+/// How the merge state is described above the Merge button.
+fn merge_state_text(state: MergeState) -> &'static str {
+    match state {
+        MergeState::Clean => "Ready to merge.",
+        MergeState::Blocked => "Blocked: required reviews or rules are not met yet.",
+        MergeState::Behind => "The source branch is behind the target and must be updated first.",
+        MergeState::Conflicts => "There are conflicts with the target branch.",
+        MergeState::Unstable => "Checks are failing or still running.",
+        MergeState::Draft => "This is a draft.",
+        MergeState::Checking => "Checking whether it can be merged…",
+        MergeState::Unknown => "Mergeability is not known.",
+    }
+}
+
+fn merge_method_label(method: MergeMethod) -> &'static str {
+    match method {
+        MergeMethod::Merge => "Merge commit",
+        MergeMethod::Squash => "Squash and merge",
+        MergeMethod::Rebase => "Rebase and merge",
+    }
+}
+
+impl PullRequestTab {
+    /// Merge, changed files, review comments, and the review being written.
+    fn render_review(&self, detail: &PullRequestDetail, cx: &mut Context<Self>) -> AnyElement {
+        let theme = cx.theme();
+        let pr = &detail.pull_request;
+        let heading = |text: String| div().font_weight(gpui_kit::FontWeight::SEMIBOLD).child(text);
+        let mut column = v_flex().gap_3();
+
+        if pr.state == PrState::Open {
+            let methods = if detail.merge_methods.is_empty() { vec![MergeMethod::Merge] } else { detail.merge_methods.clone() };
+            let method = self.merge_method.filter(|m| methods.contains(m)).or_else(|| methods.first().copied()).unwrap_or(MergeMethod::Merge);
+            let blocked = matches!(detail.merge_state, MergeState::Conflicts | MergeState::Draft);
+            let state_color = match detail.merge_state {
+                MergeState::Clean => theme.success,
+                MergeState::Conflicts | MergeState::Blocked => theme.danger,
+                MergeState::Behind | MergeState::Unstable | MergeState::Draft => theme.warning,
+                MergeState::Checking | MergeState::Unknown => theme.muted_foreground,
+            };
+            let entity = cx.entity();
+            column = column.child(
+                v_flex()
+                    .id("forge-merge-section")
+                    .gap_2()
+                    .p_3()
+                    .rounded(theme.radius)
+                    .border_1()
+                    .border_color(theme.border)
+                    .child(heading("Merge".into()))
+                    .child(div().text_xs().text_color(state_color).child(merge_state_text(detail.merge_state)))
+                    .child(
+                        h_flex()
+                            .gap_2()
+                            .child(Button::new("forge-merge-method").outline().small().label(merge_method_label(method)).dropdown_menu(move |menu, _, _| {
+                                let mut menu = menu;
+                                for choice in methods.clone() {
+                                    let entity = entity.clone();
+                                    menu = menu.item(gpui_kit::component::menu::PopupMenuItem::new(merge_method_label(choice)).checked(choice == method).on_click(move |_, _, cx| {
+                                        entity.update(cx, |this, cx| {
+                                            this.merge_method = Some(choice);
+                                            cx.notify();
+                                        });
+                                    }));
+                                }
+                                menu
+                            }))
+                            .when(!pr.is_cross_repo, |el| {
+                                el.child(Checkbox::new("forge-merge-delete-branch").label("Delete branch").checked(self.delete_branch).on_change(cx.listener(|this, value: &bool, _, cx| {
+                                    this.delete_branch = *value;
+                                    cx.notify();
+                                })))
+                            })
+                            .child(div().flex_1())
+                            .child(Button::new("forge-merge").primary().small().label("Merge").loading(self.sending).disabled(blocked || self.sending).on_click(cx.listener(|this, _, window, cx| this.merge(window, cx)))),
+                    ),
+            );
+        }
+
+        // Changed files.
+        let count_for = |path: &str| self.comments.iter().filter(|c| c.path == path).count();
+        let files: AnyElement = match &self.files {
+            FilesState::Idle => div().text_xs().text_color(theme.muted_foreground).child("Trust this folder to see the changed files here.").into_any_element(),
+            FilesState::Loading => h_flex().gap_2().child(Spinner::new()).child(div().text_xs().text_color(theme.muted_foreground).child("Fetching the changes…")).into_any_element(),
+            FilesState::Failed(message) => div().text_xs().text_color(theme.danger).child(format!("Could not load the changed files: {message}")).into_any_element(),
+            FilesState::Ready(files) => v_flex()
+                .gap_0p5()
+                .children(files.files.iter().enumerate().map(|(index, file)| {
+                    let path = file.path.clone();
+                    let comments = count_for(&file.path);
+                    h_flex()
+                        .id(("forge-pr-file", index))
+                        .test_support()
+                        .gap_2()
+                        .px_1()
+                        .rounded(theme.radius)
+                        .cursor_pointer()
+                        .hover(|style| style.bg(theme.list_hover))
+                        .child(div().w(px(14.)).text_xs().text_color(theme.muted_foreground).child(change_letter(file.kind)))
+                        .child(div().flex_1().min_w_0().truncate().child(file.path.clone()))
+                        .when(comments > 0, |el| el.child(div().text_xs().text_color(theme.muted_foreground).child(format!("{comments} comment{}", if comments == 1 { "" } else { "s" }))))
+                        .on_click(cx.listener(move |this, _, window, cx| this.open_file_diff(&path, window, cx)))
+                }))
+                .into_any_element(),
+        };
+        column = column.child(heading("Changed files".into())).child(files);
+
+        // Review comments, conversation by conversation.
+        let now = crate::util::now_seconds();
+        if !self.comments.is_empty() {
+            column = column.child(heading(format!("Review comments ({})", self.comments.len())));
+            for (index, comment) in self.comments.iter().enumerate() {
+                let place = match comment.line {
+                    Some(line) => format!("{}:{}{line}", comment.path, if comment.side == ReviewSide::Left { "-" } else { "" }),
+                    None => format!("{} (outdated)", comment.path),
+                };
+                let thread = comment.thread.clone();
+                column = column.child(
+                    v_flex()
+                        .id(("forge-comment", index))
+                        .when(comment.is_reply, |el| el.ml_4())
+                        .gap_0p5()
+                        .p_2()
+                        .rounded(theme.radius)
+                        .border_1()
+                        .border_color(theme.border)
+                        .child(
+                            h_flex()
+                                .gap_2()
+                                .text_xs()
+                                .text_color(theme.muted_foreground)
+                                .child(div().flex_1().child(format!("{} · {place} · {}", comment.author, relative_time(comment.created_at, now))))
+                                .when(!comment.is_reply, |el| {
+                                    el.child(Button::new(("forge-reply", index)).ghost().xsmall().label("Reply").on_click(cx.listener(move |this, _, window, cx| this.reply(thread.clone(), window, cx))))
+                                }),
+                        )
+                        .child(TextView::markdown(SharedString::from(format!("forge-comment-body-{index}")), comment.body.clone())),
+                );
+            }
+        }
+
+        // The review being written.
+        let files_ready = matches!(self.files, FilesState::Ready(_));
+        column = column.child(heading(if self.pending.is_empty() { "Your review".into() } else { format!("Your review ({} line comments)", self.pending.len()) }));
+        for (index, comment) in self.pending.iter().enumerate() {
+            column = column.child(
+                h_flex()
+                    .gap_2()
+                    .text_xs()
+                    .child(div().text_color(theme.muted_foreground).child(format!("{}:{}{}", comment.path, if comment.side == ReviewSide::Left { "-" } else { "" }, comment.line)))
+                    .child(div().flex_1().min_w_0().truncate().child(comment.body.clone()))
+                    .child(Button::new(("forge-pending-remove", index)).ghost().xsmall().icon(Icon::new(Lucide::X)).tooltip("Remove").on_click(cx.listener(move |this, _, _, cx| {
+                        if index < this.pending.len() {
+                            this.pending.remove(index);
+                            cx.notify();
+                        }
+                    }))),
+            );
+        }
+        column = column.child(
+            h_flex()
+                .gap_2()
+                .child(Button::new("forge-add-comment").outline().small().label("Add Line Comment…").disabled(!files_ready).on_click(cx.listener(|this, _, window, cx| this.add_line_comment(window, cx))))
+                .child(div().flex_1())
+                .child(Button::new("forge-review-comment").outline().small().label("Comment").disabled(self.sending).on_click(cx.listener(|this, _, window, cx| this.submit_review(ReviewEvent::Comment, window, cx))))
+                .child(Button::new("forge-review-request").outline().small().label("Request Changes").disabled(self.sending).on_click(cx.listener(|this, _, window, cx| this.submit_review(ReviewEvent::RequestChanges, window, cx))))
+                .child(Button::new("forge-review-approve").primary().small().label("Approve").disabled(self.sending).on_click(cx.listener(|this, _, window, cx| this.submit_review(ReviewEvent::Approve, window, cx)))),
+        );
+        column.into_any_element()
+    }
+}
+
 impl Render for PullRequestTab {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let review = self.ready().cloned().map(|detail| self.render_review(&detail, cx));
         let theme = cx.theme();
         let kind = Some(self.params.kind);
         let body = v_flex().id("forge-pr-tab").size_full().p_4().gap_3().overflow_y_scroll().track_focus(&self.focus_handle).bg(theme.background).text_sm();
@@ -309,6 +748,14 @@ impl Render for PullRequestTab {
                         detail.commits,
                         detail.changed_files
                     )))
+                    .when(pr.state == PrState::Open, |el| {
+                        let color = match detail.mergeable {
+                            Some(true) => theme.success,
+                            Some(false) => theme.danger,
+                            None => theme.muted_foreground,
+                        };
+                        el.child(div().id("forge-pr-mergeable").test_support().text_xs().text_color(color).child(mergeable_text(detail.mergeable)))
+                    })
                     .child(
                         h_flex()
                             .gap_2()
@@ -341,6 +788,7 @@ impl Render for PullRequestTab {
                                 open_external(&url, cx);
                             }))
                     }))
+                    .children(review)
                     .into_any_element()
             }
         }

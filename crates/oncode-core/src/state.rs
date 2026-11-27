@@ -73,6 +73,8 @@ pub struct Core {
     runtime: Handle,
     events: EventSink,
     pub store: Store,
+    /// Where unsaved changes are kept for hot exit (see [`crate::api::backup`]).
+    backups_dir: PathBuf,
     settings_path: PathBuf,
     settings: RwLock<Settings>,
     /// What is known about `settings.json` on disk; held while the file is written, so writes take turns.
@@ -129,6 +131,7 @@ impl Core {
             runtime,
             events,
             store: Store::load(dirs.state_path()),
+            backups_dir: dirs.data_dir.join("backups"),
             settings: RwLock::new(loaded.settings),
             settings_file: Mutex::new(SettingsFile { stamp, unreadable: loaded.unreadable, problem: loaded.problem }),
             settings_path,
@@ -144,6 +147,10 @@ impl Core {
             tokens,
             pending_logins: Mutex::new(HashMap::new()),
         })
+    }
+
+    pub fn backups_dir(&self) -> &std::path::Path {
+        &self.backups_dir
     }
 
     pub fn next_id(&self) -> u32 {

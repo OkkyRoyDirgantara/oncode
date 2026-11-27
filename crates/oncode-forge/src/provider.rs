@@ -4,8 +4,8 @@ use crate::error::{ForgeError, Result};
 use crate::github::GitHubProvider;
 use crate::gitlab::GitLabProvider;
 use crate::model::{
-    Account, Check, ForgeHost, ForgeKind, NewPullRequest, Page, PrFilter, PullRequest, PullRequestDetail, RemoteRepo,
-    RepoRef,
+    Account, Check, ForgeHost, ForgeKind, MergeInput, NewPullRequest, Page, PrFilter, PullRequest, PullRequestDetail, RemoteRepo,
+    RepoRef, ReviewComment, ReviewInput,
 };
 
 /// Operations supported by all providers. Page numbers start at 1 (0 is treated as 1);
@@ -40,6 +40,19 @@ pub trait ForgeProvider: Send + Sync {
 
     /// The repository's default branch (to pre-fill the target branch).
     async fn default_branch(&self, repo: &RepoRef) -> Result<String>;
+
+    /// Merges a PR/MR (and deletes its source branch if asked and possible).
+    async fn merge_pull_request(&self, repo: &RepoRef, number: u32, input: &MergeInput) -> Result<()>;
+
+    /// The line comments of a PR/MR, oldest first.
+    async fn list_review_comments(&self, repo: &RepoRef, number: u32) -> Result<Vec<ReviewComment>>;
+
+    /// Submits a review: line comments, an overall comment, and the verdict. On GitLab, Request Changes posts
+    /// the comments without approving (GitLab has no such verdict through this API).
+    async fn submit_review(&self, repo: &RepoRef, number: u32, input: &ReviewInput) -> Result<()>;
+
+    /// Replies in the conversation `thread` (see [`ReviewComment::thread`]).
+    async fn reply_to_review_comment(&self, repo: &RepoRef, number: u32, thread: &str, body: &str) -> Result<()>;
 }
 
 /// The Git ref to fetch for checking out PR/MR `number`: GitHub `refs/pull/{n}/head`,
