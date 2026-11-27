@@ -31,6 +31,34 @@ use crate::store::{snapshot as repo_snapshot, GraphStore, StoreEvent};
 
 const PAGE: u32 = 300;
 
+/// A `git log` stream that a load has opened but not yet handed to its tab. It is closed when dropped,
+/// so a load that is thrown away (a newer reload started, the tab closed, or the first page failed)
+/// does not leave its `git log` running until the app quits.
+struct OpenedStream {
+    core: oncode_core::Shared,
+    id: Option<u32>,
+}
+
+impl OpenedStream {
+    fn id(&self) -> u32 {
+        self.id.expect("the stream is not handed over yet")
+    }
+
+    /// Hands the stream over to the tab, which closes it from then on.
+    fn hand_over(mut self) -> u32 {
+        self.id.take().expect("the stream is handed over once")
+    }
+}
+
+impl Drop for OpenedStream {
+    fn drop(&mut self) {
+        if let Some(id) = self.id.take() {
+            let core = self.core.clone();
+            self.core.spawn(async move { git::git_log_close(&core, id).await });
+        }
+    }
+}
+
 /// Graph lane color (repeats every 8 lanes).
 fn lane_color(index: usize, cx: &App) -> Hsla {
     let theme = cx.theme();
@@ -174,9 +202,12 @@ impl GraphTab {
         self.loading = true;
         self.error = None;
         let (core, root, query) = (self.env.core.clone(), self.ctx.root.clone(), self.query.clone());
+        // A reload that starts before this one finishes drops this task's result (or the task), which
+        // closes the stream it opened.
         let task = spawn_core(cx, async move {
-            let stream = git::git_log_open(&core, root, query).await?;
-            let page = git::git_log_next(&core, stream, PAGE).await?;
+            let id = git::git_log_open(&core, root, query).await?;
+            let stream = OpenedStream { core: core.clone(), id: Some(id) };
+            let page = git::git_log_next(&core, stream.id(), PAGE).await?;
             Ok::<_, oncode_core::AppError>((stream, page))
         });
         self._load = cx.spawn(async move |this, cx| {
@@ -188,7 +219,7 @@ impl GraphTab {
                 this.loading = false;
                 match result {
                     Ok((stream, page)) => {
-                        this.stream = Some(stream);
+                        this.stream = Some(stream.hand_over());
                         this.lanes = max_lane(page.rows.iter());
                         this.rows = page.rows;
                         this.done = page.done;

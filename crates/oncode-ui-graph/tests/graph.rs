@@ -98,7 +98,10 @@ async fn closing_the_graph_stops_its_log_stream(cx: &mut TestAppContext) {
     cx.update(oncode_ui_graph::init);
     let project = history(&app);
     let (window, tab) = open_graph(&app, &project, cx).await;
-    assert_eq!(app.core.log_streams.lock().unwrap().len(), 1);
+    // The watcher may report the commits above while the first load runs; the reload that follows closes
+    // the first load's stream in the background.
+    let core = app.core.clone();
+    window.wait_until(cx, "one stream", move |_, _| core.log_streams.lock().unwrap().len() == 1).await;
 
     drop(tab);
     assert!(window.run_command(cx, "workbench.closeTab"));
@@ -108,4 +111,22 @@ async fn closing_the_graph_stops_its_log_stream(cx: &mut TestAppContext) {
     }
     let core = app.core.clone();
     window.wait_until(cx, "stream closed", move |_, _| core.log_streams.lock().unwrap().is_empty()).await;
+}
+
+/// A reload that starts while the previous one is still opening its `git log` (refs changed during loading)
+/// closes the stream the discarded load opened, instead of leaving that `git log` running.
+#[gpui_kit::test]
+async fn a_reload_during_loading_leaves_no_log_stream_open(cx: &mut TestAppContext) {
+    let app = TestApp::new(cx);
+    cx.update(oncode_ui_graph::init);
+    let project = history(&app);
+    let (window, tab) = open_graph(&app, &project, cx).await;
+
+    tab.update(cx, |tab, cx| {
+        tab.reload(cx);
+        tab.reload(cx);
+    });
+    window.wait_until(cx, "history reloaded", |_, cx| !tab.read(cx).is_loading() && !tab.read(cx).rows().is_empty()).await;
+    let core = app.core.clone();
+    window.wait_until(cx, "one stream left", move |_, _| core.log_streams.lock().unwrap().len() == 1).await;
 }
