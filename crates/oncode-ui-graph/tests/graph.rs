@@ -319,4 +319,9 @@ async fn compare_a_branch_with_the_current_branch(cx: &mut TestAppContext) {
     tab.update(cx, |tab, cx| tab.compare_with_current("feature".into(), cx));
     window.wait_until(cx, "comparison loaded", |_, cx| tab.read(cx).compared_files().is_some()).await;
     assert_eq!(cx.update(|cx| tab.read(cx).compared_files()).unwrap(), ["g.txt"]);
+    // The list reloads when refs change (a late watcher event, a fetch): the comparison stays.
+    tab.update(cx, |tab, cx| tab.reload(cx));
+    window.wait_until(cx, "reloaded", |_, cx| !tab.read(cx).is_loading()).await;
+    window.wait_until(cx, "comparison shown again", |_, cx| tab.read(cx).compared_files().is_some()).await;
+    assert_eq!(cx.update(|cx| tab.read(cx).compared_files()).unwrap(), ["g.txt"]);
 }

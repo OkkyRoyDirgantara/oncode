@@ -100,6 +100,9 @@ pub struct GraphTab {
     revision: u64,
     selected: Vec<String>,
     details: Details,
+    /// The branch shown by Compare with Current Branch; kept when the list reloads (refs changed, a fetch) until
+    /// another commit is selected.
+    compare_branch: Option<String>,
     /// A commit to select as soon as it appears (from the ref panel or a "Show in Graph" request).
     hunt: Option<String>,
     scroll: UniformListScrollHandle,
@@ -166,6 +169,7 @@ impl GraphTab {
             revision: 0,
             selected: Vec::new(),
             details: Details::None,
+            compare_branch: None,
             hunt: None,
             scroll: UniformListScrollHandle::new(),
             focus_handle: cx.focus_handle(),
@@ -299,7 +303,7 @@ impl GraphTab {
                             }
                         }
                         this.after_rows_changed(cx);
-                        this.load_details(cx);
+                        this.refresh_details(cx);
                     }
                     Err(error) => {
                         this.rows.clear();
@@ -389,7 +393,18 @@ impl GraphTab {
         cx.notify();
     }
 
+    /// After the list reloads: the comparison with the current branch again (its refs may have moved), or the
+    /// selected commit's details.
+    fn refresh_details(&mut self, cx: &mut Context<Self>) {
+        match self.compare_branch.clone() {
+            Some(branch) => self.compare_with_current(branch, cx),
+            None => self.load_details(cx),
+        }
+    }
+
+    /// The details of the selected commits; a selection made by the user ends Compare with Current Branch.
     fn load_details(&mut self, cx: &mut Context<Self>) {
+        self.compare_branch = None;
         let (core, root) = (self.env.core.clone(), self.ctx.root.clone());
         match self.selected.as_slice() {
             [] => {
@@ -434,6 +449,7 @@ impl GraphTab {
 
     /// Shows the files a branch changed since it split from the current branch (merge base → branch).
     pub fn compare_with_current(&mut self, branch: String, cx: &mut Context<Self>) {
+        self.compare_branch = Some(branch.clone());
         self.details = Details::Loading;
         let (core, root) = (self.env.core.clone(), self.ctx.root.clone());
         let to = branch.clone();

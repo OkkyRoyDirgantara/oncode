@@ -439,7 +439,7 @@ async fn bisect_finds_the_first_bad_commit() {
         let value: u32 = std::fs::read_to_string(t.path().join("n.txt")).unwrap().trim().parse().unwrap();
         let mark = if value >= 4 { BisectMark::Bad } else { BisectMark::Good };
         let message = t.repo.bisect_mark(mark, None).await.unwrap();
-        if message.contains("is the first bad commit") {
+        if oncode_git::status::bisect_found(&message) {
             break;
         }
     }

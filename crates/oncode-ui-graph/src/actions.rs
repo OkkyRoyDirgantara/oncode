@@ -761,7 +761,7 @@ pub async fn drop_ref(ctx: &Ctx, dragged: DraggedRef, target: DraggedRef, cx: &m
 
 /// The line of git's bisect output worth showing: the steps left, or which commit is the first bad one.
 fn bisect_summary(message: &str) -> String {
-    message.lines().map(str::trim).find(|line| line.starts_with("Bisecting:") || line.contains("is the first bad commit")).or_else(|| message.lines().next()).unwrap_or("").to_string()
+    message.lines().map(str::trim).find(|line| line.starts_with("Bisecting:") || oncode_git::status::bisect_found(line)).or_else(|| message.lines().next()).unwrap_or("").to_string()
 }
 
 async fn bisect_step<Fut>(ctx: &Ctx, label: &str, make: impl FnOnce(Shared, String) -> Fut, cx: &mut AsyncWindowContext)

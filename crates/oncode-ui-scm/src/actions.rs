@@ -771,7 +771,7 @@ pub async fn bisect_reset(git: &Git, cx: &mut AsyncWindowContext) {
 
 /// The line of git's bisect output worth showing: the steps left, or which commit is the first bad one.
 pub fn bisect_summary(message: &str) -> String {
-    message.lines().map(str::trim).find(|line| line.starts_with("Bisecting:") || line.contains("is the first bad commit")).or_else(|| message.lines().next()).unwrap_or("").to_string()
+    message.lines().map(str::trim).find(|line| line.starts_with("Bisecting:") || oncode_git::status::bisect_found(line)).or_else(|| message.lines().next()).unwrap_or("").to_string()
 }
 
 // ----- Tag -----

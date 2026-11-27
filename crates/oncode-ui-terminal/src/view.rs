@@ -559,14 +559,16 @@ impl TerminalSession {
     fn refresh_matches(&mut self, jump: bool, cx: &mut Context<Self>) {
         let Some(bar) = &mut self.find_bar else { return };
         let query = bar.input.read(cx).value().to_string();
-        let previous = bar.current.and_then(|index| bar.matches.get(index).cloned());
+        let previous = bar.current;
         bar.matches = self.emulator.find_all(&query, bar.options, MAX_FIND_MATCHES);
         bar.current = if bar.matches.is_empty() {
             None
         } else if jump {
             Some(bar.matches.len() - 1)
         } else {
-            previous.and_then(|previous| bar.matches.iter().position(|m| *m == previous)).or(Some(bar.matches.len() - 1))
+            // New output adds matches at the bottom and shifts the line numbers of the older ones (the screen
+            // scrolls), so the current match keeps its place in the list, not its position on the grid.
+            Some(previous.unwrap_or(usize::MAX).min(bar.matches.len() - 1))
         };
         if jump {
             match bar.current.and_then(|index| bar.matches.get(index).cloned()) {

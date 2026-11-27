@@ -21,6 +21,13 @@ use crate::overlay::Choice;
 use crate::spawn_core;
 use crate::workbench::{Env, WorkbenchEvent};
 
+/// Whether a file's modification time and size are the same as recorded earlier. The time is compared to the
+/// microsecond: one that went through JSON (a hot exit backup) can come back off by the last bit, since
+/// serde_json's default float parsing is not exact.
+fn same_stat(mtime_ms: f64, size: u32, other_mtime_ms: f64, other_size: u32) -> bool {
+    size == other_size && (mtime_ms - other_mtime_ms).abs() < 0.001
+}
+
 /// The encoding name and BOM for an `.editorconfig` `charset` that OnCode can write.
 fn charset_encoding(charset: &str) -> Option<(&'static str, bool)> {
     match charset {
@@ -436,7 +443,7 @@ impl Buffer {
             self.encoding = backup.encoding.clone();
             self.bom = backup.bom;
             self.eol = if backup.eol == "crlf" { Eol::Crlf } else { Eol::Lf };
-        } else if backup.mtime_ms != self.mtime_ms || backup.size != self.size {
+        } else if !same_stat(backup.mtime_ms, backup.size, self.mtime_ms, self.size) {
             self.conflict = true;
         }
         let states: Vec<Entity<EditorState>> = self.states.iter().filter_map(|(state, _)| state.upgrade()).collect();
@@ -1117,5 +1124,19 @@ impl Buffers {
 
     pub fn take_reveal(&mut self, path: &str) -> Option<Reveal> {
         self.reveals.remove(&file_path(path))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::same_stat;
+
+    /// A modification time read back from a hot exit backup can differ in its last bit.
+    #[test]
+    fn stats_match_despite_float_rounding_but_not_real_changes() {
+        let time = 1795762287027.6243_f64;
+        assert!(same_stat(1795762287027.6245, 2, time, 2));
+        assert!(!same_stat(time + 1.0, 2, time, 2), "a millisecond later is a change");
+        assert!(!same_stat(time, 3, time, 2), "another size is a change");
     }
 }

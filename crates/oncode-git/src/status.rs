@@ -155,6 +155,24 @@ fn short(oid: &str) -> String {
     oid.chars().take(8).collect()
 }
 
+/// The first bad commit (full id and subject) recorded in `BISECT_LOG` once a bisect has found it. Git writes
+/// `# first bad commit: [<id>] <subject>`, since Git 2.56 `# first 'bad' commit: …`, and the term can be a
+/// custom one (`git bisect start --term-bad=broken`). "# possible first …" lines (skipped commits) do not count.
+pub fn first_bad_commit(log: &str) -> Option<(String, String)> {
+    log.lines().rev().find_map(|line| {
+        let rest = line.strip_prefix("# first ")?;
+        let (_, found) = rest.split_once(" commit: [")?;
+        let (id, subject) = found.split_once("] ")?;
+        (id.len() >= 40 && id.chars().all(|c| c.is_ascii_hexdigit())).then(|| (id.to_string(), subject.to_string()))
+    })
+}
+
+/// Whether git's output says the bisect found the first bad commit (`<id> is the first bad commit`; since
+/// Git 2.56 `<id> is the first 'bad' commit`).
+pub fn bisect_found(output: &str) -> bool {
+    output.lines().any(|line| line.contains(" is the first ") && line.trim_end().ends_with("commit"))
+}
+
 /// Detects an unfinished merge, rebase, cherry-pick, or revert from the contents of the git directory.
 pub fn detect_operation(git_dir: &Path) -> Option<Operation> {
     for (dir, interactive_default) in [("rebase-merge", true), ("rebase-apply", false)] {
@@ -203,12 +221,7 @@ pub fn detect_operation(git_dir: &Path) -> Option<Operation> {
     if let Some(start) = read_trimmed(&git_dir.join("BISECT_START")) {
         let original = start.trim_start_matches("refs/heads/").to_string();
         let original = if original.len() == 40 && original.chars().all(|c| c.is_ascii_hexdigit()) { short(&original) } else { original };
-        let first_bad = read_trimmed(&git_dir.join("BISECT_LOG")).and_then(|log| {
-            let line = log.lines().rev().find_map(|line| line.strip_prefix("# first bad commit: "))?.to_string();
-            // `[<full id>] <subject>`
-            let (id, subject) = line.strip_prefix('[')?.split_once("] ")?;
-            Some(format!("{} {subject}", short(id)))
-        });
+        let first_bad = read_trimmed(&git_dir.join("BISECT_LOG")).and_then(|log| first_bad_commit(&log)).map(|(id, subject)| format!("{} {subject}", short(&id)));
         return Some(Operation::Bisect { original, first_bad });
     }
     None
@@ -262,6 +275,24 @@ impl Repo {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn first_bad_commit_in_old_and_new_bisect_logs() {
+        let id = "0123456789abcdef0123456789abcdef01234567";
+        // Git 2.53 and earlier; Git 2.56 quotes the term; a custom term; skipped commits do not count.
+        for log in [
+            format!("git bisect bad {id}\n# first bad commit: [{id}] Step 4\n"),
+            format!("git bisect bad {id}\n# first 'bad' commit: [{id}] Step 4\n"),
+            format!("# first 'broken' commit: [{id}] Step 4\n"),
+        ] {
+            assert_eq!(first_bad_commit(&log), Some((id.to_string(), "Step 4".to_string())), "{log}");
+        }
+        assert_eq!(first_bad_commit(&format!("# possible first 'bad' commit: [{id}] Step 4\n")), None);
+        assert_eq!(first_bad_commit("# bad: [abc] x\n"), None);
+        assert!(bisect_found(&format!("{id} is the first bad commit\ncommit {id}\n")));
+        assert!(bisect_found(&format!("{id} is the first 'bad' commit\n")));
+        assert!(!bisect_found("Bisecting: 2 revisions left to test after this (roughly 1 step)"));
+    }
 
     fn rec(parts: &[&str]) -> Vec<u8> {
         let mut out = Vec::new();

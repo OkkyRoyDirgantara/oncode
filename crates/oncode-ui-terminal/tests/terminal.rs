@@ -534,8 +534,16 @@ async fn inline_find_bar_counts_and_steps_through_matches(cx: &mut TestAppContex
     window.update(cx, |window, cx| window.press("enter", cx));
     cx.run_until_parked();
     assert_eq!(cx.update(|cx| session.read(cx).find_state(cx)).unwrap().2, Some(0), "Enter wraps to the first match");
+    // New output (here a command run meanwhile; on macOS zsh redraws its prompt) shifts the lines; the current
+    // match stays the same one.
+    // Enough lines to scroll the screen (on Unix; `seq` is not in cmd or PowerShell).
+    let more = if cfg!(unix) { "seq 1 80; echo more-output\r" } else { "echo more-output\r" };
+    session.update(cx, |session, cx| session.send_text(more, cx));
+    window.wait_until(cx, "new output", |_, cx| session.read(cx).text().lines().any(|line| line.trim() == "more-output")).await;
+    assert_eq!(cx.update(|cx| session.read(cx).find_state(cx)).unwrap().2, Some(0), "new output keeps the current match");
     window.update(cx, |window, cx| window.press("shift-enter", cx));
     cx.run_until_parked();
+    let total = cx.update(|cx| session.read(cx).find_state(cx)).unwrap().1;
     assert_eq!(cx.update(|cx| session.read(cx).find_state(cx)).unwrap().2, Some(total - 1));
 
     window.update(cx, |window, cx| {
