@@ -1,6 +1,6 @@
 //! Flow control for terminal output: if the emulator falls behind processing, reading the PTY in the backend is paused.
 
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::Mutex;
 
 /// Pause when the queue exceeds this number (in bytes).
 pub const HIGH_WATERMARK: usize = 500_000;
@@ -8,17 +8,24 @@ pub const HIGH_WATERMARK: usize = 500_000;
 pub const LOW_WATERMARK: usize = 100_000;
 
 /// Counts the bytes that have been received from the PTY but not yet finished processing by the
-/// emulator. `written` and `processed` return `Some(paused)` only when the state changes, so the
-/// backend is not called on every chunk.
+/// emulator, and decides when reading pauses and resumes.
 ///
 /// Shared between the thread that delivers PTY output (`written`, so reading pauses as soon as the
 /// queue is too long, even while the UI thread is busy drawing) and the UI thread (`processed`).
+/// `set_paused` is called only when the state changes, and while the state is locked: a pause and a
+/// resume decided at the same time on the two threads reach the backend in the order they were
+/// decided, so the backend never stays paused while this says it is reading (or the other way round).
 #[derive(Debug)]
 pub struct FlowControl {
-    pending: AtomicUsize,
-    paused: AtomicBool,
+    state: Mutex<State>,
     high: usize,
     low: usize,
+}
+
+#[derive(Debug, Default)]
+struct State {
+    pending: usize,
+    paused: bool,
 }
 
 impl Default for FlowControl {
@@ -31,35 +38,39 @@ impl FlowControl {
     /// Panics if `low > high` (inverted configuration).
     pub fn new(high: usize, low: usize) -> Self {
         assert!(low <= high, "low watermark must not be greater than the high watermark");
-        Self { pending: AtomicUsize::new(0), paused: AtomicBool::new(false), high, low }
+        Self { state: Mutex::new(State::default()), high, low }
     }
 
-    /// A chunk was received and entered the queue.
-    pub fn written(&self, length: usize) -> Option<bool> {
-        let pending = self.pending.fetch_add(length, Ordering::AcqRel) + length;
-        (pending > self.high && !self.paused.swap(true, Ordering::AcqRel)).then_some(true)
+    fn state(&self) -> std::sync::MutexGuard<'_, State> {
+        self.state.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
-    /// The emulator finished processing part of the queue.
-    pub fn processed(&self, length: usize) -> Option<bool> {
-        // A compare-exchange loop (not `fetch_update`, which newer toolchains deprecate) that never goes below zero.
-        let mut current = self.pending.load(Ordering::Acquire);
-        let pending = loop {
-            let next = current.saturating_sub(length);
-            match self.pending.compare_exchange_weak(current, next, Ordering::AcqRel, Ordering::Acquire) {
-                Ok(_) => break next,
-                Err(actual) => current = actual,
-            }
-        };
-        (pending < self.low && self.paused.swap(false, Ordering::AcqRel)).then_some(false)
+    /// A chunk was received and entered the queue; calls `set_paused(true)` if reading must pause now.
+    pub fn written(&self, length: usize, set_paused: impl FnOnce(bool)) {
+        let mut state = self.state();
+        state.pending = state.pending.saturating_add(length);
+        if state.pending > self.high && !state.paused {
+            state.paused = true;
+            set_paused(true);
+        }
+    }
+
+    /// The emulator finished processing part of the queue; calls `set_paused(false)` if reading may resume now.
+    pub fn processed(&self, length: usize, set_paused: impl FnOnce(bool)) {
+        let mut state = self.state();
+        state.pending = state.pending.saturating_sub(length);
+        if state.pending < self.low && state.paused {
+            state.paused = false;
+            set_paused(false);
+        }
     }
 
     pub fn is_paused(&self) -> bool {
-        self.paused.load(Ordering::Acquire)
+        self.state().paused
     }
 
     pub fn pending(&self) -> usize {
-        self.pending.load(Ordering::Acquire)
+        self.state().pending
     }
 }
 
@@ -79,11 +90,11 @@ mod tests {
         }
 
         fn written(&mut self, length: usize) {
-            self.calls.extend(self.flow.written(length));
+            self.flow.written(length, |paused| self.calls.push(paused));
         }
 
         fn processed(&mut self, length: usize) {
-            self.calls.extend(self.flow.processed(length));
+            self.flow.processed(length, |paused| self.calls.push(paused));
         }
     }
 
@@ -146,6 +157,52 @@ mod tests {
         assert_eq!(r.calls.last(), Some(&true));
         r.processed(HIGH_WATERMARK + 1 - LOW_WATERMARK + 1);
         assert_eq!(r.calls.last(), Some(&false));
+    }
+
+    /// Output arriving on one thread while the emulator drains on another: the backend sees strictly
+    /// alternating pause/resume calls, and ends in the same state as the counter.
+    #[test]
+    fn the_backend_follows_the_state_under_concurrent_use() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+        let flow = Arc::new(FlowControl::new(1_000, 200));
+        let backend = Arc::new(Mutex::new((false, 0usize)));
+        let apply = |backend: &Arc<Mutex<(bool, usize)>>| {
+            let backend = backend.clone();
+            move |paused: bool| {
+                let mut backend = backend.lock().unwrap();
+                assert_ne!(backend.0, paused, "pause and resume calls alternate");
+                *backend = (paused, backend.1 + 1);
+            }
+        };
+        let done = Arc::new(AtomicBool::new(false));
+        let reader = {
+            let (flow, backend, done) = (flow.clone(), backend.clone(), done.clone());
+            std::thread::spawn(move || {
+                for _ in 0..20_000 {
+                    flow.written(97, apply(&backend));
+                }
+                done.store(true, Ordering::Release);
+            })
+        };
+        // The emulator processes what has been delivered, in steps.
+        let mut delivered = 0usize;
+        loop {
+            let finished = done.load(Ordering::Acquire);
+            let available = 20_000 * 97 - delivered;
+            let step = if finished { available } else { available.min(flow.pending()).min(300) };
+            flow.processed(step, apply(&backend));
+            delivered += step;
+            if finished && delivered == 20_000 * 97 {
+                break;
+            }
+        }
+        reader.join().unwrap();
+        assert_eq!(flow.pending(), 0);
+        assert!(!flow.is_paused());
+        let (paused, calls) = *backend.lock().unwrap();
+        assert!(!paused, "the backend reads again at the end");
+        assert!(calls > 0 && calls % 2 == 0, "{calls} calls");
     }
 
     #[test]

@@ -117,8 +117,8 @@ pub fn comment_tokens(path: &str) -> super::lines::CommentTokens {
                 CommentTokens::default()
             }
         }
-        "python" => CommentTokens { line: Some("#"), block: Some(("\"\"\"", "\"\"\"")) },
-        "ruby" | "toml" | "yaml" | "shellscript" | "makefile" | "dockerfile" | "elixir" | "graphql" => HASH,
+        // Python has no block comments: a `"""` string is a string (or a docstring), not a comment.
+        "python" | "ruby" | "toml" | "yaml" | "shellscript" | "makefile" | "dockerfile" | "elixir" | "graphql" => HASH,
         "cmake" => CommentTokens { line: Some("#"), block: Some(("#[[", "]]")) },
         "sql" => CommentTokens { line: Some("--"), block: Some(("/*", "*/")) },
         "lua" => CommentTokens { line: Some("--"), block: Some(("--[[", "]]")) },
@@ -137,6 +137,7 @@ mod tests {
     fn comment_tokens_by_language() {
         assert_eq!(comment_tokens("main.rs").line, Some("//"));
         assert_eq!(comment_tokens("app.py").line, Some("#"));
+        assert_eq!(comment_tokens("app.py").block, None, "a triple-quoted string is not a comment");
         assert_eq!(comment_tokens("q.sql").line, Some("--"));
         assert_eq!(comment_tokens("index.html").line, None);
         assert_eq!(comment_tokens("index.html").block, Some(("<!--", "-->")));

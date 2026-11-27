@@ -27,7 +27,7 @@ use oncode_ui::{core_bus, repos, spawn_core, Env, Lucide, OpenOptions, Shell, Wo
 
 use crate::accounts::{core_call, pick, sign_in};
 use crate::clone::{repo_name_from_url, validate_clone_url, validate_folder_name};
-use crate::logic::{change_letter, check_label, create_problem, effective_target, mergeable_text, pr_tab, push_need, source_branch_name, summarize_checks, PrBadge, PrTabParams, FILTERS};
+use crate::logic::{can_try_merge, change_letter, check_label, create_problem, effective_target, mergeable_text, pr_tab, push_need, source_branch_name, summarize_checks, PrBadge, PrTabParams, FILTERS};
 use crate::util::{describe_forge_error, forge_name, open_external, pr_noun, pr_noun_plural, pr_number, relative_time};
 
 pub const SIDEBAR_ID: &str = "pullRequests";
@@ -235,7 +235,10 @@ pub struct PullRequestTab {
     delete_branch: bool,
     /// A merge or a review is being sent.
     sending: bool,
+    /// How many times the detail was fetched again while the merge state was still being checked.
+    merge_polls: u8,
     _load: Task<()>,
+    _poll: Task<()>,
     _files: Task<()>,
     _comments: Task<()>,
 }
@@ -260,7 +263,9 @@ impl PullRequestTab {
             merge_method: None,
             delete_branch: true,
             sending: false,
+            merge_polls: 0,
             _load: Task::ready(()),
+            _poll: Task::ready(()),
             _files: Task::ready(()),
             _comments: Task::ready(()),
         };
@@ -337,6 +342,8 @@ impl PullRequestTab {
 
     fn reload(&mut self, cx: &mut Context<Self>) {
         self.state = DetailState::Loading;
+        self.merge_polls = 0;
+        self._poll = Task::ready(());
         let (core, params) = (self.env.core.clone(), self.params.clone());
         let task = spawn_core(cx, async move {
             let detail = forge_api::forge_pr(&core, params.account_id.clone(), params.repo.clone(), params.number).await?;
@@ -354,10 +361,34 @@ impl PullRequestTab {
                     }
                     Err(error) => DetailState::Failed(describe_forge_error(&error, Some(&this.params.repo.host)).line()),
                 };
+                this.poll_merge_state(cx);
                 cx.notify();
             });
         });
         cx.notify();
+    }
+
+    /// Both forges work out lazily whether a PR/MR can be merged (after it is opened or changed). While
+    /// they are still checking, Merge is disabled and the detail is fetched again a few times.
+    fn poll_merge_state(&mut self, cx: &mut Context<Self>) {
+        let checking = self.detail().is_some_and(|d| d.pull_request.state == PrState::Open && d.merge_state == MergeState::Checking);
+        if !checking || self.merge_polls >= MERGE_STATE_POLLS {
+            return;
+        }
+        self.merge_polls += 1;
+        let (core, params) = (self.env.core.clone(), self.params.clone());
+        self._poll = cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(MERGE_STATE_POLL_DELAY).await;
+            let Ok(task) = this.update(cx, |_, cx| spawn_core(cx, async move { forge_api::forge_pr(&core, params.account_id, params.repo, params.number).await })) else { return };
+            let result = task.await;
+            let _ = this.update(cx, |this, cx| {
+                if let (Ok(fresh), DetailState::Ready { detail, .. }) = (result, &mut this.state) {
+                    **detail = fresh;
+                }
+                this.poll_merge_state(cx);
+                cx.notify();
+            });
+        });
     }
 
     fn checkout(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -556,6 +587,10 @@ pub fn parse_comment_line(text: &str) -> Option<(ReviewSide, u32)> {
     number.parse::<u32>().ok().filter(|n| *n > 0).map(|n| (side, n))
 }
 
+/// How many times, and how often, the detail is fetched again while the merge state is being checked.
+const MERGE_STATE_POLLS: u8 = 5;
+const MERGE_STATE_POLL_DELAY: std::time::Duration = std::time::Duration::from_secs(2);
+
 /// How the merge state is described above the Merge button.
 fn merge_state_text(state: MergeState) -> &'static str {
     match state {
@@ -589,7 +624,7 @@ impl PullRequestTab {
         if pr.state == PrState::Open {
             let methods = if detail.merge_methods.is_empty() { vec![MergeMethod::Merge] } else { detail.merge_methods.clone() };
             let method = self.merge_method.filter(|m| methods.contains(m)).or_else(|| methods.first().copied()).unwrap_or(MergeMethod::Merge);
-            let blocked = matches!(detail.merge_state, MergeState::Conflicts | MergeState::Draft);
+            let blocked = !can_try_merge(detail.merge_state);
             let state_color = match detail.merge_state {
                 MergeState::Clean => theme.success,
                 MergeState::Conflicts | MergeState::Blocked => theme.danger,

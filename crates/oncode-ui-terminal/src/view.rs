@@ -347,11 +347,11 @@ impl TerminalSession {
             let callback: oncode_core::api::Callback<TermEvent> = Arc::new(move |event| {
                 // Counted on the delivering thread, so reading pauses while the UI thread is still busy.
                 if let TermEvent::Data { data } = &event {
-                    if flow.written(data.len()) == Some(true) {
+                    flow.written(data.len(), |paused| {
                         if let Some(id) = callback_id.get() {
-                            let _ = callback_core.terminals.set_paused(*id, true);
+                            let _ = callback_core.terminals.set_paused(*id, paused);
                         }
-                    }
+                    });
                 }
                 let _ = output_tx.send(event);
             });
@@ -438,12 +438,13 @@ impl TerminalSession {
                 _ => {}
             }
         }
-        if self.flow.processed(processed) == Some(false) {
-            if let Some(id) = self.id {
-                let core = self.env.core.clone();
-                spawn_core(cx, async move { term::term_set_paused(&core, id, false).await }).detach();
+        // Resumed right away (a cheap call), in step with the pause decided on the delivering thread.
+        let (core, id) = (&self.env.core, self.id);
+        self.flow.processed(processed, |paused| {
+            if let Some(id) = id {
+                let _ = core.terminals.set_paused(id, paused);
             }
-        }
+        });
         self.schedule_sync_flush(cx);
         // New output can add or move matches.
         if self.find_bar.is_some() {

@@ -126,7 +126,7 @@ pub struct Buffer {
     revision: u64,
     /// Held by the save that is running (see [`Buffer::save`]).
     save_turn: Arc<tokio::sync::Mutex<()>>,
-    /// A hot exit backup of this buffer exists on disk (see [`Buffer::write_backup`]).
+    /// A hot exit backup of this buffer exists on disk, or has been asked for (see [`Buffer::write_backup`]).
     backed_up: bool,
     /// A backup to apply once the file has loaded (hot exit restore).
     pending_restore: Option<BufferBackup>,
@@ -401,15 +401,11 @@ impl Buffer {
             mtime_ms: self.mtime_ms,
             size: self.size,
         };
-        let core = self.env.core.clone();
-        let task = spawn_core(cx, async move { backup_api::backup_write(&core, root, backup).await });
-        cx.spawn(async move |this, cx| {
-            let written = task.await.is_ok();
-            if written {
-                let _ = this.update(cx, |this, _| this.backed_up = true);
-            }
-            written
-        })
+        // Marked now rather than once written: a save or discard right after this must still remove the
+        // backup, and the backend applies the two in the order they were asked for.
+        self.backed_up = true;
+        let task = spawn_core(cx, backup_api::backup_write(&self.env.core, root, backup));
+        cx.background_spawn(async move { task.await.is_ok() })
     }
 
     /// Removes this buffer's backup, if it has one (saved, reverted, or its changes discarded).
@@ -422,8 +418,7 @@ impl Buffer {
             return;
         }
         let Some(root) = self.env.root_string() else { return };
-        let core = self.env.core.clone();
-        spawn_core(cx, async move { backup_api::backup_delete(&core, root, path).await }).detach();
+        spawn_core(cx, backup_api::backup_delete(&self.env.core, root, path)).detach();
     }
 
     /// Hot exit restore: shows the backed-up content as unsaved changes, now or once the file has loaded.

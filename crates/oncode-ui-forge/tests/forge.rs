@@ -269,6 +269,10 @@ async fn merge_request_tab_merges_and_reviews(cx: &mut TestAppContext) {
             .respond_with(ResponseTemplate::new(200).set_body_json(json!([{ "id": "d1", "notes": [{ "id": 1, "body": "Why?", "author": { "username": "ana" }, "system": false, "position": { "new_path": "a.rs", "new_line": 3 } }] }])))
             .mount(&server)
             .await;
+        // The first answer: GitLab is still checking whether it can be merged.
+        let mut checking = mr(12, "Fix login", &base);
+        checking["detailed_merge_status"] = json!("checking");
+        Mock::given(method("GET")).and(path(format!("{PROJECT}/merge_requests/12"))).respond_with(ResponseTemplate::new(200).set_body_json(checking)).up_to_n_times(1).with_priority(1).mount(&server).await;
         Mock::given(method("PUT")).and(path(format!("{PROJECT}/merge_requests/12/merge"))).respond_with(ResponseTemplate::new(200).set_body_json(detail.clone()).set_delay(std::time::Duration::from_millis(300))).mount(&server).await;
         Mock::given(method("POST")).and(path(format!("{PROJECT}/merge_requests/12/notes"))).respond_with(ResponseTemplate::new(201).set_body_json(json!({ "id": 5 }))).mount(&server).await;
     });
@@ -288,7 +292,10 @@ async fn merge_request_tab_merges_and_reviews(cx: &mut TestAppContext) {
     });
     cx.run_until_parked();
     let tab = cx.update(|cx| workbench.read(cx).active_content().and_then(|c| c.as_any().downcast_ref::<ViewTab<PullRequestTab>>().map(|t| t.0.clone())).expect("active MR tab"));
-    window.wait_until(cx, "detail and comments loaded", |_, cx| tab.read(cx).detail().is_some() && tab.read(cx).review_comments().len() == 1).await;
+    window.wait_until(cx, "detail loaded", |_, cx| tab.read(cx).detail().is_some()).await;
+    assert_eq!(cx.update(|cx| tab.read(cx).detail().unwrap().merge_state), oncode_forge::MergeState::Checking);
+    // Merge waits while GitLab is checking; the tab asks again until it knows.
+    window.wait_until(cx, "merge state checked and comments loaded", |_, cx| tab.read(cx).detail().is_some_and(|d| d.merge_state != oncode_forge::MergeState::Checking) && tab.read(cx).review_comments().len() == 1).await;
     let detail = cx.update(|cx| tab.read(cx).detail().cloned().unwrap());
     assert_eq!(detail.merge_state, oncode_forge::MergeState::Clean);
     assert_eq!(detail.merge_methods, [oncode_forge::MergeMethod::Merge, oncode_forge::MergeMethod::Squash]);

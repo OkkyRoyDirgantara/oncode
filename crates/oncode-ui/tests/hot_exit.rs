@@ -107,3 +107,32 @@ async fn without_hot_exit_closing_asks(cx: &mut TestAppContext) {
     let root = project.to_string_lossy().into_owned();
     assert!(app.runtime.block_on(async move { backup::backup_list(&core, root).await }).unwrap().is_empty(), "no backup without hot exit");
 }
+
+/// Backups from a session that had hot exit on are not restored once it is off, and are removed so they
+/// cannot come back later with outdated content.
+#[gpui_kit::test]
+async fn backups_are_not_restored_with_hot_exit_off(cx: &mut TestAppContext) {
+    let app = TestApp::new(cx);
+    let project = app.project(&[("a.txt", "a\n")]);
+    let (core, root) = (app.core.clone(), project.to_string_lossy().into_owned());
+    let path = project.join("a.txt").to_string_lossy().into_owned();
+    let meta = std::fs::metadata(&path).unwrap();
+    let mtime_ms = meta.modified().unwrap().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs_f64() * 1000.0;
+    let old = backup::BufferBackup { path: path.clone(), text: "old edit\n".into(), encoding: "UTF-8".into(), bom: false, eol: "lf".into(), mtime_ms, size: meta.len() as u32 };
+    app.runtime.block_on(backup::backup_write(&core, root.clone(), old)).unwrap();
+    let mut settings = app.core.user_settings();
+    settings.files.hot_exit = false;
+    app.core.set_user_settings(settings).unwrap();
+
+    let window = app.open(Some(&project), cx).await;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while !app.runtime.block_on(backup::backup_list(&core, root.clone())).unwrap().is_empty() {
+        assert!(std::time::Instant::now() < deadline, "the old backup was not removed");
+        cx.run_until_parked();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    cx.run_until_parked();
+    let workbench = window.workbench(cx);
+    let registry = cx.update(|cx| buffers(workbench.read(cx)).unwrap());
+    assert!(cx.update(|cx| registry.read(cx).dirty(cx).is_empty()), "nothing was restored");
+}

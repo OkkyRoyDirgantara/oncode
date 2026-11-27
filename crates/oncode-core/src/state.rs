@@ -75,6 +75,8 @@ pub struct Core {
     pub store: Store,
     /// Where unsaved changes are kept for hot exit (see [`crate::api::backup`]).
     backups_dir: PathBuf,
+    /// Puts the writes and deletes of those backups in the order they were asked for.
+    pub(crate) backup_queue: crate::api::backup::BackupQueue,
     settings_path: PathBuf,
     settings: RwLock<Settings>,
     /// What is known about `settings.json` on disk; held while the file is written, so writes take turns.
@@ -132,6 +134,7 @@ impl Core {
             events,
             store: Store::load(dirs.state_path()),
             backups_dir: dirs.data_dir.join("backups"),
+            backup_queue: Default::default(),
             settings: RwLock::new(loaded.settings),
             settings_file: Mutex::new(SettingsFile { stamp, unreadable: loaded.unreadable, problem: loaded.problem }),
             settings_path,

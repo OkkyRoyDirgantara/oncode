@@ -4,7 +4,10 @@
 //! One JSON file per buffer under `<data dir>/backups/<folder key>/`, never in `state.json` (which is
 //! rewritten whole on every change and has a size limit for sessions).
 
+use std::collections::HashMap;
+use std::future::Future;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use serde::{Deserialize, Serialize};
 
@@ -51,28 +54,87 @@ fn io_error(error: std::io::Error) -> AppError {
     AppError::new("io", error.to_string())
 }
 
-/// Writes the backup of one buffer of the folder `root`. Written to a temporary file first, then
-/// renamed, so a crash in the middle never leaves half a backup.
-pub async fn backup_write(core: &Shared, root: String, backup: BufferBackup) -> AppResult<()> {
-    let file = backup_file(core, &root, &backup.path);
-    let json = serde_json::to_vec(&backup).map_err(|e| AppError::new("io", e.to_string()))?;
-    tokio::task::spawn_blocking(move || -> std::io::Result<()> {
-        if let Some(parent) = file.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        let temporary = file.with_extension("tmp");
-        std::fs::write(&temporary, json)?;
-        std::fs::rename(&temporary, &file)
-    })
-    .await
-    .map_err(|e| AppError::new("io", e.to_string()))?
-    .map_err(io_error)
+/// Puts the writes and deletes of backup files in the order they were asked for. Each request takes a
+/// number when it is made, on the caller's thread; one that reaches the disk after a newer request for
+/// the same file is dropped. The requests run on the backend's thread pool, where an older one could
+/// otherwise finish last: a delayed backup still being written when the window closes and writes the
+/// newest text, or a backup written just before a save removes it.
+#[derive(Debug, Default)]
+pub struct BackupQueue {
+    last_ticket: AtomicU64,
+    /// The newest request handled per backup file. Held while a file is written, so writes take turns.
+    handled: tokio::sync::Mutex<HashMap<PathBuf, u64>>,
 }
 
-/// Removes the backup of one buffer (saved, reverted, or its changes discarded). A missing backup is fine.
-pub async fn backup_delete(core: &Shared, root: String, path: String) -> AppResult<()> {
+enum Change {
+    Write(Vec<u8>),
+    Delete,
+}
+
+impl BackupQueue {
+    fn ticket(&self) -> u64 {
+        self.last_ticket.fetch_add(1, Ordering::Relaxed) + 1
+    }
+
+    async fn apply(&self, file: PathBuf, ticket: u64, change: Change) -> AppResult<()> {
+        let mut handled = self.handled.lock().await;
+        if handled.get(&file).is_some_and(|newest| *newest > ticket) {
+            return Ok(());
+        }
+        handled.insert(file.clone(), ticket);
+        tokio::task::spawn_blocking(move || -> std::io::Result<()> {
+            match change {
+                // Written to a temporary file first, then renamed, so a crash in the middle never leaves half a backup.
+                Change::Write(json) => {
+                    if let Some(parent) = file.parent() {
+                        std::fs::create_dir_all(parent)?;
+                    }
+                    let temporary = file.with_extension("tmp");
+                    std::fs::write(&temporary, json)?;
+                    std::fs::rename(&temporary, &file)
+                }
+                Change::Delete => match std::fs::remove_file(&file) {
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                    result => result,
+                },
+            }
+        })
+        .await
+        .map_err(|e| AppError::new("io", e.to_string()))?
+        .map_err(io_error)
+    }
+}
+
+/// Writes the backup of one buffer of the folder `root`.
+///
+/// Its place in the order is taken when this is called, not when the future first runs: pass the
+/// returned future to the runtime as it is, without wrapping the call in an `async` block.
+pub fn backup_write(core: &Shared, root: String, backup: BufferBackup) -> impl Future<Output = AppResult<()>> + Send + 'static {
+    let file = backup_file(core, &root, &backup.path);
+    let ticket = core.backup_queue.ticket();
+    let json = serde_json::to_vec(&backup);
+    let core = core.clone();
+    async move {
+        let json = json.map_err(|e| AppError::new("io", e.to_string()))?;
+        core.backup_queue.apply(file, ticket, Change::Write(json)).await
+    }
+}
+
+/// Removes the backup of one buffer (saved, reverted, or its changes discarded). A missing backup is
+/// fine. Ordered with [`backup_write`] the same way.
+pub fn backup_delete(core: &Shared, root: String, path: String) -> impl Future<Output = AppResult<()>> + Send + 'static {
     let file = backup_file(core, &root, &path);
-    match tokio::fs::remove_file(&file).await {
+    let ticket = core.backup_queue.ticket();
+    let core = core.clone();
+    async move { core.backup_queue.apply(file, ticket, Change::Delete).await }
+}
+
+/// Removes all backups of the folder `root`: with hot exit off they are not restored, and kept they
+/// could come back with outdated content once it is turned on again.
+pub async fn backup_clear(core: &Shared, root: String) -> AppResult<()> {
+    let dir = folder_dir(core, &root);
+    let _turn = core.backup_queue.handled.lock().await;
+    match tokio::fs::remove_dir_all(&dir).await {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(io_error(error)),
@@ -127,5 +189,38 @@ mod tests {
         backup_delete(&t.core, "/a".into(), "/a/missing.txt".into()).await.unwrap();
         assert_eq!(backup_list(&t.core, "/a".into()).await.unwrap().len(), 1);
         assert_eq!(backup_list(&t.core, "/c".into()).await.unwrap(), Vec::new());
+
+        backup_clear(&t.core, "/a".into()).await.unwrap();
+        backup_clear(&t.core, "/never".into()).await.unwrap();
+        assert!(backup_list(&t.core, "/a".into()).await.unwrap().is_empty());
+        assert_eq!(backup_list(&t.core, "/b".into()).await.unwrap().len(), 1, "other folders keep theirs");
+    }
+
+    #[tokio::test]
+    async fn an_older_request_that_runs_last_does_not_win() {
+        async fn texts(core: &Shared) -> Vec<String> {
+            backup_list(core, "/a".into()).await.unwrap().into_iter().map(|b| b.text).collect()
+        }
+        let t = TestCore::new();
+
+        let older = backup_write(&t.core, "/a".into(), backup("/a/x.txt", "old"));
+        let newer = backup_write(&t.core, "/a".into(), backup("/a/x.txt", "new"));
+        newer.await.unwrap();
+        older.await.unwrap();
+        assert_eq!(texts(&t.core).await, ["new"]);
+
+        // Saved while the last backup was still on its way: the backup stays removed.
+        let write = backup_write(&t.core, "/a".into(), backup("/a/x.txt", "newest"));
+        let delete = backup_delete(&t.core, "/a".into(), "/a/x.txt".into());
+        delete.await.unwrap();
+        write.await.unwrap();
+        assert!(texts(&t.core).await.is_empty());
+
+        // Concurrent writes of one file take turns and the last one asked for is kept.
+        let writes: Vec<_> = (0..20).map(|i| tokio::spawn(backup_write(&t.core, "/a".into(), backup("/a/x.txt", &i.to_string())))).collect();
+        for write in writes {
+            write.await.unwrap().unwrap();
+        }
+        assert_eq!(texts(&t.core).await, ["19"]);
     }
 }
