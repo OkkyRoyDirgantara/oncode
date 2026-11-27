@@ -233,6 +233,44 @@ async fn partial_staging_keeps_executable_mode() {
     assert_eq!(t.index("run.sh"), "#!/bin/sh\necho one\necho two\n");
 }
 
+#[cfg(unix)]
+#[tokio::test]
+async fn discarding_part_of_a_file_keeps_its_permissions_and_leaves_no_temp_file() {
+    use std::os::unix::fs::PermissionsExt;
+    let t = TestRepo::with_commit().await;
+    t.commit_file("run.sh", "#!/bin/sh\necho one\n", "Script");
+    std::fs::set_permissions(t.file("run.sh"), std::fs::Permissions::from_mode(0o750)).unwrap();
+    t.write("run.sh", "#!/bin/sh\necho ONE\necho two\n");
+    let d = t.repo.diff_contents("run.sh", None, &DiffSource::Worktree).await.unwrap();
+    // Discard only the added line.
+    t.repo.apply_splice(SpliceTarget::Discard, "run.sh", &[op(2, 2, 2, 3)], &d.a.fingerprint, &d.b.fingerprint).await.unwrap();
+    assert_eq!(t.read("run.sh"), "#!/bin/sh\necho ONE\n");
+    assert_eq!(std::fs::metadata(t.file("run.sh")).unwrap().permissions().mode() & 0o777, 0o750);
+    let leftovers: Vec<_> = std::fs::read_dir(t.path()).unwrap().filter_map(|e| e.ok()).filter(|e| e.file_name().to_string_lossy().ends_with(".tmp")).collect();
+    assert!(leftovers.is_empty(), "temporary file left behind: {leftovers:?}");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn part_of_a_symlink_cannot_be_discarded() {
+    let t = TestRepo::with_commit().await;
+    t.write("target.txt", "keep me\n");
+    std::os::unix::fs::symlink("target.txt", t.file("link")).unwrap();
+    t.git(&["add", "target.txt", "link"]);
+    t.git(&["commit", "-q", "-m", "Link"]);
+    std::fs::remove_file(t.file("link")).unwrap();
+    std::os::unix::fs::symlink("elsewhere.txt", t.file("link")).unwrap();
+    let d = t.repo.diff_contents("link", None, &DiffSource::Worktree).await.unwrap();
+    let err = t
+        .repo
+        .apply_splice(SpliceTarget::Discard, "link", &[op(0, 1, 0, 1)], &d.a.fingerprint, &d.b.fingerprint)
+        .await
+        .unwrap_err();
+    assert_eq!(err.code, GitErrorCode::InvalidInput);
+    assert_eq!(std::fs::read_link(t.file("link")).unwrap(), std::path::Path::new("elsewhere.txt"));
+    assert_eq!(t.read("target.txt"), "keep me\n");
+}
+
 #[tokio::test]
 async fn binary_files_cannot_be_partially_staged() {
     let t = TestRepo::with_commit().await;

@@ -278,14 +278,47 @@ impl Repo {
                 if b.is_none() {
                     return Err(GitError::invalid("The file is not in the working tree; restore the whole file"));
                 }
+                let full = self.root().join(path);
+                // A link's "content" is its target path; writing it would clobber the file the link points to.
+                if tokio::fs::symlink_metadata(&full).await.is_ok_and(|meta| meta.file_type().is_symlink()) {
+                    return Err(GitError::invalid("Part of a symbolic link cannot be discarded; restore the whole file"));
+                }
                 let a_matched = match_eol(&a_bytes, &b_bytes);
                 let content = splice_reverse(&a_matched, &b_bytes, ops)?;
-                tokio::fs::write(self.root().join(path), content)
-                    .await
-                    .map_err(|e| GitError::io("Failed to write file", e))
+                replace_file(full, content).await.map_err(|e| GitError::io("Failed to write file", e))
             }
         }
     }
+}
+
+/// Replaces a working tree file in one step: the content goes to a temporary file next to
+/// it, which is then renamed over it. Readers (the file watcher, an open editor) never see
+/// a truncated file, a failed write leaves the original intact, and the permissions stay.
+async fn replace_file(path: std::path::PathBuf, content: Vec<u8>) -> std::io::Result<()> {
+    tokio::task::spawn_blocking(move || {
+        use std::io::Write;
+        let permissions = std::fs::metadata(&path)?.permissions();
+        if permissions.readonly() {
+            return Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "the file is read-only"));
+        }
+        let dir = path.parent().unwrap_or(std::path::Path::new("."));
+        // Same name pattern as the workspace's atomic saves, which the file watcher ignores.
+        let temp = dir.join(format!(".oncode-{}.tmp", uuid::Uuid::new_v4().simple()));
+        let written = (|| {
+            let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(&temp)?;
+            file.write_all(&content)?;
+            file.sync_all()?;
+            drop(file);
+            std::fs::set_permissions(&temp, permissions)?;
+            std::fs::rename(&temp, &path)
+        })();
+        if written.is_err() {
+            let _ = std::fs::remove_file(&temp);
+        }
+        written
+    })
+    .await
+    .map_err(std::io::Error::other)?
 }
 
 fn short(rev: &str) -> String {
